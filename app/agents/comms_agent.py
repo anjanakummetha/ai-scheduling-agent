@@ -450,6 +450,7 @@ def execute_lexi_approval(
                                 conn,
                                 step_name="hold_reminder_sent",
                                 reference_id=str(proposal_id),
+                                log_level="INFO",
                                 message="Hold reminder email sent after Kory approval.",
                                 payload={"proposal_id": proposal_id},
                             )
@@ -479,6 +480,7 @@ def execute_lexi_approval(
                                 conn,
                                 step_name="offer_email_sent",
                                 reference_id=str(proposal_id),
+                                log_level="INFO",
                                 message="Offer email sent; status committed before hold placement.",
                                 payload={"proposal_id": proposal_id},
                             )
