@@ -960,11 +960,20 @@ def merge_list_message_fields(
     full_message: dict[str, Any],
     list_item: dict[str, Any],
 ) -> dict[str, Any]:
-    """Composio GET_MESSAGE omits conversationId from select — keep it from list/poll."""
+    """Backfill fields the full GET_MESSAGE payload may omit from the list/poll item.
+
+    Keeps conversationId (GET_MESSAGE omits it from select) and, as a safety net,
+    the recipient lists — so delegation detection (CC lexi@) never misses a
+    Kory-originated reply just because one fetch path returned trimmed recipients.
+    """
+    merged = dict(full_message)
     conv = list_item.get("conversationId") or list_item.get("conversation_id")
-    if conv and not full_message.get("conversationId"):
-        return {**full_message, "conversationId": conv}
-    return full_message
+    if conv and not merged.get("conversationId"):
+        merged["conversationId"] = conv
+    for key in ("ccRecipients", "toRecipients", "bccRecipients"):
+        if not merged.get(key) and list_item.get(key):
+            merged[key] = list_item[key]
+    return merged
 
 
 def build_inbound_raw_email(

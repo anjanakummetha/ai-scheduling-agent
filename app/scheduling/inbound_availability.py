@@ -56,10 +56,37 @@ def _default_hour_from_body(text: str) -> int | None:
     return None
 
 
+# Markers that begin quoted thread history / reply headers. Everything from the
+# first marker onward is prior-message text (with stray dates and client
+# timestamps like "On Thu, Jul 24 at 12:27 AM ... wrote:") that must NOT be
+# parsed as the sender's newly-proposed availability.
+_QUOTE_CUT_MARKERS = (
+    re.compile(r"^\s*on\b.{0,200}\bwrote:\s*$", re.I | re.M),
+    re.compile(r"^-{2,}\s*original message\s*-{2,}", re.I | re.M),
+    re.compile(r"^\s*from:\s.+$", re.I | re.M),
+    re.compile(r"^_{5,}\s*$", re.M),
+    re.compile(r"^\s*>", re.M),
+    re.compile(r"^\s*sent from my \w+", re.I | re.M),
+)
+
+
+def strip_quoted_reply(body: str) -> str:
+    """Return only the new reply text, cutting quoted thread history and reply
+    headers so their dates/timestamps don't leak into inbound-time parsing."""
+    text = (body or "").replace("\r", "")
+    cut = len(text)
+    for marker in _QUOTE_CUT_MARKERS:
+        hit = marker.search(text)
+        if hit:
+            cut = min(cut, hit.start())
+    return text[:cut].strip()
+
+
 def extract_inbound_time_candidates(body: str, *, reference: datetime | None = None) -> list[dict[str, str]]:
     """Heuristic parse of prospect-proposed times from email body."""
     now = (reference or datetime.now(tz=MT)).astimezone(MT)
-    text = (body or "").replace("\r", "")
+    # Parse only the sender's new text — quoted history leaks stray dates/times.
+    text = strip_quoted_reply(body)
     prefer_next_week = bool(re.search(r"\bnext\s+week\b", text, re.I))
     tod_hour = _default_hour_from_body(text)
     # A date named with no clock time (e.g. "August 25th") only becomes a candidate
@@ -183,6 +210,10 @@ def _match_to_slot(
             start = datetime(year, month, day_num, hour, minute, tzinfo=MT)
             if not match.group(3) and start < now - timedelta(hours=12):
                 start = start.replace(year=year + 1)
+        # Reject implausible clock times (e.g. "12:27 AM" pulled from a quoted
+        # reply header) — real meeting proposals fall in business hours.
+        if not (6 <= start.hour <= 21):
+            return None
         end = start + timedelta(minutes=30)
         return {
             "start": start.isoformat(),
@@ -295,7 +326,7 @@ def find_compliant_slot_on_date(when: Any, **kwargs: Any) -> dict[str, str] | No
 
 
 def body_looks_like_inbound_availability(body: str) -> bool:
-    combined = (body or "").lower()
+    combined = strip_quoted_reply(body).lower()
     if extract_inbound_time_candidates(body):
         return True
     cues = (

@@ -467,22 +467,50 @@ def execute_lexi_approval(
                                 "Hold reminder sent — existing calendar holds unchanged."
                             ]
                         else:
-                            hold_count, hold_error = _place_holds_after_offer(
-                                conn, proposal_id=proposal_id, proposal=proposal, result=result
-                            )
-                            if hold_error:
-                                result.errors.append(hold_error)
-                                result.warnings = (result.warnings or []) + [hold_error]
-                            result.holds_confirmed = hold_count
-                            _dispatch_asana_reservation_reminder_if_needed(
-                                conn,
-                                proposal_id=proposal_id,
-                                proposal=proposal,
-                                time_slot="",
-                                result=result,
-                            )
+                            # ATOMICITY: the offer email is already dispatched (an
+                            # external, non-transactional side effect). Commit
+                            # OFFER_SENT NOW — before the calendar hold work — so a
+                            # failure during hold placement (e.g. a transient DB
+                            # lock) can never roll the proposal back to
+                            # pending_approval and let it be re-sent (duplicate email).
                             _set_proposal_status(conn, proposal_id, STATUS_OFFER_SENT)
                             result.status = STATUS_OFFER_SENT
+                            _insert_audit_log(
+                                conn,
+                                step_name="offer_email_sent",
+                                reference_id=str(proposal_id),
+                                message="Offer email sent; status committed before hold placement.",
+                                payload={"proposal_id": proposal_id},
+                            )
+                            conn.execute("RELEASE SAVEPOINT lexi_execution")
+                            conn.commit()
+                            conn.execute("SAVEPOINT lexi_execution")
+                            try:
+                                hold_count, hold_error = _place_holds_after_offer(
+                                    conn, proposal_id=proposal_id, proposal=proposal, result=result
+                                )
+                            except Exception as hold_exc:  # noqa: BLE001 — never revert a sent offer
+                                conn.execute("ROLLBACK TO SAVEPOINT lexi_execution")
+                                conn.execute("SAVEPOINT lexi_execution")
+                                hold_count = 0
+                                hold_error = f"{type(hold_exc).__name__}: {hold_exc}"
+                            if hold_error:
+                                result.errors.append(hold_error)
+                                result.warnings = (result.warnings or []) + [
+                                    f"Email sent — calendar holds need attention: {hold_error}"
+                                ]
+                            result.holds_confirmed = hold_count
+                            try:
+                                _dispatch_asana_reservation_reminder_if_needed(
+                                    conn,
+                                    proposal_id=proposal_id,
+                                    proposal=proposal,
+                                    time_slot="",
+                                    result=result,
+                                )
+                            except Exception:  # noqa: BLE001 — asana is best-effort
+                                conn.execute("ROLLBACK TO SAVEPOINT lexi_execution")
+                                conn.execute("SAVEPOINT lexi_execution")
                     else:
                         result.status = PENDING_APPROVAL
                     result.ok = email_ok
@@ -557,7 +585,9 @@ def execute_lexi_approval(
                     reason="Offer email send failed after Kory approval.",
                 )
                 result.warnings = (result.warnings or []) + [
-                    esc.get("kory_message", "Escalated to Heidi after send failure."),
+                    esc.get("kory_message")
+                    or esc.get("summary")
+                    or "The send didn't go through — flagged here for you. Reply to retry.",
                 ]
             if result.ok or normalized_decision == "rejected":
                 from app.storage.learning_log import record_approval_outcome
