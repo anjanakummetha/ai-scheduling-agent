@@ -250,6 +250,38 @@ Verified: requesting `conversationId eq '<X>'` returned 10 messages, **1** match
 
 **D-E (LOW) — all 3 slots on one day** (Aug 4 9/10/11). Spread across days so one bad day doesn't kill the offer.
 
+### Fix + deploy status (2026-07-26 19:2x)
+PR #5 merged → `main` (`db373ed`), deployed to VPS, health ok, posture unchanged (**sends still CLOSED**). 313 tests pass.
+- D-A **fixed + verified live**: same conversation read now returns 1 message / 0 leaks (was 10 / 9 leaks); thread context contains no unrelated mail. Also fixed the second half — delegation phrases now match only the sender's *new* text, so quoted history can't re-delegate.
+- D-B **partially fixed**: Lexi's mailbox is now polled (delegation CCs land there), but it runs on the same backup cadence, so latency is governed by `LEXI_ORCHESTRATOR_BACKUP_POLL_MINUTES` — set to **5** for the test window (was 30). The real fix is registering `OUTLOOK_MESSAGE_TRIGGER` on Lexi's Composio connection; revisit the cadence before leaving it permanently (5 min ≈ 60k Composio calls/month against a 200k budget).
+- D-C **latent hole fixed** (window no longer dropped when a plan carries none) — but whether that was *the* live cause is unconfirmed; re-test required.
+- D-D **fixed**: Outlook display name recorded at ingest and preferred; run-together mailboxes fall back to "there".
+- D-E **not fixed** (slots still may cluster on one day).
+
+Cleared for re-test: proposals 3380-3385 all set to `rejected` (0 pending), and the learned `recipient_profiles` row for anjanakummetha@gmail.com deleted so the **unknown-TZ path (G-1)** can be exercised from the same address.
+
+---
+
+## RUN 2 RESULTS — 2026-07-26, after fixes (sends still CLOSED)
+
+Deployed `main` @ `991979d`. Proposal **3395** is the live artifact (Teams card refreshed).
+
+| Test | Result | Evidence |
+|---|---|---|
+| D-A false delegations | ✅ **fixed at scale** | 13 of Kory's sent emails ingested → all `no_reply_needed`, `is_delegation=0`. Zero cards. Body for 3395 is 82 chars, no stitched-in mail. |
+| D-A conversation scoping | ✅ verified live | same read: 1 message / 0 leaks (was 10 / 9) |
+| B-1 delegation | ✅ | one proposal, counterpart = Anjana, Lexi voice, card posted 19:45:44 (reply 19:40:45 → **~5 min**, = poll cadence) |
+| D-B latency | ⚠️ 5 min, cadence-bound | Lexi-mailbox poll reverted to opt-in (caused 404s — Graph ids are mailbox-scoped; see `17e9043`). Kory's Sent Items is the ingress. Durable fix = register `OUTLOOK_MESSAGE_TRIGGER` on Lexi's connection. |
+| **D-C over-deferral** | ✅ **fixed** — root cause found | Diagnostics showed the window replaced by `source="travel_shift"` → `week of August 3 (after travel)`. One travel day shifted the whole week. Now: window stays `next week`, slots **Tue Jul 28** 7:00/8:00/11:00, all free on the real calendar. Also fixed `travel_date_set` only marking a multi-day trip's first day. |
+| D-D greeting | ✅ fixed | "Hi Anjana," — `display_name` "Anjana Kummetha" learned from Outlook |
+| Slot ordering | ✅ fixed (new) | offer read "11:00, 7:00, 8:00" (score order) → now chronological |
+| G-1 unknown TZ | ⚪ **not testable from this address** | Resolver returns `America/Denver`, confidence `inferred`, source `prior_email_header` — correctly derived from the sender's own Date offset. Needs a sender with no TZ signal (e.g. M365 rewriting offsets to +0000). |
+| D-E slot spread | ❌ open | all three slots still land on one day (Tue Jul 28) |
+
+**New open question for Kory:** the engine offered **7:00 AM** to an outside contact. Legal under the rules (trainer blocks only M/W/F) but aggressive for an intro — consider a per-intent earliest-hour floor for external meetings.
+
+Tests: **315 pass**. Commits: `37aceb9`, `17e9043`, `8a0a55c`, `991979d`.
+
 ### Left in place for inspection
 Proposals **3381-3385** are `pending_approval` with live Teams cards (false positives from D-A). Sends are blocked so they are inert, but they must be rejected before sends re-open.
 
