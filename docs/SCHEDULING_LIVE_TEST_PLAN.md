@@ -302,13 +302,13 @@ Now: a discrete trip leg blocks only a 3h buffer around itself; an all-day/6h+ b
 
 ## ⚠️ STILL TO VERIFY — nothing below has been exercised live
 
-### Blocking-ish / needs a decision from Kory
-| # | Item |
-|---|---|
-| V-1 | **7:00 AM offered to an outside contact** is legal (trainer blocks are M/W/F only). Want a per-intent earliest-hour floor for external meetings? |
-| V-2 | **4 conflict calendars still unavailable on Composio** (IFG Team, Kory & Heidi only, Deal Activity, Daily CEO Update). Conflicts living only there are invisible to every slot we offer. Known B-01. |
-| V-3 | **Travel-week policy.** `rules.py` says travel weeks = "2–3 critical check-ins only". My fix makes non-travel days in a travel week bookable. Confirm that matches Kory's intent. |
-| V-4 | **Poll cadence** is 5 min (was 30) ≈ 60k Composio calls/mo against a 200k budget. Durable fix: register `OUTLOOK_MESSAGE_TRIGGER` on Lexi's connection (needs dashboard access). |
+### Kory decisions — ALL RESOLVED 2026-07-26
+| # | Item | Ruling |
+|---|---|---|
+| V-1 | Earliest hour for outside contacts | ✅ **7:00 AM is fine** — no change needed; current behaviour stands. |
+| V-2 | 4 conflict calendars unavailable on Composio | ✅ **Non-issue** — everything (Deal Activity, Daily CEO Update, etc.) syncs into **Kory Master Calendar (ALL)**, which Lexi reads. Closes long-standing B-01. |
+| V-3 | Travel-week policy | ✅ **Confirmed** — booking non-travel days inside a travel week is what Kory wants. |
+| V-4 | Poll cadence / Lexi trigger | ✅ **Keep 5-min polling; no trigger, no dashboard access needed.** Verified via the Composio API: exactly one trigger instance exists (`ti_PCV0xB_btFwV` on Kory's `ca_qORrE-NzPib2`), and `OUTLOOK_MESSAGE_TRIGGER` takes **no config** ("No config needed for this webhook") so it *cannot* be scoped to Sent Items. A Lexi-mailbox trigger would deliver Lexi-scoped Graph ids and reintroduce the 404s fixed in `17e9043`. Cost is not a concern: **1,445 calls on a heavy testing day** vs a 200k/month budget (2.2% MTD). |
 
 ### Never tested — requires sends OPEN (Phase 3)
 - **D-1** edit draft in card → send · **D-2** send+hold atomicity + no double-send · **D-3** disregard · **D-4** bare `send` · **D-5** CC/BCC on real sent mail (Kory CC'd only when not already on thread)
@@ -316,8 +316,18 @@ Now: a discrete trip leg blocks only a 3h buffer around itself; an all-day/6h+ b
 - **H-1** accepts an offered slot → invite · **H-2** Teams meeting link on the invite · **H-3** counter-proposes a free time · **H-4** counter-proposes a busy time (must ask Kory, never auto-book) · **H-5** rejects all → re-offer · **H-6** vague mid-thread reply · **H-7** thread-history retention
 - **M-1** 24h Kory nudge · **M-2** 4:45 AM MT briefing · **M-3** multi-day stability · **M-4** Composio budget after a full window
 
+### RUN 4 — "remember" verified, and it was broken (2026-07-26, `a44fe13`)
+
+Checking the remember feature found it **never reached the scheduler**. Mail to lexi@ stores the instruction under an opaque key (`email:<thread-id>`) with Kory's sentence as the value, but `load_scheduling_preferences` matched only exact keys like `lunch_meetings`. So *"Remember that I'm fine with lunch meetings"* reached the **draft prompt** while the **validator still stripped every lunch slot** — the rule never changed.
+
+Unrecognised facts are now scanned for enforceable preferences (lunch on/off; weekly happy-hour, dinner and travel-week caps). Verified on production: `lunch_allowed` False → **True** after Kory's own phrasing, → **False** again after "no lunch meetings". Ordinary notes ("Remind me to review the term sheet") change nothing — covered by a test.
+
+Also verified by direct call: `dont_schedule`, `remember` and `asana` intents all parse correctly from mail to lexi@. `"What's on today?"` classifies as `general`, not `briefing` — minor, unfixed.
+
 ### Never tested — possible while sends stay CLOSED
 - **S-1** approve while blocked is refused cleanly (we never tapped approve)
+- **K-1 via the real Teams surface** — the preference plumbing is proven, but typing `remember …` in Teams end-to-end is not
+- **J-1/J-2/J-3 as real emails** — intents parse correctly in isolation; sending actual mail from Kory's Outlook to lexi@ is not yet tested
 - **I-1** escalation when nothing fits → Teams message naming the blocker with options, no Heidi mention · **I-2** Kory replies with guidance → scheduler retries with it applied
 - **J-1** email lexi@ "don't schedule with X" · **J-2** "remember that…" changes future scheduling · **J-3** "remind me to…" stages an Asana task without a real write
 - **K-1** `remember` via Teams + updating an existing rule · **K-2** memory survives a restart
