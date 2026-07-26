@@ -424,6 +424,9 @@ def _hermes_kory_guidance_compose(packet: dict[str, Any]) -> str:
         "Do NOT use the same generic line every time. Be specific (e.g. coffee mornings packed, "
         "WOB block conflict, try week after).\n"
         "Do NOT draft an email to the prospect. Do NOT invent times.\n"
+        "You are writing directly to Kory — issues route to Kory only. NEVER mention Heidi or "
+        "any other assistant/colleague, and never claim anyone has been flagged, notified, or "
+        "escalated.\n"
         "2-4 sentences. Plain text. No markdown headers."
     )
     client = get_hermes_client()

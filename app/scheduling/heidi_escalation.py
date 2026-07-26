@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.config import settings
@@ -26,6 +27,20 @@ def heidi_escalation_enabled() -> bool:
         "true",
         "yes",
     }
+
+
+def _scrub_third_party_mentions(text: str) -> str:
+    """Kory-facing messages must not reference Heidi while Heidi escalation is off.
+
+    Drops any sentence naming Heidi (issues route to Kory only). Returns the
+    original text if scrubbing would leave nothing.
+    """
+    if not text or heidi_escalation_enabled():
+        return text
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept = [s for s in sentences if "heidi" not in s.lower()]
+    scrubbed = " ".join(kept).strip()
+    return scrubbed or "Scheduling needs your input — reply here with how you'd like to handle it."
 
 
 def _notify_kory_scheduling_blocked(
@@ -54,6 +69,7 @@ def _notify_kory_scheduling_blocked(
             f"Scheduling needs your input — \"{subject}\" from {sender}. "
             f"{detail}. Reply here with how you'd like to handle it."
         )
+    summary = _scrub_third_party_mentions(summary)
     if teams_push_allowed():
         from app.bot.teams_publisher import schedule_teams_scheduling_guidance_push
 
@@ -64,6 +80,9 @@ def _notify_kory_scheduling_blocked(
         "path": "kory_notification",
         "proposal_id": proposal_id,
         "summary": summary,
+        # Callers (e.g. comms_agent send-failure path) read kory_message — provide
+        # the scrubbed Kory-facing text so no Heidi default leaks through.
+        "kory_message": summary,
         "teams_pushed": teams_push_allowed(),
     }
 
