@@ -282,6 +282,56 @@ Deployed `main` @ `991979d`. Proposal **3395** is the live artifact (Teams card 
 
 Tests: **315 pass**. Commits: `37aceb9`, `17e9043`, `8a0a55c`, `991979d`.
 
+---
+
+## RUN 3 — day spread + travel over-block (2026-07-26, sends still CLOSED)
+
+Deployed `main` @ `f066583`. **322 tests pass.**
+
+The Run-2 offer still put all three options on Tuesday. Cause was *not* the selection logic — Mon and Wed had **no valid candidate at all**, rejected by the `travel_day` validator. Two genuine bugs:
+
+1. **`"check-in"` counted as a travel hint** (`validators.py:109`, meant for *hotel* check-in) → Kory's recurring **"IFG + Sujash | Check-in (Mon+Wed+Fri)"** marked Mon and Wed as travel days. **Wednesday had no travel event whatsoever.**
+2. **Any travel event blocked its whole day** → a **21:05 flight** to Sioux City ruled out an **8:00 AM** meeting 13 hours earlier.
+
+Now: a discrete trip leg blocks only a 3h buffer around itself; an all-day/6h+ block ("Kory in CA - All Day") still blocks the whole day; unparseable times stay conservative. Also fixed `used_days` being populated but never read in the selection loop (dead code), so offers prefer one slot per day and only double up when a single day is all that's open.
+
+**Live result** (regenerated 3395 against the real calendar):
+`Mon Jul 27 8:00` · `Tue Jul 28 11:00` · `Wed Jul 29 9:00` — three days, chronological, all free, in-window, Thu/Fri correctly skipped.
+
+---
+
+## ⚠️ STILL TO VERIFY — nothing below has been exercised live
+
+### Blocking-ish / needs a decision from Kory
+| # | Item |
+|---|---|
+| V-1 | **7:00 AM offered to an outside contact** is legal (trainer blocks are M/W/F only). Want a per-intent earliest-hour floor for external meetings? |
+| V-2 | **4 conflict calendars still unavailable on Composio** (IFG Team, Kory & Heidi only, Deal Activity, Daily CEO Update). Conflicts living only there are invisible to every slot we offer. Known B-01. |
+| V-3 | **Travel-week policy.** `rules.py` says travel weeks = "2–3 critical check-ins only". My fix makes non-travel days in a travel week bookable. Confirm that matches Kory's intent. |
+| V-4 | **Poll cadence** is 5 min (was 30) ≈ 60k Composio calls/mo against a 200k budget. Durable fix: register `OUTLOOK_MESSAGE_TRIGGER` on Lexi's connection (needs dashboard access). |
+
+### Never tested — requires sends OPEN (Phase 3)
+- **D-1** edit draft in card → send · **D-2** send+hold atomicity + no double-send · **D-3** disregard · **D-4** bare `send` · **D-5** CC/BCC on real sent mail (Kory CC'd only when not already on thread)
+- **E-1** holds land as tentative on the work Calendar (never Master) · **E-2** confirm → other holds removed · **E-3** 3-day reminder card *before* release · **E-4** expiry release + notify · **E-5** Friday next-week cleanup
+- **H-1** accepts an offered slot → invite · **H-2** Teams meeting link on the invite · **H-3** counter-proposes a free time · **H-4** counter-proposes a busy time (must ask Kory, never auto-book) · **H-5** rejects all → re-offer · **H-6** vague mid-thread reply · **H-7** thread-history retention
+- **M-1** 24h Kory nudge · **M-2** 4:45 AM MT briefing · **M-3** multi-day stability · **M-4** Composio budget after a full window
+
+### Never tested — possible while sends stay CLOSED
+- **S-1** approve while blocked is refused cleanly (we never tapped approve)
+- **I-1** escalation when nothing fits → Teams message naming the blocker with options, no Heidi mention · **I-2** Kory replies with guidance → scheduler retries with it applied
+- **J-1** email lexi@ "don't schedule with X" · **J-2** "remember that…" changes future scheduling · **J-3** "remind me to…" stages an Asana task without a real write
+- **K-1** `remember` via Teams + updating an existing rule · **K-2** memory survives a restart
+- **L-1** Kory-voice draft on request (sign-off "Let's Win", no YPO) · **L-2** auto-drafts stay Lexi-voice
+- **C-2/C-3/C-6** hard blocks, lunch exception-only, coffee/happy-hour/dinner shaping — only C-1/C-4 exercised
+- **A-2** a genuine non-scheduling *inbound* stays silent (only verified on Kory's own sent mail)
+- **G-1** unknown-TZ disclosure — **not testable from anjanakummetha@gmail.com** (its own Date header reveals MT, confidence `inferred`). Needs a sender with no TZ signal.
+- **One clean fresh-email round** with all fixes active from triage onward — the current 3395 draft was regenerated manually, not produced by a new inbound.
+
+### Housekeeping
+- `test_daily_briefing_includes_asana` takes **~69s** and looks like it hits the network; it makes the suite 15s → 75s+ and is a CI fragility risk. Pre-existing, not from these changes.
+- Test-window `.env` deviations to revert at sign-off: `LEXI_HUBSPOT_BCC_ENABLED=false`, `LEXI_ORCHESTRATOR_BACKUP_POLL_MINUTES=5`. Backup: `.env.bak.testwindow.20260726-183148`.
+- Secrets that transited chat still need rotation (carried over from the prior handoff).
+
 ### Left in place for inspection
 Proposals **3381-3385** are `pending_approval` with live Teams cards (false positives from D-A). Sends are blocked so they are inert, but they must be rejected before sends re-open.
 
