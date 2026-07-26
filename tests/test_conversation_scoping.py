@@ -7,6 +7,9 @@ then leaked into thread context and was mistaken for delegation.
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from app.agents.delegation import detect_delegation
 from app.integrations.outlook_thread import filter_by_conversation
 from app.scheduling.email_format import sender_first_name
@@ -99,6 +102,60 @@ def test_offered_slots_are_chronological():
         intent="referral_or_intro",
         subject="Intro",
         body="30 minutes next week",
+        reference_now=NOW,
     )
     starts = [s["start"] for s in res.slots]
     assert starts == sorted(starts), starts
+
+
+NOW = datetime(2026, 7, 26, 13, 45, tzinfo=ZoneInfo("America/Denver"))  # Sunday
+
+
+def _ctx(busy=None):
+    return {
+        "status": "available",
+        "busy_events": busy or [],
+        "horizon_days": 14,
+        "scheduling_timezone": "America/Denver",
+    }
+
+
+def _blocked_day(day: int):
+    return {
+        "subject": "Blocked",
+        "blocking_class": "work_blocking",
+        "start": {"dateTime": f"2026-07-{day:02d}T06:00:00", "timeZone": "America/Denver"},
+        "end": {"dateTime": f"2026-07-{day:02d}T20:00:00", "timeZone": "America/Denver"},
+    }
+
+
+def test_offer_spreads_across_days_when_calendar_allows():
+    """All three options landing on one day means one bad day kills the offer."""
+    from app.scheduling.slot_engine import find_valid_slots
+
+    res = find_valid_slots(
+        _ctx(),
+        intent="referral_or_intro",
+        subject="Intro",
+        body="30 minutes next week",
+        reference_now=NOW,
+    )
+    days = {s["start"][:10] for s in res.slots}
+    assert len(res.slots) >= 2
+    assert len(days) == len(res.slots), f"expected one slot per day, got {sorted(days)}"
+
+
+def test_offer_still_fills_from_a_single_open_day():
+    """Spreading is a preference, not a requirement — don't return one lonely slot."""
+    from app.scheduling.slot_engine import find_valid_slots
+
+    busy = [_blocked_day(d) for d in (27, 29, 30, 31)]
+    res = find_valid_slots(
+        _ctx(busy),
+        intent="referral_or_intro",
+        subject="Intro",
+        body="30 minutes next week",
+        reference_now=NOW,
+    )
+    assert len(res.slots) >= 2
+    assert {s["start"][:10] for s in res.slots} == {"2026-07-28"}

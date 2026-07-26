@@ -309,7 +309,12 @@ def find_valid_slots(
         start = parse_iso_datetime(str(slot.get("start") or ""))
         return _week_key(local_dt(start)) if start else ""
 
+    # First pass takes the best slot on each distinct day, so one bad day for the
+    # recipient doesn't kill the whole offer. The fill pass below relaxes this
+    # when a single day is all the calendar has.
     for score, slot, day_key in candidates:
+        if day_key and day_key in used_days:
+            continue
         if slot_conflicts_any_proposed(slot, chosen, reserve_minutes=reserve_minutes):
             continue
         if intent_key in {"happy_hour", "dinner", "dinner_request"}:
