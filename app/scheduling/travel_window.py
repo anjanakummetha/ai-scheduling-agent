@@ -40,13 +40,29 @@ def _is_travel_event(event: dict[str, Any]) -> bool:
 
 
 def travel_date_set(busy_events: list[dict[str, Any]]) -> set[date]:
+    """Every local date a travel event covers, not just the day it starts.
+
+    A multi-day trip ("Kory in CA" spanning Thu-Fri) is one event, so keying on
+    its start date left the remaining days looking free.
+    """
     dates: set[date] = set()
     for event in busy_events or []:
         if not _is_travel_event(event):
             continue
         day = _event_local_date(event)
-        if day:
+        if not day:
+            continue
+        end = parse_event_datetime(event.get("end"))
+        last = end.astimezone(MT).date() if end else day
+        # An all-day event ends at midnight on the following day; that trailing
+        # boundary is not itself a travel day.
+        if end and last > day and end.astimezone(MT).timetz().hour == 0:
+            last -= timedelta(days=1)
+        if last < day or (last - day).days > 30:
+            last = day
+        while day <= last:
             dates.add(day)
+            day += timedelta(days=1)
     return dates
 
 
@@ -74,15 +90,40 @@ def window_overlaps_travel(window: SchedulingWindow, busy_events: list[dict[str,
     return False
 
 
+def usable_non_travel_days(
+    window: SchedulingWindow,
+    busy_events: list[dict[str, Any]],
+    *,
+    today: date,
+) -> list[date]:
+    """Weekdays still left in the window once travel days are removed."""
+    travel = travel_date_set(busy_events)
+    days: list[date] = []
+    day = max(window.start, today)
+    while day <= window.end:
+        if day.weekday() < 5 and day not in travel:
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
 def shift_window_after_travel(
     window: SchedulingWindow,
     busy_events: list[dict[str, Any]],
     *,
     now: datetime | None = None,
 ) -> SchedulingWindow | None:
-    """If window hits travel, move to the week after travel ends."""
+    """Move past travel only when travel leaves the window unusable.
+
+    Travel events are already blocking entries in `busy_events`, so the slot
+    engine skips those days on its own. Shifting the whole window because one
+    day is travel threw away the days the sender actually asked for — a
+    request for "next week" came back offering the week after.
+    """
     today = (now or datetime.now(tz=MT)).astimezone(MT).date()
     if not window_overlaps_travel(window, busy_events):
+        return window
+    if usable_non_travel_days(window, busy_events, today=today):
         return window
     travel_end = infer_travel_span_end(busy_events, anchor=min(window.start, today))
     if not travel_end:
