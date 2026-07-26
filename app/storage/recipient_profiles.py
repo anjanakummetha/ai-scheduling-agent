@@ -112,6 +112,40 @@ def upsert_recipient_timezone(
         conn.commit()
 
 
+def record_display_name(email: str | None, display_name: str | None) -> None:
+    """Remember a contact's real name so greetings never guess from the address.
+
+    Runs independently of timezone learning: without it a sender whose mailbox
+    is a mashed local-part (anjanakummetha@) gets greeted "Hi Anjanakummetha".
+    """
+    key = normalize_sender_email(email) or (email or "").strip().lower()
+    name = (display_name or "").strip()
+    if not key or not name or "@" in name:
+        return
+    with get_lexi_connection() as conn:
+        ensure_recipient_profiles_table(conn)
+        existing = conn.execute(
+            "SELECT email FROM recipient_profiles WHERE email = ?",
+            (key,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE recipient_profiles
+                SET display_name = COALESCE(NULLIF(display_name, ''), ?),
+                    updated_at = datetime('now')
+                WHERE email = ?
+                """,
+                (name, key),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO recipient_profiles (email, display_name) VALUES (?, ?)",
+                (key, name),
+            )
+        conn.commit()
+
+
 def upsert_introducer(
     *,
     email: str,

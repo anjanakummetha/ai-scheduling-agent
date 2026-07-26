@@ -160,7 +160,10 @@ def resolve_lexi_reply_message_id(
         return f"dry-run-lexi-{anchor[:32]}"
 
     from app.integrations.composio_client import execute_tool
-    from app.integrations.outlook_thread import extract_list_messages
+    from app.integrations.outlook_thread import (
+        extract_list_messages,
+        filter_by_conversation,
+    )
 
     cid = (conversation_id or "").strip()
     if not cid and (kory_message_id or "").strip():
@@ -177,7 +180,7 @@ def resolve_lexi_reply_message_id(
         {
             "user_id": "me",
             "folder": "inbox",
-            "top": 25,
+            "top": 50,
             "orderby": ["receivedDateTime desc"],
             "select": [
                 "id",
@@ -192,7 +195,9 @@ def resolve_lexi_reply_message_id(
         },
         role="lexi",
     )
-    messages = extract_list_messages(result.get("data"))
+    # Composio ignores `filter`, so scope to the conversation here — anchoring on
+    # a message from another thread would reply into the wrong conversation.
+    messages = filter_by_conversation(extract_list_messages(result.get("data")), cid)
     if not messages:
         raise RuntimeError(
             "Thread not found in Lexi mailbox. Ensure Kory CC'd lexi@ on the reply."
@@ -1016,6 +1021,16 @@ def normalize_message(message: dict[str, Any], raw_payload: dict[str, Any]) -> d
     apparent_sender_name = _extract_signature_name(body_text)
 
     from app.scheduling.timezone_intel import resolve_recipient_timezone_at_ingest, extract_internet_headers
+
+    from app.storage.recipient_profiles import record_display_name
+
+    try:
+        record_display_name(
+            email_address.get("address"),
+            apparent_sender_name or email_address.get("name"),
+        )
+    except Exception:  # never block ingest on a nicety
+        logger.debug("Could not record display name for inbound sender.", exc_info=True)
 
     headers = extract_internet_headers(message)
     tz_result = resolve_recipient_timezone_at_ingest(

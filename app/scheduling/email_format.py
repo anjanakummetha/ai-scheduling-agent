@@ -623,7 +623,14 @@ def sender_first_name(sender: str | None) -> str:
         return "there"
     local = sender.split("@", 1)[0]
     local = re.sub(r"[._+-]+", " ", local).strip()
-    return local.split()[0].title() if local else "there"
+    if not local:
+        return "there"
+    first = local.split()[0]
+    # A run-together mailbox ("anjanakummetha") is a full name, not a first name —
+    # greeting someone by it reads worse than a neutral "there".
+    if any(ch.isdigit() for ch in first) or len(first) > 12:
+        return "there"
+    return first.title()
 
 
 _BLOCKED_SIGNATURE_NAMES = frozenset(
@@ -668,11 +675,32 @@ def recipient_display_name(
         if first.lower() not in _BLOCKED_SIGNATURE_NAMES:
             return first
 
+    profile_name = _profile_first_name(sender_email)
+    if profile_name:
+        return profile_name
+
     if fallback_first_name.strip():
         fb = fallback_first_name.strip().title()
         if fb.lower() not in _BLOCKED_SIGNATURE_NAMES:
             return fb
     return sender_first_name(sender_email)
+
+
+def _profile_first_name(sender_email: str | None) -> str:
+    """First name from the stored Outlook display name, if we've seen this contact."""
+    if not sender_email:
+        return ""
+    try:
+        from app.storage.recipient_profiles import get_recipient_profile
+
+        profile = get_recipient_profile(sender_email) or {}
+    except Exception:
+        return ""
+    stored = str(profile.get("display_name") or "").strip()
+    if not stored:
+        return ""
+    first = stored.split()[0].title()
+    return "" if first.lower() in _BLOCKED_SIGNATURE_NAMES else first
 
 
 def example_draft_preview() -> dict[str, Any]:

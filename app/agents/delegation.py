@@ -137,6 +137,31 @@ KORY_SCHEDULING_ASK = (
 )
 
 
+_QUOTED_MARKERS = (
+    "[prior messages in this email chain]",
+    "--- earlier in thread",
+    "-----original message-----",
+    "________________________________",
+)
+
+
+def _new_text_only(body: str) -> str:
+    """Only what the sender just wrote — quoted history must not delegate.
+
+    A delegation is an instruction someone gives now. Matching against quoted
+    text makes every later message in the thread (and, when thread context is
+    stitched in, unrelated mail) look like a fresh hand-off.
+    """
+    text = body or ""
+    lowered = text.lower()
+    cut = len(text)
+    for marker in _QUOTED_MARKERS:
+        found = lowered.find(marker)
+        if found != -1:
+            cut = min(cut, found)
+    return text[:cut]
+
+
 def detect_delegation(
     *,
     subject: str,
@@ -145,7 +170,7 @@ def detect_delegation(
     raw_email: dict[str, Any] | None = None,
 ) -> DelegationDecision:
     """True when Kory delegated to Lexi (CC lexi@ and/or delegation phrasing)."""
-    combined = f"{subject}\n{body}".lower()
+    combined = f"{subject}\n{_new_text_only(body)}".lower()
     sender_l = (sender or "").lower()
 
     lexi_cc = False
