@@ -87,6 +87,9 @@ def get_message(
                 "bodyPreview",
                 "internetMessageHeaders",
                 "conversationId",
+                # Stable across mailboxes — the only reliable way to find the
+                # same email in Lexi's copy of a thread.
+                "internetMessageId",
             ],
         },
         role=role,
@@ -157,6 +160,53 @@ def _pick_lexi_delegation_anchor(
     return messages[0] if messages else None
 
 
+def _conversation_key(conversation_id: str) -> str:
+    """Mailbox-independent part of a Graph conversationId.
+
+    Graph prefixes conversationId per mailbox, so Kory's copy and Lexi's copy of
+    the same thread compare unequal even though the trailing segment matches.
+    Comparing full ids here made the anchor lookup find nothing and every
+    delegation send fail with "thread not found in Lexi mailbox".
+    """
+    cid = (conversation_id or "").strip()
+    return cid[-24:] if len(cid) > 24 else cid
+
+
+def _scope_to_thread(
+    messages: list[dict[str, Any]],
+    *,
+    conversation_id: str,
+    internet_message_id: str = "",
+) -> list[dict[str, Any]]:
+    """Narrow a cross-mailbox listing to one thread.
+
+    Composio ignores the `filter` argument, so this has to happen client-side or
+    an unrelated message becomes the reply anchor.
+    """
+    wanted_internet = (internet_message_id or "").strip()
+    if wanted_internet:
+        exact = [
+            m
+            for m in messages
+            if str(m.get("internetMessageId") or "").strip() == wanted_internet
+        ]
+        if exact:
+            return exact  # same RFC-5322 Message-ID: the very same email
+
+    key = _conversation_key(conversation_id)
+    if not key:
+        return []
+    kept: list[dict[str, Any]] = []
+    for message in messages:
+        actual = _conversation_key(str(message.get("conversationId") or ""))
+        # Drop only proven mismatches; a payload without conversationId can't be
+        # disproved, and the anchor picker still checks sender and recipient.
+        if actual and actual != key:
+            continue
+        kept.append(message)
+    return kept
+
+
 def resolve_lexi_reply_message_id(
     kory_message_id: str,
     *,
@@ -169,16 +219,19 @@ def resolve_lexi_reply_message_id(
         return f"dry-run-lexi-{anchor[:32]}"
 
     from app.integrations.composio_client import execute_tool
-    from app.integrations.outlook_thread import (
-        extract_list_messages,
-        filter_by_conversation,
-    )
+    from app.integrations.outlook_thread import extract_list_messages
 
     cid = (conversation_id or "").strip()
-    if not cid and (kory_message_id or "").strip():
-        kory_msg, _ = get_message(kory_message_id)
-        cid = str(kory_msg.get("conversationId") or "").strip()
-    if not cid:
+    kory_internet_id = ""
+    if (kory_message_id or "").strip():
+        try:
+            kory_msg, _ = get_message(kory_message_id)
+            kory_internet_id = str(kory_msg.get("internetMessageId") or "").strip()
+            if not cid:
+                cid = str(kory_msg.get("conversationId") or "").strip()
+        except Exception:  # fall back to conversation matching below
+            logger.debug("Could not read Kory's copy for anchor resolution.", exc_info=True)
+    if not cid and not kory_internet_id:
         raise RuntimeError(
             "Could not resolve Outlook conversation for Lexi reply. "
             "Ensure Lexi is CC'd on Kory's delegation email."
@@ -199,14 +252,17 @@ def resolve_lexi_reply_message_id(
                 "ccRecipients",
                 "receivedDateTime",
                 "conversationId",
+                "internetMessageId",
             ],
             "filter": f"conversationId eq '{cid}'",
         },
         role="lexi",
     )
-    # Composio ignores `filter`, so scope to the conversation here — anchoring on
-    # a message from another thread would reply into the wrong conversation.
-    messages = filter_by_conversation(extract_list_messages(result.get("data")), cid)
+    messages = _scope_to_thread(
+        extract_list_messages(result.get("data")),
+        conversation_id=cid,
+        internet_message_id=kory_internet_id,
+    )
     if not messages:
         raise RuntimeError(
             "Thread not found in Lexi mailbox. Ensure Kory CC'd lexi@ on the reply."

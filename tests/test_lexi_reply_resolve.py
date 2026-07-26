@@ -46,11 +46,15 @@ def test_resolve_lexi_reply_message_id_picks_kory_delegation_anchor():
                 intended_recipient="anjana.kummetha@iconicfounders.com",
             )
         assert resolved == kory_delegation_id
-        mock_exec.assert_called_once()
-        args, kwargs = mock_exec.call_args
-        assert args[0] == "OUTLOOK_LIST_MESSAGES"
-        assert kwargs.get("role") == "lexi"
-        assert conv in str(args[1].get("filter", ""))
+        # Kory's copy is read first for its internetMessageId (stable across
+        # mailboxes), then Lexi's inbox is listed for the anchor.
+        assert mock_exec.call_count == 2
+        first, second = mock_exec.call_args_list
+        assert first.args[0] == "OUTLOOK_GET_MESSAGE"
+        assert "internetMessageId" in first.args[1].get("select", [])
+        assert second.args[0] == "OUTLOOK_LIST_MESSAGES"
+        assert second.kwargs.get("role") == "lexi"
+        assert conv in str(second.args[1].get("filter", ""))
 
 
 def test_pick_lexi_delegation_anchor_prefers_kory_to_external():

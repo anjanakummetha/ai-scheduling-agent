@@ -159,3 +159,35 @@ def test_offer_still_fills_from_a_single_open_day():
     )
     assert len(res.slots) >= 2
     assert {s["start"][:10] for s in res.slots} == {"2026-07-28"}
+
+
+def test_thread_scoping_survives_mailbox_prefixed_conversation_ids():
+    """Graph prefixes conversationId per mailbox, so Kory's and Lexi's copies of
+    one thread compare unequal. Requiring exact equality made every delegation
+    send fail with "thread not found in Lexi mailbox"."""
+    from app.integrations.outlook_email import _scope_to_thread
+
+    kory_conv = "AAQkADUyMTQ4OGZmXXXX_AMdzElaIOVRFlaEpy5f5pDk="
+    lexi_conv = "AAQkADJmYjI4NGJjYYYY_AMdzElaIOVRFlaEpy5f5pDk="
+    other_conv = "AAQkADJmYjI4NGJjYYYY_ZZZZzzzzZZZZzzzzZZZZzz="
+
+    messages = [
+        {"id": "lexi-copy", "conversationId": lexi_conv},
+        {"id": "unrelated", "conversationId": other_conv},
+    ]
+    kept = _scope_to_thread(messages, conversation_id=kory_conv)
+    assert [m["id"] for m in kept] == ["lexi-copy"]
+
+
+def test_internet_message_id_wins_when_present():
+    """Same RFC-5322 Message-ID means literally the same email."""
+    from app.integrations.outlook_email import _scope_to_thread
+
+    messages = [
+        {"id": "right", "conversationId": "x", "internetMessageId": "<abc@contoso>"},
+        {"id": "wrong", "conversationId": "x", "internetMessageId": "<zzz@contoso>"},
+    ]
+    kept = _scope_to_thread(
+        messages, conversation_id="x", internet_message_id="<abc@contoso>"
+    )
+    assert [m["id"] for m in kept] == ["right"]
