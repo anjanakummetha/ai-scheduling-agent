@@ -708,7 +708,13 @@ def _recover_pending_triage() -> int:
 
 
 def _poll_outlook_ingress() -> int:
-    """Poll Kory inbox + sent items for messages Composio triggers may miss locally."""
+    """Poll Kory inbox + sent items for messages Composio triggers may miss locally.
+
+    Lexi's own inbox is polled too: the OUTLOOK_MESSAGE_TRIGGER webhook is
+    registered on Kory's connection only, so a delegation reply Kory sends
+    (which lands in his Sent Items and Lexi's inbox, never his inbox) has no
+    webhook to fire. Reading Lexi's mailbox gives that flow a direct source.
+    """
     if not settings.composio_api_key:
         return 0
 
@@ -716,15 +722,29 @@ def _poll_outlook_ingress() -> int:
     window_start = datetime.now(timezone.utc) - timedelta(hours=24)
     for folder in ("inbox", "sentitems"):
         processed += _poll_outlook_folder(folder, window_start=window_start)
+    if _lexi_mailbox_poll_enabled():
+        processed += _poll_outlook_folder(
+            "inbox", window_start=window_start, role="lexi"
+        )
     return processed
 
 
-def _poll_outlook_folder(folder: str, *, window_start: datetime) -> int:
+def _lexi_mailbox_poll_enabled() -> bool:
+    enabled = os.getenv("LEXI_POLL_LEXI_MAILBOX", "true").lower() in {"1", "true", "yes"}
+    return enabled and bool((settings.lexi_mailbox_email or "").strip())
+
+
+def _poll_outlook_folder(
+    folder: str,
+    *,
+    window_start: datetime,
+    role: str = "read",
+) -> int:
     processed = 0
     try:
-        from app.integrations.composio_client import execute_read_tool
+        from app.integrations.composio_client import execute_tool
 
-        result = execute_read_tool(
+        result = execute_tool(
             "OUTLOOK_LIST_MESSAGES",
             {
                 "user_id": "me",
@@ -743,6 +763,7 @@ def _poll_outlook_folder(folder: str, *, window_start: datetime) -> int:
                     "conversationId",
                 ],
             },
+            role=role,
         )
         messages = _extract_messages(result.get("data"))
     except ComposioNotConfiguredError:
@@ -750,8 +771,8 @@ def _poll_outlook_folder(folder: str, *, window_start: datetime) -> int:
     except Exception as exc:
         _log_orchestrator_error(
             step_name="outlook_poll",
-            reference_id=folder,
-            message=f"Outlook poll failed for folder={folder}.",
+            reference_id=f"{role}:{folder}",
+            message=f"Outlook poll failed for folder={folder} role={role}.",
             exc=exc,
         )
         return 0

@@ -27,11 +27,36 @@ def _extract_messages(data: Any) -> list[dict[str, Any]]:
     return []
 
 
+def filter_by_conversation(
+    messages: list[dict[str, Any]],
+    conversation_id: str,
+) -> list[dict[str, Any]]:
+    """Keep only messages truly in `conversation_id`.
+
+    Composio's OUTLOOK_LIST_MESSAGES ignores the `filter` argument entirely, so
+    it returns the newest messages in the folder regardless of conversation.
+    Without this client-side pass, unrelated mail leaks into thread context and
+    can be mistaken for part of the thread.
+    """
+    wanted = (conversation_id or "").strip()
+    if not wanted:
+        return []
+    kept: list[dict[str, Any]] = []
+    for message in messages:
+        actual = str(message.get("conversationId") or "").strip()
+        # Drop only proven mismatches: if the payload omits conversationId there
+        # is nothing to contradict, and discarding it would break the thread.
+        if actual and actual != wanted:
+            continue
+        kept.append(message)
+    return kept
+
+
 def _list_conversation_messages(
     conversation_id: str,
     *,
     folder: str,
-    top: int = 25,
+    top: int = 50,
 ) -> list[dict[str, Any]]:
     result = execute_read_tool(
         "OUTLOOK_LIST_MESSAGES",
@@ -44,7 +69,17 @@ def _list_conversation_messages(
             "filter": f"conversationId eq '{conversation_id}'",
         },
     )
-    return _extract_messages(result.get("data"))
+    messages = _extract_messages(result.get("data"))
+    scoped = filter_by_conversation(messages, conversation_id)
+    if len(scoped) != len(messages):
+        logger.debug(
+            "Conversation %s: dropped %d/%d unrelated messages from folder=%s.",
+            conversation_id,
+            len(messages) - len(scoped),
+            len(messages),
+            folder,
+        )
+    return scoped
 
 
 def fetch_conversation_context(

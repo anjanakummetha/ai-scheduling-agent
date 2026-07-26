@@ -232,7 +232,9 @@ def find_valid_slots(
     now_mt = reference_now.astimezone(MT) if reference_now else datetime.now(tz=MT)
     earliest = now_mt + timedelta(hours=2)
     window = (plan.window if plan and plan.window else None)
-    if window is None and plan is None:
+    if window is None:
+        # A plan that carries no window must not silently discard a timeframe the
+        # sender stated ("next week") — that let offers land a week late.
         window = infer_scheduling_window(subject=subject, body=body, now=now_mt)
     time_window = None if skip_time_of_day else infer_time_of_day_window(subject=subject, body=body)
     allowed_weekdays = infer_allowed_weekdays(subject=subject, body=body)
