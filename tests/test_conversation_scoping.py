@@ -73,3 +73,32 @@ def test_run_together_mailbox_does_not_become_a_first_name():
     # Normal addresses still resolve.
     assert sender_first_name("anjana.kummetha@gmail.com") == "Anjana"
     assert sender_first_name("kory@ifg.vc") == "Kory"
+
+
+def test_offered_slots_are_chronological():
+    """A live offer listed 11:00 AM above 7:00 AM because selection is by score."""
+    from app.scheduling.slot_engine import find_valid_slots
+
+    # Tuesday morning free except 08:30-10:00, so the engine's scoring prefers
+    # the later slot first; the recipient should still read them in time order.
+    busy = [
+        {
+            "subject": "Longevity appt",
+            "start": {"dateTime": "2026-07-28T08:30:00", "timeZone": "America/Denver"},
+            "end": {"dateTime": "2026-07-28T10:00:00", "timeZone": "America/Denver"},
+            "blocking_class": "work_blocking",
+        }
+    ]
+    res = find_valid_slots(
+        {
+            "status": "available",
+            "busy_events": busy,
+            "horizon_days": 14,
+            "scheduling_timezone": "America/Denver",
+        },
+        intent="referral_or_intro",
+        subject="Intro",
+        body="30 minutes next week",
+    )
+    starts = [s["start"] for s in res.slots]
+    assert starts == sorted(starts), starts

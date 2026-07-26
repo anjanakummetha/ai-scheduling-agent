@@ -372,8 +372,10 @@ def find_valid_slots(
             relaxed.diagnostics["morning_preference_relaxed"] = True
             return relaxed
 
+    # Offer them in the order the recipient will read them. Selection is by
+    # score, which listed 11:00 AM above 7:00 AM in a real offer email.
     return SlotProposal(
-        slots=chosen[:max_slots],
+        slots=sorted(chosen[:max_slots], key=lambda slot: str(slot.get("start") or "")),
         meeting_format=fmt,
         intent=intent_key,
         diagnostics={
