@@ -101,12 +101,56 @@ def _check_timed_hard_blocks(
             )
 
 
-def _is_travel_day(day_local: datetime, busy_events: list[dict[str, Any]]) -> bool:
-    for event in events_on_local_date(busy_events, day_local):
-        if str(event.get("blocking_class") or "") == "travel_blocking":
+_TRAVEL_SUBJECT_HINTS = (
+    "flight to",
+    "flight from",
+    "stay at",
+    "safari",
+    "hotel check-in",
+)
+
+# A trip leg (a flight) only rules out the hours around it; an all-day or
+# multi-hour travel block ("Kory in CA - All Day") rules out the whole day.
+_TRAVEL_DAY_MIN_HOURS = 6
+_TRAVEL_LEG_BUFFER = timedelta(hours=3)
+
+
+def _looks_like_travel_event(event: dict[str, Any]) -> bool:
+    if str(event.get("blocking_class") or "") == "travel_blocking":
+        return True
+    subject = str(event.get("subject") or "").lower()
+    return any(hint in subject for hint in _TRAVEL_SUBJECT_HINTS)
+
+
+def _travel_blocks_slot(
+    slot_start: datetime,
+    slot_end: datetime,
+    busy_events: list[dict[str, Any]],
+) -> bool:
+    """True when travel genuinely rules this slot out.
+
+    Previously any travel-ish event blocked its whole day, so a 9:05 PM flight
+    killed an 8:00 AM meeting. "check-in" was also treated as a travel hint,
+    which matched Kory's recurring "IFG + Sujash | Check-in" and quietly marked
+    ordinary workdays as travel.
+    """
+    for event in events_on_local_date(busy_events, slot_start):
+        if not _looks_like_travel_event(event):
+            continue
+        start = parse_event_datetime(event.get("start"))
+        end = parse_event_datetime(event.get("end"))
+        if not start or not end:
+            return True  # can't bound it — stay conservative
+        start_local, end_local = local_dt(start), local_dt(end)
+        spans_day = bool(event.get("isAllDay")) or (
+            end_local - start_local
+        ) >= timedelta(hours=_TRAVEL_DAY_MIN_HOURS)
+        if spans_day:
             return True
-        subject = str(event.get("subject") or "").lower()
-        if any(k in subject for k in ("flight to", "flight from", "stay at", "safari", "check-in")):
+        if (
+            slot_end > start_local - _TRAVEL_LEG_BUFFER
+            and slot_start < end_local + _TRAVEL_LEG_BUFFER
+        ):
             return True
     return False
 
@@ -331,7 +375,7 @@ def validate_proposal_slots(
         _check_timed_hard_blocks(start_local, end_local, weekday, prefix, result)
 
         result.rules_checked.append("travel_day")
-        if _is_travel_day(start_local, busy) and not urgent:
+        if _travel_blocks_slot(start_local, end_local, busy) and not urgent:
             result.valid = False
             result.violations.append(
                 f"{prefix}: Kory is traveling this day — hold for Kory. Travel weeks are "
