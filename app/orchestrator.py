@@ -710,10 +710,14 @@ def _recover_pending_triage() -> int:
 def _poll_outlook_ingress() -> int:
     """Poll Kory inbox + sent items for messages Composio triggers may miss locally.
 
-    Lexi's own inbox is polled too: the OUTLOOK_MESSAGE_TRIGGER webhook is
-    registered on Kory's connection only, so a delegation reply Kory sends
-    (which lands in his Sent Items and Lexi's inbox, never his inbox) has no
-    webhook to fire. Reading Lexi's mailbox gives that flow a direct source.
+    Kory's Sent Items is what carries a delegation reply: the
+    OUTLOOK_MESSAGE_TRIGGER webhook lives on Kory's connection only, and his
+    reply never lands in his inbox, so this poll is that flow's only ingress.
+
+    Lexi's mailbox holds the same message (she is CC'd) but is opt-in via
+    LEXI_POLL_LEXI_MAILBOX: Graph ids are mailbox-scoped and the rest of the
+    pipeline re-fetches a stored thread_id with Kory's connection, so ingesting
+    Lexi-scoped ids makes those later reads 404.
     """
     if not settings.composio_api_key:
         return 0
@@ -730,7 +734,7 @@ def _poll_outlook_ingress() -> int:
 
 
 def _lexi_mailbox_poll_enabled() -> bool:
-    enabled = os.getenv("LEXI_POLL_LEXI_MAILBOX", "true").lower() in {"1", "true", "yes"}
+    enabled = os.getenv("LEXI_POLL_LEXI_MAILBOX", "false").lower() in {"1", "true", "yes"}
     return enabled and bool((settings.lexi_mailbox_email or "").strip())
 
 
@@ -794,11 +798,16 @@ def _poll_outlook_folder(
 
         log_id: str | None = None
         try:
-            full_message, log_id = get_message(message_id)
+            full_message, log_id = get_message(message_id, role=role)
             full_message = merge_list_message_fields(full_message, message)
             normalized = normalize_message(
                 full_message,
-                {"source": "orchestrator_poll", "message_id": message_id, "folder": folder},
+                {
+                    "source": "orchestrator_poll",
+                    "message_id": message_id,
+                    "folder": folder,
+                    "mailbox_role": role,
+                },
             )
             recipients = extract_recipient_list(full_message)
             raw_email = build_inbound_raw_email(
@@ -814,7 +823,11 @@ def _poll_outlook_folder(
                 reference_id=message_id,
                 message="Outlook poller failed to process a message.",
                 exc=exc,
-                extra={"composio_log_id": log_id, "folder": folder},
+                extra={
+                    "composio_log_id": log_id,
+                    "folder": folder,
+                    "mailbox_role": role,
+                },
             )
     return processed
 

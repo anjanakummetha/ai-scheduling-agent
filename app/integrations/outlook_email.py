@@ -61,8 +61,16 @@ def sandbox_mailbox_mismatch() -> dict[str, str | bool]:
     }
 
 
-def get_message(message_id: str) -> tuple[dict[str, Any], str | None]:
-    result = execute_read_tool(
+def get_message(
+    message_id: str,
+    *,
+    role: str = "read",
+) -> tuple[dict[str, Any], str | None]:
+    """Fetch a message. `role` must match the mailbox that produced the id —
+    Graph ids are mailbox-scoped, so Kory's connection 404s on Lexi's ids."""
+    from app.integrations.composio_client import execute_tool
+
+    result = execute_tool(
         "OUTLOOK_GET_MESSAGE",
         {
             "message_id": message_id,
@@ -81,6 +89,7 @@ def get_message(message_id: str) -> tuple[dict[str, Any], str | None]:
                 "conversationId",
             ],
         },
+        role=role,
     )
     return _coerce_data(result["data"]), result.get("log_id")
 
