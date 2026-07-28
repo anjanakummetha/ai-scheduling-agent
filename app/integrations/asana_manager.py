@@ -578,7 +578,8 @@ def comment_on_asana_task(
         }
     result = execute_asana_tool(
         "ASANA_CREATE_TASK_COMMENT",
-        {"task_gid": task_gid, "text": text},
+        # This tool takes task_id, unlike the update/delete tools which take task_gid.
+        {"task_id": task_gid, "text": text},
     )
     return {
         "ok": True,
