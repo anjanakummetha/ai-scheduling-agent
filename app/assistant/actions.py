@@ -901,10 +901,14 @@ def list_asana_tasks_action(*, bucket: str = "all") -> dict[str, Any]:
     return list_asana_tasks(bucket=key)  # type: ignore[arg-type]
 
 
-def create_asana_task_action(*, title: str, notes: str = "", due_on: str = "", confirm: bool = False) -> dict[str, Any]:
+def create_asana_task_action(
+    *, title: str, notes: str = "", due_on: str = "", section: str = "", confirm: bool = False
+) -> dict[str, Any]:
     from app.integrations.asana_manager import create_asana_task_from_chat
 
-    return create_asana_task_from_chat(title=title, notes=notes, due_on=due_on, approved=confirm)
+    return create_asana_task_from_chat(
+        title=title, notes=notes, due_on=due_on, section=section, approved=confirm
+    )
 
 
 def complete_asana_task_action(*, task_gid: str, confirm: bool = False) -> dict[str, Any]:

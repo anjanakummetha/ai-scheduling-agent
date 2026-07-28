@@ -67,7 +67,16 @@ class ExecuteLexiApprovalInput(BaseModel):
 
 
 def _ok(data: dict[str, Any]) -> str:
-    return json.dumps({"ok": True, **data}, default=str)
+    # Every result carries the real date: the model was resolving "August 10"
+    # to 2025 and offering to "correct" a correctly-stored 2026 date.
+    return json.dumps({"ok": True, "today": _today_mt(), **data}, default=str)
+
+
+def _today_mt() -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(tz=ZoneInfo("America/Denver")).strftime("%Y-%m-%d (%A)")
 
 
 def _error(message: str, *, code: str = "tool_error") -> str:
@@ -324,6 +333,7 @@ def lexi_create_asana_task(
     title: str,
     notes: str = "",
     due_on: str = "",
+    section: str = "",
     confirm: str = "false",
 ) -> str:
     """Create an Asana task on Kory's project. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
@@ -334,6 +344,7 @@ def lexi_create_asana_task(
         title=title,
         notes=notes,
         due_on=due_on,
+        section=section,
         confirm=approved,
     )
 

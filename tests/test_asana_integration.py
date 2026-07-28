@@ -39,3 +39,45 @@ def test_write_slugs_exist_in_composio_toolkit():
     assert "ASANA_CREATE_A_STORY_COMMENT" not in source
     assert "ASANA_DELETE_TASK" in source
     assert "ASANA_CREATE_TASK_COMMENT" in source
+
+
+def test_task_name_resolves_to_gid(monkeypatch):
+    """Chat only has the task name; Asana needs a numeric id, and passing the
+    name through produced "task: Not a Long: <name>"."""
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5: {
+        "tasks": [{"gid": "123456", "name": "LEXI TEST 2 — delete me"}]
+    })
+    assert am.resolve_task_gid("LEXI TEST 2 — delete me") == "123456"
+    assert am.resolve_task_gid("999") == "999"      # already a gid
+    assert am.resolve_task_gid("") == ""
+
+
+def test_section_name_resolves_to_gid(monkeypatch):
+    """"Add it to YPO" has to reach the YPO board, not Reservation Reminders."""
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "list_project_sections", lambda project_gid="": [
+        {"gid": "1", "name": "General"},
+        {"gid": "2", "name": "Personal"},
+        {"gid": "3", "name": "YPO"},
+    ])
+    assert am.resolve_section_gid("YPO") == "3"
+    assert am.resolve_section_gid("ypo") == "3"
+    assert am.resolve_section_gid("personal") == "2"
+    assert am.resolve_section_gid("777") == "777"
+    assert am.resolve_section_gid("Nonexistent Board") == ""
+
+
+def test_mcp_results_carry_todays_date():
+    """The model believed it was 2025; every tool result now states the date."""
+    import json
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import hermes_mcp_server as h
+
+    payload = json.loads(h._ok({"action": "x", "result": {}}))
+    assert payload["today"].startswith(
+        datetime.now(tz=ZoneInfo("America/Denver")).strftime("%Y-%m-%d")
+    )

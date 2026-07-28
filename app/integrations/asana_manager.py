@@ -210,7 +210,7 @@ def create_venue_reservation_task(
     return _create_asana_task(title=title, notes=notes)
 
 
-def _create_asana_task(*, title: str, notes: str) -> dict[str, Any]:
+def _create_asana_task(*, title: str, notes: str, section: str = "") -> dict[str, Any]:
     if _should_simulate_asana():
         task_id = f"asana-sim-{uuid.uuid4().hex[:12]}"
         return {
@@ -344,12 +344,86 @@ def _create_task_via_composio(*, title: str, notes: str) -> tuple[str | None, st
     task_id = _extract_task_id(result.get("data"))
     if not task_id:
         raise RuntimeError("Composio Asana create returned no task id.")
-    _add_task_to_section_if_configured(task_id)
+    _add_task_to_section_if_configured(task_id, section)
     return task_id, result.get("log_id")
 
 
-def _add_task_to_section_if_configured(task_gid: str) -> None:
-    section_gid = settings.asana_section_gid
+_SECTION_CACHE: dict[str, list[dict[str, str]]] = {}
+_PROJECT_CACHE: list[dict[str, str]] = []
+
+
+def list_project_sections(project_gid: str = "") -> list[dict[str, str]]:
+    """Sections (boards) on a project — General, Personal, YPO, and the rest."""
+    pid = (project_gid or settings.asana_project_gid or "").strip()
+    if not pid:
+        return []
+    if pid in _SECTION_CACHE:
+        return _SECTION_CACHE[pid]
+    try:
+        result = execute_asana_tool(
+            "ASANA_GET_SECTIONS_IN_PROJECT",
+            {"project_gid": pid, "limit": 100, "opt_fields": ["name"]},
+        )
+    except Exception:
+        logger.debug("Could not list sections for project %s.", pid, exc_info=True)
+        return []
+    data = result.get("data")
+    rows = data.get("data") if isinstance(data, dict) else data
+    sections = [
+        {"gid": str(r.get("gid") or ""), "name": str(r.get("name") or "")}
+        for r in (rows or [])
+        if isinstance(r, dict) and r.get("gid")
+    ]
+    _SECTION_CACHE[pid] = sections
+    return sections
+
+
+def resolve_section_gid(section: str, project_gid: str = "") -> str:
+    """Map a board name Kory typed ("YPO", "personal") to its section gid."""
+    raw = (section or "").strip()
+    if not raw:
+        return ""
+    if raw.isdigit():
+        return raw
+    wanted = raw.casefold()
+    sections = list_project_sections(project_gid)
+    for row in sections:  # exact name first
+        if row["name"].strip().casefold() == wanted:
+            return row["gid"]
+    for row in sections:  # then a containing match ("ypo" -> "YPO")
+        name = row["name"].strip().casefold()
+        if wanted in name or name in wanted:
+            return row["gid"]
+    return ""
+
+
+def resolve_task_gid(task: str) -> str:
+    """Accept a task gid or a task name.
+
+    Asana needs a numeric id, but in chat the model only has the name it just
+    used — passing that through produced "task: Not a Long: <name>", which then
+    got relayed to Kory as commenting being unsupported.
+    """
+    raw = (task or "").strip()
+    if not raw or raw.isdigit():
+        return raw
+    try:
+        found = search_asana_tasks(query=raw, limit=5)
+    except Exception:
+        logger.debug("Task lookup failed for %r.", raw, exc_info=True)
+        return raw
+    tasks = found.get("tasks") or []
+    wanted = raw.casefold()
+    for row in tasks:  # prefer an exact name match
+        if str(row.get("name") or "").strip().casefold() == wanted:
+            return str(row.get("gid") or raw)
+    if len(tasks) == 1:
+        return str(tasks[0].get("gid") or raw)
+    return raw
+
+
+def _add_task_to_section_if_configured(task_gid: str, section: str = "") -> None:
+    section_gid = resolve_section_gid(section) if section.strip() else settings.asana_section_gid
     if not section_gid:
         return
     try:
@@ -384,12 +458,13 @@ def create_asana_task_from_chat(
     title: str,
     notes: str = "",
     due_on: str = "",
+    section: str = "",
     approved: bool = False,
 ) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana create task")
-    result = _create_asana_task(title=title, notes=notes or title)
+    result = _create_asana_task(title=title, notes=notes or title, section=section)
     if due_on.strip() and result.get("ok") and result.get("task_id"):
         update = update_asana_task(
             task_gid=str(result["task_id"]),
@@ -404,6 +479,7 @@ def complete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, A
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana complete task")
+    task_gid = resolve_task_gid(task_gid)
     if _should_simulate_asana():
         return {"ok": True, "task_gid": task_gid, "simulated": True, "dry_run": True}
     result = execute_asana_tool(
@@ -460,6 +536,7 @@ def update_asana_task(
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana update task")
+    task_gid = resolve_task_gid(task_gid)
     data: dict[str, Any] = {}
     if title.strip():
         data["name"] = title.strip()
@@ -487,6 +564,7 @@ def delete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, Any
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana delete task")
+    task_gid = resolve_task_gid(task_gid)
     if _should_simulate_asana():
         return {"ok": True, "task_gid": task_gid, "simulated": True, "dry_run": True}
     result = execute_asana_tool("ASANA_DELETE_TASK", {"task_gid": task_gid})
@@ -524,16 +602,18 @@ def move_asana_task_to_section(
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana move task section")
-    target = section_gid.strip() or settings.asana_section_gid or ""
+    task_gid = resolve_task_gid(task_gid)
+    target = section_gid.strip()
     if not target and section_name.strip():
-        return {
-            "ok": False,
-            "error": (
-                f"Section '{section_name}' needs a configured GID "
-                "(set ASANA_SECTION_GID or pass section_gid)."
-            ),
-            "dry_run": True,
-        }
+        target = resolve_section_gid(section_name)
+        if not target:
+            names = ", ".join(r["name"] for r in list_project_sections()) or "none found"
+            return {
+                "ok": False,
+                "error": f"No board named '{section_name}'. Available boards: {names}.",
+            }
+    if not target:
+        target = settings.asana_section_gid or ""
     if not target:
         return {"ok": False, "error": "section_gid is required", "dry_run": True}
     if _should_simulate_asana():
@@ -565,6 +645,7 @@ def comment_on_asana_task(
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana comment")
+    task_gid = resolve_task_gid(task_gid)
     text = comment.strip()
     if not text:
         return {"ok": False, "error": "comment is required"}
@@ -612,6 +693,12 @@ def list_asana_project_options() -> dict[str, Any]:
             projects.append({"gid": gid.strip(), "name": name.strip() or gid.strip()})
         else:
             projects.append({"gid": part, "name": part})
+    # Reads should cover everything Kory has, including projects added after
+    # this was configured — the env list only ever held one project, so IFG
+    # Tasks, Marketing Content and the rest were invisible to search.
+    if _discover_projects_enabled():
+        projects.extend(_discover_workspace_projects())
+
     # Deduplicate by gid
     seen: set[str] = set()
     unique: list[dict[str, str]] = []
@@ -622,6 +709,42 @@ def list_asana_project_options() -> dict[str, Any]:
         seen.add(gid)
         unique.append(row)
     return {"ok": True, "projects": unique}
+
+
+def _discover_projects_enabled() -> bool:
+    import os
+
+    return os.getenv("ASANA_DISCOVER_PROJECTS", "true").lower() in {"1", "true", "yes"}
+
+
+def _discover_workspace_projects() -> list[dict[str, str]]:
+    """Every non-archived project in Kory's workspace (read scope only)."""
+    global _PROJECT_CACHE
+    if _PROJECT_CACHE:
+        return _PROJECT_CACHE
+    try:
+        workspaces = execute_asana_tool("ASANA_GET_MULTIPLE_WORKSPACES", {"limit": 5})
+        wdata = workspaces.get("data")
+        wrows = wdata.get("data") if isinstance(wdata, dict) else wdata
+        workspace_gid = str((wrows or [{}])[0].get("gid") or "")
+        if not workspace_gid:
+            return []
+        result = execute_asana_tool(
+            "ASANA_GET_MULTIPLE_PROJECTS",
+            {"workspace": workspace_gid, "limit": 100, "opt_fields": ["name", "archived"]},
+        )
+    except Exception:
+        logger.debug("Asana project discovery failed; using configured projects.", exc_info=True)
+        return []
+    data = result.get("data")
+    rows = data.get("data") if isinstance(data, dict) else data
+    found = [
+        {"gid": str(r.get("gid")), "name": str(r.get("name") or r.get("gid"))}
+        for r in (rows or [])
+        if isinstance(r, dict) and r.get("gid") and not r.get("archived")
+    ]
+    _PROJECT_CACHE = found
+    return found
 
 
 def list_asana_tasks(
