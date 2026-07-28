@@ -108,3 +108,49 @@ def test_create_returns_the_task_id_and_places_the_section(monkeypatch):
     assert result["ok"] is True
     assert result["task_id"] == "555", result
     assert any(slug == "ASANA_ADD_TASK_TO_SECTION" for slug, _ in calls), calls
+
+
+def test_date_buckets_need_opt_fields(monkeypatch):
+    """Asana returns only gid+name unless opt_fields asks for more, so due_on
+    and completed were always None and every date bucket came back empty —
+    29 genuinely overdue tasks were reported as "you're all clear"."""
+    import app.integrations.asana_manager as am
+
+    seen = {}
+
+    def fake_tool(slug, args):
+        seen["args"] = args
+        return {"data": {"data": [
+            {"gid": "1", "name": "old thing", "due_on": "2020-01-01", "completed": False},
+            {"gid": "2", "name": "done thing", "due_on": "2020-01-01", "completed": True},
+            {"gid": "3", "name": "future thing", "due_on": "2999-01-01", "completed": False},
+        ]}}
+
+    monkeypatch.setattr(am, "execute_asana_tool", fake_tool)
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+
+    result = am.list_asana_tasks(bucket="overdue", project_gid="proj-1")
+    assert "opt_fields" in seen["args"], "must request due_on/completed"
+    assert "due_on" in seen["args"]["opt_fields"]
+    names = [t["name"] for t in result["tasks"]]
+    assert names == ["old thing"], names  # not completed, not future
+
+
+def test_buckets_span_every_project(monkeypatch):
+    """Overdue should cover all of Kory's projects, not just the personal one."""
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "list_asana_project_options", lambda: {"projects": [
+        {"gid": "p1", "name": "Kory NON-IFG"}, {"gid": "p2", "name": "IFG Tasks"},
+    ]})
+    monkeypatch.setattr(am, "list_asana_tasks", am.list_asana_tasks)
+
+    def fake_single(*, bucket, limit, project_gid, project_name):
+        return {"tasks": [{"gid": project_gid, "name": f"task in {project_name}",
+                           "due_on": "2020-01-01"}]}
+
+    monkeypatch.setattr(am, "list_asana_tasks", fake_single)
+    out = am._list_tasks_across_projects(bucket="overdue", limit=10)
+    assert out["total_found"] == 2, out
+    assert {t["name"] for t in out["tasks"]} == {
+        "task in Kory NON-IFG", "task in IFG Tasks"}

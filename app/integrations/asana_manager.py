@@ -454,6 +454,29 @@ def _extract_task_id(data: Any) -> str | None:
 
 TaskBucket = Literal["overdue", "due_today", "upcoming", "all"]
 
+TASK_FIELDS = ["name", "completed", "due_on", "notes"]
+
+
+def _list_tasks_across_projects(*, bucket: TaskBucket, limit: int) -> dict[str, Any]:
+    """Aggregate one bucket over every project Lexi can read."""
+    collected: list[dict[str, Any]] = []
+    for project in list_asana_project_options().get("projects", []):
+        listed = list_asana_tasks(
+            bucket=bucket,
+            limit=100,
+            project_gid=str(project.get("gid") or ""),
+            project_name=str(project.get("name") or ""),
+        )
+        collected.extend(listed.get("tasks") or [])
+    collected.sort(key=lambda t: str(t.get("due_on") or "9999-12-31"))
+    return {
+        "ok": True,
+        "bucket": bucket,
+        "project_name": "all projects",
+        "tasks": collected[:limit],
+        "total_found": len(collected),
+    }
+
 
 def create_asana_task_from_chat(
     *,
@@ -760,6 +783,10 @@ def list_asana_tasks(
     if _should_simulate_asana() and not project_gid:
         return _simulated_asana_tasks(bucket=bucket)
 
+    # "What's overdue?" means across everything Kory has, not one project.
+    if not project_gid.strip():
+        return _list_tasks_across_projects(bucket=bucket, limit=limit)
+
     target_gid = project_gid.strip() or settings.asana_project_gid
     if not target_gid:
         return {"ok": False, "tasks": [], "error": "ASANA_PROJECT_GID not set"}
@@ -767,13 +794,24 @@ def list_asana_tasks(
     try:
         result = execute_asana_tool(
             "ASANA_GET_TASKS_FROM_A_PROJECT",
-            {"project_gid": target_gid, "limit": max(1, min(limit, 100))},
+            {
+                "project_gid": target_gid,
+                "limit": max(1, min(limit, 100)),
+                # Without opt_fields Asana returns only gid and name, so due_on
+                # and completed came back empty and every date bucket was empty:
+                # 29 overdue tasks reported as "you're all clear".
+                "opt_fields": TASK_FIELDS,
+            },
         )
     except Exception:
         try:
             result = execute_asana_tool(
                 "ASANA_GET_MULTIPLE_TASKS",
-                {"project": target_gid, "limit": max(1, min(limit, 100))},
+                {
+                    "project": target_gid,
+                    "limit": max(1, min(limit, 100)),
+                    "opt_fields": TASK_FIELDS,
+                },
             )
         except Exception as exc:
             return {"ok": False, "tasks": [], "error": str(exc)}
