@@ -364,9 +364,19 @@ def lexi_list_asana_boards() -> str:
 
 
 @mcp.tool()
-def lexi_list_asana_tasks(bucket: str = "due_today") -> str:
-    """List Asana tasks: overdue | due_today | upcoming | all (read-only)."""
-    return _wrap("lexi_list_asana_tasks", lexi.list_asana_tasks_action, bucket=bucket)
+def lexi_list_asana_tasks(bucket: str = "due_today", who: str = "kory") -> str:
+    """List Asana tasks: overdue | due_today | upcoming | all (read-only).
+
+    Defaults to Kory's own tasks. Shared boards hold other people's work, so
+    pass who='all' only when he asks about the team — and say whose a task is
+    when reporting anyone else's.
+    """
+    return _wrap(
+        "lexi_list_asana_tasks",
+        lexi.list_asana_tasks_action,
+        bucket=bucket,
+        mine_only=who.strip().lower() not in {"all", "everyone", "team"},
+    )
 
 
 @mcp.tool()

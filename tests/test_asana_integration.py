@@ -129,7 +129,7 @@ def test_date_buckets_need_opt_fields(monkeypatch):
     monkeypatch.setattr(am, "execute_asana_tool", fake_tool)
     monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
 
-    result = am.list_asana_tasks(bucket="overdue", project_gid="proj-1")
+    result = am.list_asana_tasks(bucket="overdue", project_gid="proj-1", mine_only=False)
     assert "opt_fields" in seen["args"], "must request due_on/completed"
     assert "due_on" in seen["args"]["opt_fields"]
     names = [t["name"] for t in result["tasks"]]
@@ -145,7 +145,7 @@ def test_buckets_span_every_project(monkeypatch):
     ]})
     monkeypatch.setattr(am, "list_asana_tasks", am.list_asana_tasks)
 
-    def fake_single(*, bucket, limit, project_gid, project_name):
+    def fake_single(*, bucket, limit, project_gid, project_name, mine_only=True):
         return {"tasks": [{"gid": project_gid, "name": f"task in {project_name}",
                            "due_on": "2020-01-01"}]}
 
@@ -154,3 +154,39 @@ def test_buckets_span_every_project(monkeypatch):
     assert out["total_found"] == 2, out
     assert {t["name"] for t in out["tasks"]} == {
         "task in Kory NON-IFG", "task in IFG Tasks"}
+
+
+def test_only_korys_tasks_are_reported_by_default(monkeypatch):
+    """Of 29 overdue tasks across shared boards, 18 belonged to Jason, Anju or
+    Heidi. Reporting those as Kory's overdue list hands him other people's work."""
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(am, "execute_asana_tool", lambda slug, args: {"data": {"data": [
+        {"gid": "1", "name": "kory item", "due_on": "2020-01-01",
+         "completed": False, "assignee": {"name": "Kory Mitchell"}},
+        {"gid": "2", "name": "jason item", "due_on": "2020-01-01",
+         "completed": False, "assignee": {"name": "Jason Quesada"}},
+        {"gid": "3", "name": "orphan item", "due_on": "2020-01-01",
+         "completed": False, "assignee": None},
+    ]}})
+
+    shared = am.list_asana_tasks(bucket="overdue", project_gid="shared-proj")
+    assert [t["name"] for t in shared["tasks"]] == ["kory item"], shared["tasks"]
+
+    everyone = am.list_asana_tasks(
+        bucket="overdue", project_gid="shared-proj", mine_only=False
+    )
+    assert len(everyone["tasks"]) == 3
+
+
+def test_personal_project_counts_as_korys(monkeypatch):
+    """His own board is all his, assigned or not."""
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(
+        am, "settings", type("S", (), {"asana_project_gid": "personal", "asana_section_gid": ""})()
+    )
+    assert am.is_korys_task({"assignee": None}, project_gid="personal") is True
+    assert am.is_korys_task({"assignee": None}, project_gid="shared") is False
+    assert am.is_korys_task({"assignee": "Kory Mitchell"}, project_gid="shared") is True

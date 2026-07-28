@@ -893,12 +893,12 @@ def daily_ceo_briefing_action() -> dict[str, Any]:
     return build_daily_ceo_briefing()
 
 
-def list_asana_tasks_action(*, bucket: str = "all") -> dict[str, Any]:
+def list_asana_tasks_action(*, bucket: str = "all", mine_only: bool = True) -> dict[str, Any]:
     from app.integrations.asana_manager import list_asana_tasks
 
     allowed = {"overdue", "due_today", "upcoming", "all"}
     key = bucket if bucket in allowed else "all"
-    return list_asana_tasks(bucket=key)  # type: ignore[arg-type]
+    return list_asana_tasks(bucket=key, mine_only=mine_only)  # type: ignore[arg-type]
 
 
 def create_asana_task_action(

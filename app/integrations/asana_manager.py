@@ -454,10 +454,12 @@ def _extract_task_id(data: Any) -> str | None:
 
 TaskBucket = Literal["overdue", "due_today", "upcoming", "all"]
 
-TASK_FIELDS = ["name", "completed", "due_on", "notes"]
+TASK_FIELDS = ["name", "completed", "due_on", "notes", "assignee", "assignee.name"]
 
 
-def _list_tasks_across_projects(*, bucket: TaskBucket, limit: int) -> dict[str, Any]:
+def _list_tasks_across_projects(
+    *, bucket: TaskBucket, limit: int, mine_only: bool = True
+) -> dict[str, Any]:
     """Aggregate one bucket over every project Lexi can read."""
     collected: list[dict[str, Any]] = []
     for project in list_asana_project_options().get("projects", []):
@@ -466,6 +468,7 @@ def _list_tasks_across_projects(*, bucket: TaskBucket, limit: int) -> dict[str, 
             limit=100,
             project_gid=str(project.get("gid") or ""),
             project_name=str(project.get("name") or ""),
+            mine_only=mine_only,
         )
         collected.extend(listed.get("tasks") or [])
     collected.sort(key=lambda t: str(t.get("due_on") or "9999-12-31"))
@@ -473,6 +476,7 @@ def _list_tasks_across_projects(*, bucket: TaskBucket, limit: int) -> dict[str, 
         "ok": True,
         "bucket": bucket,
         "project_name": "all projects",
+        "mine_only": mine_only,
         "tasks": collected[:limit],
         "total_found": len(collected),
     }
@@ -778,6 +782,7 @@ def list_asana_tasks(
     limit: int = 25,
     project_gid: str = "",
     project_name: str = "",
+    mine_only: bool = True,
 ) -> dict[str, Any]:
     """List tasks from Kory NON-IFG (or related) project — read-only."""
     if _should_simulate_asana() and not project_gid:
@@ -785,7 +790,7 @@ def list_asana_tasks(
 
     # "What's overdue?" means across everything Kory has, not one project.
     if not project_gid.strip():
-        return _list_tasks_across_projects(bucket=bucket, limit=limit)
+        return _list_tasks_across_projects(bucket=bucket, limit=limit, mine_only=mine_only)
 
     target_gid = project_gid.strip() or settings.asana_project_gid
     if not target_gid:
@@ -820,10 +825,13 @@ def list_asana_tasks(
     for task in tasks:
         if project_name:
             task["project"] = project_name
+    if mine_only:
+        tasks = [t for t in tasks if is_korys_task(t, project_gid=target_gid)]
     filtered = _filter_tasks_by_bucket(tasks, bucket=bucket)
     return {
         "ok": True,
         "bucket": bucket,
+        "mine_only": mine_only,
         "project_gid": target_gid,
         "project_name": project_name or ASANA_PARENT_PROJECT_NAME,
         "tasks": filtered[:limit],
@@ -871,10 +879,28 @@ def _normalize_asana_tasks(data: Any) -> list[dict[str, Any]]:
                 "name": row.get("name") or row.get("title"),
                 "due_on": row.get("due_on") or row.get("due_at"),
                 "completed": bool(row.get("completed")),
+                "assignee": ((row.get("assignee") or {}) or {}).get("name")
+                if isinstance(row.get("assignee"), dict)
+                else row.get("assignee"),
                 "notes": (row.get("notes") or "")[:300] or None,
             }
         )
     return out
+
+
+def is_korys_task(task: dict[str, Any], *, project_gid: str = "") -> bool:
+    """Whether a task is Kory's to act on.
+
+    Shared boards carry other people's work — of 29 overdue tasks, 18 belonged
+    to Jason, Anju or Heidi. Reporting those as Kory's overdue list is worse
+    than useless. Everything on his own personal project counts as his.
+    """
+    if project_gid and project_gid == (settings.asana_project_gid or ""):
+        return True
+    owner = str(task.get("assignee") or "").strip().lower()
+    if not owner:
+        return False
+    return "kory" in owner
 
 
 def _filter_tasks_by_bucket(tasks: list[dict[str, Any]], *, bucket: TaskBucket) -> list[dict[str, Any]]:
