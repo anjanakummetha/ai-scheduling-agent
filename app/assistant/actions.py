@@ -1233,3 +1233,27 @@ def research_person_action(
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+
+
+def list_asana_projects_action() -> dict[str, Any]:
+    from app.integrations.asana_manager import list_asana_project_options
+
+    result = list_asana_project_options()
+    projects = result.get("projects", [])
+    return {
+        "ok": True,
+        "count": len(projects),
+        "projects": [p.get("name") for p in projects],
+        "note": "Reads cover all of these; new tasks go to Kory's personal project.",
+    }
+
+
+def list_asana_boards_action() -> dict[str, Any]:
+    from app.integrations.asana_manager import list_project_sections
+
+    sections = list_project_sections()
+    return {
+        "ok": True,
+        "count": len(sections),
+        "boards": [s.get("name") for s in sections],
+    }

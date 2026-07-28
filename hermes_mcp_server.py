@@ -323,6 +323,47 @@ def lexi_daily_ceo_briefing() -> str:
 
 
 @mcp.tool()
+def lexi_today() -> str:
+    """The current date and time in Kory's timezone (America/Denver).
+
+    Call this before stating today's date or resolving any relative date
+    ("next week", "August 10"). Never answer date questions from memory.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(tz=ZoneInfo("America/Denver"))
+    return _ok(
+        {
+            "action": "lexi_today",
+            "result": {
+                "date": now.strftime("%Y-%m-%d"),
+                "weekday": now.strftime("%A"),
+                "time": now.strftime("%H:%M"),
+                "timezone": "America/Denver (MT)",
+                "year": now.year,
+            },
+        }
+    )
+
+
+@mcp.tool()
+def lexi_list_asana_projects() -> str:
+    """Every Asana project Lexi can read for Kory (reads span all of them).
+
+    Use this before saying which projects are visible. Tasks are created on
+    Kory's personal project only; reads cover all of these.
+    """
+    return _wrap("lexi_list_asana_projects", lexi.list_asana_projects_action)
+
+
+@mcp.tool()
+def lexi_list_asana_boards() -> str:
+    """Boards (sections) available for new tasks — General, Personal, YPO, etc."""
+    return _wrap("lexi_list_asana_boards", lexi.list_asana_boards_action)
+
+
+@mcp.tool()
 def lexi_list_asana_tasks(bucket: str = "due_today") -> str:
     """List Asana tasks: overdue | due_today | upcoming | all (read-only)."""
     return _wrap("lexi_list_asana_tasks", lexi.list_asana_tasks_action, bucket=bucket)
