@@ -80,6 +80,15 @@ def _wrap(action: str, fn, **kwargs: Any) -> str:
         if isinstance(result, dict) and result.get("ok") is False and "error_code" not in result:
             return json.dumps({"ok": False, "error_code": "action_failed", **result}, default=str)
         return _ok({"action": action, "result": result})
+    except PermissionError as exc:
+        # Needs Kory's go-ahead — not a missing capability. Said plainly because
+        # this was being relayed to Kory as "the tool isn't available".
+        return _error(
+            f"{action} needs confirmation: {exc} "
+            "Ask Kory to confirm, then call this tool again with confirm='true'. "
+            "Do not tell him the feature is unavailable — it works once confirmed.",
+            code="confirmation_required",
+        )
     except Exception as exc:
         return _error(f"{action} failed: {type(exc).__name__}: {exc}", code="exception")
 
@@ -317,7 +326,7 @@ def lexi_create_asana_task(
     due_on: str = "",
     confirm: str = "false",
 ) -> str:
-    """Create Asana task after Kory confirms (writes blocked until LEXI_ASANA_LIVE_WRITES_ENABLED)."""
+    """Create an Asana task on Kory's project. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_create_asana_task",
@@ -331,7 +340,7 @@ def lexi_create_asana_task(
 
 @mcp.tool()
 def lexi_complete_asana_task(task_gid: str, confirm: str = "false") -> str:
-    """Mark Asana task complete after Kory confirms (live writes blocked for now)."""
+    """Mark an Asana task complete. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_complete_asana_task",
@@ -349,7 +358,7 @@ def lexi_update_asana_task(
     due_on: str = "",
     confirm: str = "false",
 ) -> str:
-    """Update Asana task title/notes/due date after confirm (writes blocked for now)."""
+    """Update an Asana task's title, notes, or due date. Due dates must be absolute (YYYY-MM-DD) and in the future — resolve relative dates against the current year. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_update_asana_task",
@@ -364,7 +373,7 @@ def lexi_update_asana_task(
 
 @mcp.tool()
 def lexi_delete_asana_task(task_gid: str, confirm: str = "false") -> str:
-    """Delete Asana task after confirm (writes blocked for now)."""
+    """Delete an Asana task. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_delete_asana_task",
@@ -401,7 +410,7 @@ def lexi_move_asana_task(
 
 @mcp.tool()
 def lexi_comment_asana_task(task_gid: str, comment: str, confirm: str = "false") -> str:
-    """Comment on an Asana task after confirm (writes blocked for now)."""
+    """Add a comment to an Asana task. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_comment_asana_task",
