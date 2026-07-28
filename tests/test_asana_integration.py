@@ -81,3 +81,30 @@ def test_mcp_results_carry_todays_date():
     assert payload["today"].startswith(
         datetime.now(tz=ZoneInfo("America/Denver")).strftime("%Y-%m-%d")
     )
+
+
+def test_create_returns_the_task_id_and_places_the_section(monkeypatch):
+    """A NameError inside the create path was swallowed by a broad except, so
+    the task was created in Asana but came back with task_id=None — which
+    silently skipped both the due date and the section placement."""
+    import app.integrations.asana_manager as am
+
+    calls = []
+
+    def fake_tool(slug, args):
+        calls.append((slug, args))
+        if slug == "ASANA_CREATE_A_TASK":
+            return {"data": {"data": {"gid": "555", "name": args["data"]["name"]}}}
+        return {"data": {}}
+
+    monkeypatch.setattr(am, "execute_asana_tool", fake_tool)
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(
+        am, "settings", type("S", (), {"asana_project_gid": "proj-1", "asana_section_gid": ""})()
+    )
+    monkeypatch.setattr(am, "resolve_section_gid", lambda section, project_gid="": "sec-9")
+
+    result = am._create_asana_task(title="T", notes="N", section="YPO")
+    assert result["ok"] is True
+    assert result["task_id"] == "555", result
+    assert any(slug == "ASANA_ADD_TASK_TO_SECTION" for slug, _ in calls), calls

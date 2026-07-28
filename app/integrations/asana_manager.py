@@ -239,7 +239,7 @@ def _create_asana_task(*, title: str, notes: str, section: str = "") -> dict[str
         }
 
     try:
-        task_id, log_id = _create_task_via_composio(title=title, notes=notes)
+        task_id, log_id = _create_task_via_composio(title=title, notes=notes, section=section)
         return {
             "ok": bool(task_id),
             "task_id": task_id,
@@ -326,7 +326,9 @@ def _should_simulate_asana() -> bool:
     return False
 
 
-def _create_task_via_composio(*, title: str, notes: str) -> tuple[str | None, str | None]:
+def _create_task_via_composio(
+    *, title: str, notes: str, section: str = ""
+) -> tuple[str | None, str | None]:
     project_gid = settings.asana_project_gid
     if not project_gid:
         raise RuntimeError("ASANA_PROJECT_GID is not configured.")
