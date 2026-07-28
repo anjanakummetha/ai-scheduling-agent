@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
+from datetime import date, datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from app.config import ASANA_BOARD_NAME, ASANA_PARENT_PROJECT_NAME, settings
 from app.integrations.composio_client import ComposioNotConfiguredError, execute_asana_tool
+
+logger = logging.getLogger(__name__)
+MT = ZoneInfo("America/Denver")
 
 ASANA_CREATE_TOOL = "ASANA_CREATE_A_TASK"
 BOOKING_TASK_PREFIX = "Lexi Booking:"
@@ -414,6 +420,34 @@ def complete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, A
     }
 
 
+def normalize_due_on(value: str) -> str:
+    """Keep a due date from landing in the past.
+
+    Due dates arrive as whatever the model resolved "August 3" to, and it
+    resolved it to the previous year — the task was saved due 2025-08-03, a
+    date that had already passed. A bare month/day means the next one.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = date.fromisoformat(raw[:10])
+    except ValueError:
+        return raw  # unrecognised format: let Asana reject it rather than mangle it
+    today = datetime.now(tz=MT).date()
+    if parsed >= today:
+        return parsed.isoformat()
+    for bump in (1, 2):
+        try:
+            shifted = parsed.replace(year=parsed.year + bump)
+        except ValueError:  # Feb 29
+            shifted = parsed.replace(year=parsed.year + bump, day=28)
+        if shifted >= today:
+            logger.info("Due date %s is past; using %s.", raw, shifted.isoformat())
+            return shifted.isoformat()
+    return parsed.isoformat()
+
+
 def update_asana_task(
     *,
     task_gid: str,
@@ -432,7 +466,7 @@ def update_asana_task(
     if notes.strip():
         data["notes"] = notes.strip()
     if due_on.strip():
-        data["due_on"] = due_on.strip()[:10]
+        data["due_on"] = normalize_due_on(due_on)
     if not data:
         return {"ok": False, "error": "No fields to update."}
     if _should_simulate_asana():
@@ -455,7 +489,7 @@ def delete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, Any
     assert_kory_approved_write(approved=approved, action="Asana delete task")
     if _should_simulate_asana():
         return {"ok": True, "task_gid": task_gid, "simulated": True, "dry_run": True}
-    result = execute_asana_tool("ASANA_DELETE_A_TASK", {"task_gid": task_gid})
+    result = execute_asana_tool("ASANA_DELETE_TASK", {"task_gid": task_gid})
     return {"ok": True, "task_gid": task_gid, "dry_run": bool(result.get("dry_run"))}
 
 
@@ -543,7 +577,7 @@ def comment_on_asana_task(
             "dry_run": True,
         }
     result = execute_asana_tool(
-        "ASANA_CREATE_A_STORY_COMMENT",
+        "ASANA_CREATE_TASK_COMMENT",
         {"task_gid": task_gid, "text": text},
     )
     return {
