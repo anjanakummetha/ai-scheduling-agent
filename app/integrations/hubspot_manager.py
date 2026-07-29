@@ -976,6 +976,89 @@ def enrich_prebrief_from_hubspot(*, email: str = "", name: str = "") -> dict[str
     }
 
 
+def find_contacts(
+    *,
+    company: str = "",
+    quiet_days: int = 0,
+    lifecycle: str = "",
+    limit: int = 25,
+    include_all_owners: bool = False,
+) -> dict[str, Any]:
+    """Search Kory's contacts by company, silence, or relationship stage.
+
+    Answers "show me everyone at Bertram Capital" and "who haven't I spoken to
+    in a year" — read-only, and opt-outs are labelled rather than hidden so a
+    follow-up suggestion can't quietly include someone who asked not to be
+    contacted.
+    """
+    if not hubspot_configured():
+        return {"ok": False, "kory_message": "**HubSpot:** not connected."}
+
+    scope_owner = "" if include_all_owners else kory_owner_id()
+    filters: list[dict[str, Any]] = []
+    described: list[str] = []
+    if company.strip():
+        filters.append(
+            {"propertyName": "company", "operator": "CONTAINS_TOKEN", "value": company.strip()}
+        )
+        described.append(f"at **{company.strip()}**")
+    if quiet_days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=quiet_days)
+        filters.append(
+            {
+                "propertyName": "notes_last_contacted",
+                "operator": "LT",
+                "value": str(int(cutoff.timestamp() * 1000)),
+            }
+        )
+        described.append(f"not contacted in **{quiet_days}+ days**")
+    if not filters:
+        return {
+            "ok": False,
+            "error": "company or quiet_days required",
+            "kory_message": "Tell me a company name or how long since you last spoke to them.",
+        }
+
+    try:
+        found = search_contacts(limit=limit, owner_id=scope_owner or None, filters=filters)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "kory_message": "HubSpot lookup failed."}
+
+    contacts = found.get("contacts") or []
+    if lifecycle.strip():
+        wanted = lifecycle.strip().lower()
+        contacts = [c for c in contacts if wanted in lifecycle_label(c).lower()]
+
+    total = count_contacts(
+        ([_owner_filter(scope_owner)] if scope_owner else []) + filters
+    )
+    whose = "your contacts" if scope_owner else "all IFG contacts"
+    header = f"**{total} of {whose}** " + " and ".join(described)
+    lines = [header + "\n"]
+    for contact in contacts[:15]:
+        role = " · ".join(
+            value
+            for value, field in ((contact.get("jobtitle"), "jobtitle"), (contact.get("company"), "company"))
+            if value and not is_placeholder(value, field=field)
+        )
+        days = _days_since(str(contact.get("notes_last_contacted") or ""))
+        age = f" — {days}d ago" if days is not None else ""
+        flag = " · ⚠️ Do Not Contact" if is_do_not_contact(contact) else ""
+        lines.append(f"• **{contact.get('name') or contact.get('email')}**"
+                     + (f" ({role})" if role else "") + age + flag)
+    if not contacts:
+        lines.append("_No matches._")
+    elif total and total > len(contacts[:15]):
+        lines.append(f"\n_Showing {min(len(contacts), 15)} of {total}._")
+    return {
+        "ok": True,
+        "count": len(contacts),
+        "total": total,
+        "contacts": contacts,
+        "kory_message": "\n".join(lines),
+    }
+
+
 def compare_books(*, limit_owners: int = 6) -> dict[str, Any]:
     """Compare Kory's book against the rest of IFG, owner by owner.
 
@@ -1240,6 +1323,19 @@ def stage_meeting_note(
             contact_id = matched.get("id")
     except Exception:
         contact_id = None
+
+    if not contact_id:
+        # Staging a note against no contact would report success now and create
+        # an orphan note the moment writes are enabled.
+        return {
+            "ok": False,
+            "error_code": "contact_not_found",
+            "error": f"No HubSpot contact for {email} — nothing staged.",
+            "kory_message": (
+                f"No HubSpot contact matches **{email}**, so there's nothing to attach a note to. "
+                "Add them in HubSpot first, or give me the address on their contact record."
+            ),
+        }
 
     batch_id = _stage_hubspot_batch(
         batch_type="meeting_note",

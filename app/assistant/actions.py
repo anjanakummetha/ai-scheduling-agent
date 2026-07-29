@@ -1009,15 +1009,29 @@ def hubspot_enrichment_action(*, limit: int = 25) -> dict[str, Any]:
 
 
 def hubspot_health_report_action(*, all_owners: bool = False) -> dict[str, Any]:
-    from app.integrations.hubspot_manager import crm_health_report
+    from app.integrations.hubspot_manager import crm_health_report, kory_owner_id
 
-    return crm_health_report(owner_id=None if all_owners else undefined_owner_default())
+    # "" means every owner; None would fall through to the Kory default.
+    return crm_health_report(owner_id="" if all_owners else kory_owner_id())
 
 
-def undefined_owner_default() -> str:
-    from app.integrations.hubspot_manager import kory_owner_id
+def hubspot_find_contacts_action(
+    *,
+    company: str = "",
+    quiet_days: int = 0,
+    lifecycle: str = "",
+    limit: int = 25,
+    all_owners: bool = False,
+) -> dict[str, Any]:
+    from app.integrations.hubspot_manager import find_contacts
 
-    return kory_owner_id()
+    return find_contacts(
+        company=company,
+        quiet_days=quiet_days,
+        lifecycle=lifecycle,
+        limit=limit,
+        include_all_owners=all_owners,
+    )
 
 
 def hubspot_compare_books_action() -> dict[str, Any]:

@@ -518,6 +518,41 @@ def lexi_hubspot_health_report(all_owners: str = "false") -> str:
 
 
 @mcp.tool()
+def lexi_hubspot_find_contacts(
+    company: str = "",
+    quiet_days: str = "0",
+    lifecycle: str = "",
+    limit: str = "25",
+    all_owners: str = "false",
+) -> str:
+    """Find groups of contacts by company or by how long since Kory spoke to them.
+
+    Triggers: "show me everyone at <company>", "who do I know at <company>",
+    "who haven't I talked to in <N> months/a year", "who has gone quiet".
+
+    Pass quiet_days for silence questions (a year = 365). Opt-outs are shown
+    but labelled Do Not Contact. Read-only.
+    """
+    try:
+        quiet = max(0, int(quiet_days.strip() or "0"))
+    except ValueError:
+        quiet = 0
+    try:
+        n = max(1, min(100, int(limit.strip() or "25")))
+    except ValueError:
+        n = 25
+    return _wrap(
+        "lexi_hubspot_find_contacts",
+        lexi.hubspot_find_contacts_action,
+        company=company,
+        quiet_days=quiet,
+        lifecycle=lifecycle,
+        limit=n,
+        all_owners=all_owners.strip().lower() in {"1", "true", "yes"},
+    )
+
+
+@mcp.tool()
 def lexi_hubspot_compare_books() -> str:
     """Compare Kory's contact book against the other IFG owners. Read-only."""
     return _wrap("lexi_hubspot_compare_books", lexi.hubspot_compare_books_action)

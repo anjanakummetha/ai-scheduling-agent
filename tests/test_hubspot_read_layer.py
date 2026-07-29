@@ -207,6 +207,38 @@ def test_failed_history_lookup_is_reported_not_silently_empty():
     assert "50 object cap" in out["error"]
 
 
+def test_find_contacts_requires_a_criterion_rather_than_listing_everyone():
+    with patch.object(hm, "hubspot_configured", return_value=True):
+        out = hm.find_contacts()
+    assert out["ok"] is False
+    assert "company" in out["kory_message"].lower()
+
+
+def test_find_contacts_labels_opt_outs_instead_of_hiding_them():
+    rows = [
+        _contact(email="ok@example.com", company="Acme"),
+        _contact(email="optout@example.com", company="Acme", hs_lead_status="Do Not Contact"),
+    ]
+    with patch.object(hm, "hubspot_configured", return_value=True):
+        with patch.object(hm, "count_contacts", return_value=2):
+            with patch.object(hm, "execute_hubspot_tool") as ex:
+                ex.return_value = {"data": {"results": rows}}
+                out = hm.find_contacts(company="Acme")
+    assert out["count"] == 2, "a group search shows everyone, unlike outreach"
+    assert "Do Not Contact" in out["kory_message"]
+
+
+def test_find_contacts_scopes_to_kory_by_default():
+    with patch.object(hm, "hubspot_configured", return_value=True):
+        with patch.object(hm, "count_contacts", return_value=0):
+            with patch.object(hm, "execute_hubspot_tool") as ex:
+                ex.return_value = {"data": {"results": []}}
+                hm.find_contacts(quiet_days=365)
+    filters = ex.call_args.args[1]["filterGroups"][0]["filters"]
+    assert any(f.get("propertyName") == "hubspot_owner_id" for f in filters)
+    assert any(f.get("propertyName") == "notes_last_contacted" for f in filters)
+
+
 def test_recent_changes_says_so_when_movement_lookup_fails():
     fail = {"ok": False, "moves": [], "scanned": 0, "error": "RuntimeError: nope"}
     with patch.object(hm, "hubspot_configured", return_value=True):
