@@ -243,10 +243,25 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
         return {"ok": True, "handled": True, "message": brief.get("kory_message", "")}
 
     if action == "prebrief":
-        from app.assistant.briefings import build_prebriefs_for_today
+        from app.assistant.precall_brief import build_precall_briefs_for_today
 
-        brief = build_prebriefs_for_today(include_research=False)
+        brief = build_precall_briefs_for_today()
         return {"ok": True, "handled": True, "message": brief.get("kory_message", "")}
+
+    if action == "prebrief_person":
+        from app.assistant.precall_brief import build_precall_brief
+
+        who = str(command.get("who") or "").strip()
+        is_email = "@" in who
+        brief = build_precall_brief(
+            name="" if is_email else who,
+            email=who if is_email else "",
+        )
+        return {
+            "ok": bool(brief.get("ok")),
+            "handled": True,
+            "message": brief.get("kory_message") or f"Couldn't build a brief for {who}.",
+        }
 
     if action == "daily_briefing":
         # Retired — the dashboard owns the morning package. Answer with a

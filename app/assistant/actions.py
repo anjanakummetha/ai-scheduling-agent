@@ -882,9 +882,24 @@ def today_calendar_brief_action() -> dict[str, Any]:
 
 
 def prebrief_action(*, include_research: bool = False) -> dict[str, Any]:
-    from app.assistant.briefings import build_prebriefs_for_today
+    """Pre-call briefs for today's external meetings.
 
-    return build_prebriefs_for_today(include_research=include_research)
+    include_research is accepted for backwards compatibility and ignored —
+    research and introducer are always part of a pre-call brief now.
+    """
+    from app.assistant.precall_brief import build_precall_briefs_for_today
+
+    return build_precall_briefs_for_today()
+
+
+def precall_brief_action(*, person: str = "") -> dict[str, Any]:
+    from app.assistant.precall_brief import build_precall_brief
+
+    who = (person or "").strip()
+    if not who:
+        return {"ok": False, "error": "person required", "kory_message": "Who should I brief you on?"}
+    is_email = "@" in who
+    return build_precall_brief(name="" if is_email else who, email=who if is_email else "")
 
 
 

@@ -311,17 +311,31 @@ def lexi_today_calendar() -> str:
 
 @mcp.tool()
 def lexi_prebrief(include_research: str = "false") -> str:
-    """Pre-meeting briefs for today's external meetings. Teams shortcut: `prebrief`.
+    """Pre-call briefs for every external meeting on Kory's calendar today.
 
-    Web research runs automatically for anyone Kory has NOT met before — that is
-    the main value here. People he already knows get a short line instead, and
-    internal-only meetings are skipped. Set include_research=true to force
-    research on everyone, which is rarely what he wants.
+    Each brief covers who they are and what they do (web research), how Kory
+    knows them (his own email history), who introduced them, and the angle for
+    the call. Internal-only meetings are skipped. Teams shortcut: `prebrief`.
 
-    For one specific person rather than today's schedule, use lexi_lookup_person.
+    For one specific person, use lexi_precall_brief instead.
     """
-    research = include_research.strip().lower() in {"1", "true", "yes"}
-    return _wrap("lexi_prebrief", lexi.prebrief_action, include_research=research)
+    return _wrap("lexi_prebrief", lexi.prebrief_action)
+
+
+@mcp.tool()
+def lexi_precall_brief(person: str) -> str:
+    """Full pre-call brief on ONE person, by name or email address.
+
+    Triggers: "prebrief me on <person>", "pre-call brief for <person>",
+    "brief me before my call with <person>", "what should I know before
+    meeting <person>".
+
+    Covers who they are and what they do from web research, how Kory knows them
+    from his own mailbox, who introduced them, and the angle for the call. Use
+    this rather than lexi_lookup_person when Kory is preparing for a meeting —
+    lookup_person is the quick CRM record, this is the full brief.
+    """
+    return _wrap("lexi_precall_brief", lexi.precall_brief_action, person=person)
 
 
 @mcp.tool()

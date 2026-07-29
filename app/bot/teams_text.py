@@ -30,7 +30,12 @@ _INBOUND_RE = re.compile(r"^(?:inbound|new|emails)$", re.IGNORECASE)
 _INBOX_REVIEW_RE = re.compile(r"^inbox\s+review$", re.IGNORECASE)
 _UNANSWERED_RE = re.compile(r"^(?:unanswered|unanswered\s+emails?)$", re.IGNORECASE)
 _TODAY_RE = re.compile(r"^(?:today|calendar\s+today|today'?s?\s+calendar)$", re.IGNORECASE)
-_PREBRIEF_RE = re.compile(r"^(?:prebrief|pre-?meeting(?:\s+brief)?s?)$", re.IGNORECASE)
+_PREBRIEF_RE = re.compile(r"^(?:prebrief|pre-?meeting(?:\s+brief)?s?|pre-?call briefs?)$", re.IGNORECASE)
+# Same shortcuts followed by a person: "prebrief Ramzi Dagher", "prebrief on Jane Doe".
+_PREBRIEF_PERSON_RE = re.compile(
+    r"^(?:prebrief|pre-?meeting brief|pre-?call brief)\s+(?:me\s+)?(?:on|for|about)?\s*(?P<who>.+)$",
+    re.IGNORECASE,
+)
 _BRIEFING_RE = re.compile(r"^(?:brief|briefing|ceo\s+brief|morning\s+brief)$", re.IGNORECASE)
 _OUTREACH_LIST_RE = re.compile(r"^outreach(?:\s+list)?$", re.IGNORECASE)
 _OUTREACH_GET_RE = re.compile(r"^outreach\s+(camp-[a-z0-9]+)$", re.IGNORECASE)
@@ -201,6 +206,13 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
 
     if _PREBRIEF_RE.match(normalized):
         return {"action": "prebrief"}
+
+    # "prebrief Ramzi Dagher" / "pre-call brief on Jane Doe"
+    person_match = _PREBRIEF_PERSON_RE.match(normalized)
+    if person_match:
+        who = person_match.group("who").strip(" .?!")
+        if who:
+            return {"action": "prebrief_person", "who": who}
 
     if _BRIEFING_RE.match(normalized):
         return {"action": "daily_briefing"}
