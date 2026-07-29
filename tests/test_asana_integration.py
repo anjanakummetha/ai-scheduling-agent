@@ -46,7 +46,7 @@ def test_task_name_resolves_to_gid(monkeypatch):
     name through produced "task: Not a Long: <name>"."""
     import app.integrations.asana_manager as am
 
-    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5: {
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5, mine_only=True: {
         "tasks": [{"gid": "123456", "name": "LEXI TEST 2 — delete me"}]
     })
     assert am.resolve_task_gid("LEXI TEST 2 — delete me") == "123456"
@@ -235,11 +235,11 @@ def test_unresolvable_task_name_explains_itself(monkeypatch):
 
     monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
 
-    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5: {"tasks": []})
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5, mine_only=True: {"tasks": []})
     gid, err = am.resolve_task_or_error("does-not-exist")
     assert gid == "" and err and "No task found" in err["error"]
 
-    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5: {"tasks": [
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5, mine_only=True: {"tasks": [
         {"gid": "1", "name": "book flights"}, {"gid": "2", "name": "book hotel"},
     ]})
     gid, err = am.resolve_task_or_error("book")
@@ -252,7 +252,7 @@ def test_writes_refuse_an_ambiguous_name(monkeypatch):
     import app.integrations.asana_manager as am
 
     monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
-    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5: {"tasks": [
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5, mine_only=True: {"tasks": [
         {"gid": "1", "name": "book flights"}, {"gid": "2", "name": "book hotel"},
     ]})
     called = []
@@ -260,3 +260,48 @@ def test_writes_refuse_an_ambiguous_name(monkeypatch):
 
     out = am.delete_asana_task(task_gid="book", approved=True)
     assert out["ok"] is False and not called, "must not call Asana with an ambiguous name"
+
+
+def _other_task(monkeypatch):
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=6, mine_only=True: {
+        "tasks": [{"gid": "77", "name": "Candid Conversation Video",
+                   "assignee": "Jason Quesada", "project": "Marketing Content Calendar"}]
+    })
+    return am
+
+
+def test_touching_someone_elses_task_asks_first(monkeypatch):
+    """Kory may legitimately close a team task — but never silently."""
+    am = _other_task(monkeypatch)
+    called = []
+    monkeypatch.setattr(am, "execute_asana_tool", lambda s, a: called.append(s))
+
+    out = am.complete_asana_task(task_gid="Candid Conversation Video", approved=True)
+    assert out["ok"] is False
+    assert out["error_code"] == "owner_confirmation_required"
+    assert "Jason Quesada" in out["error"]
+    assert not called, "must not reach Asana before Kory acknowledges the owner"
+
+
+def test_owner_ack_lets_it_through(monkeypatch):
+    am = _other_task(monkeypatch)
+    monkeypatch.setattr(am, "execute_asana_tool", lambda s, a: {"data": {}})
+
+    out = am.complete_asana_task(
+        task_gid="Candid Conversation Video", approved=True, owner_ack=True
+    )
+    assert out["ok"] is True, out
+
+
+def test_korys_own_task_needs_no_owner_ack(monkeypatch):
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=6, mine_only=True: {
+        "tasks": [{"gid": "5", "name": "buy cigars", "assignee": "Kory Mitchell"}]
+    })
+    monkeypatch.setattr(am, "execute_asana_tool", lambda s, a: {"data": {}})
+    assert am.complete_asana_task(task_gid="buy cigars", approved=True)["ok"] is True

@@ -911,10 +911,10 @@ def create_asana_task_action(
     )
 
 
-def complete_asana_task_action(*, task_gid: str, confirm: bool = False) -> dict[str, Any]:
+def complete_asana_task_action(*, task_gid: str, confirm: bool = False, owner_ack: bool = False) -> dict[str, Any]:
     from app.integrations.asana_manager import complete_asana_task
 
-    return complete_asana_task(task_gid=task_gid, approved=confirm)
+    return complete_asana_task(task_gid=task_gid, approved=confirm, owner_ack=owner_ack)
 
 
 def update_asana_task_action(
@@ -924,6 +924,7 @@ def update_asana_task_action(
     notes: str = "",
     due_on: str = "",
     confirm: bool = False,
+    owner_ack: bool = False,
 ) -> dict[str, Any]:
     from app.integrations.asana_manager import update_asana_task
 
@@ -933,13 +934,14 @@ def update_asana_task_action(
         notes=notes,
         due_on=due_on,
         approved=confirm,
+        owner_ack=owner_ack,
     )
 
 
-def delete_asana_task_action(*, task_gid: str, confirm: bool = False) -> dict[str, Any]:
+def delete_asana_task_action(*, task_gid: str, confirm: bool = False, owner_ack: bool = False) -> dict[str, Any]:
     from app.integrations.asana_manager import delete_asana_task
 
-    return delete_asana_task(task_gid=task_gid, approved=confirm)
+    return delete_asana_task(task_gid=task_gid, approved=confirm, owner_ack=owner_ack)
 
 
 def search_asana_tasks_action(*, query: str) -> dict[str, Any]:
@@ -965,10 +967,10 @@ def move_asana_task_action(
     )
 
 
-def comment_asana_task_action(*, task_gid: str, comment: str, confirm: bool = False) -> dict[str, Any]:
+def comment_asana_task_action(*, task_gid: str, comment: str, confirm: bool = False, owner_ack: bool = False) -> dict[str, Any]:
     from app.integrations.asana_manager import comment_on_asana_task
 
-    return comment_on_asana_task(task_gid=task_gid, comment=comment, approved=confirm)
+    return comment_on_asana_task(task_gid=task_gid, comment=comment, approved=confirm, owner_ack=owner_ack)
 
 
 def hubspot_status_action() -> dict[str, Any]:

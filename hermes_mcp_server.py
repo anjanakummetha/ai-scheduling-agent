@@ -401,7 +401,9 @@ def lexi_create_asana_task(
 
 
 @mcp.tool()
-def lexi_complete_asana_task(task_gid: str, confirm: str = "false") -> str:
+def lexi_complete_asana_task(task_gid: str, confirm: str = "false",
+    owner_ack: str = "false",
+) -> str:
     """Mark an Asana task complete. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
@@ -409,6 +411,7 @@ def lexi_complete_asana_task(task_gid: str, confirm: str = "false") -> str:
         lexi.complete_asana_task_action,
         task_gid=task_gid,
         confirm=approved,
+        owner_ack=owner_ack.strip().lower() in {"1", "true", "yes"},
     )
 
 
@@ -419,6 +422,7 @@ def lexi_update_asana_task(
     notes: str = "",
     due_on: str = "",
     confirm: str = "false",
+    owner_ack: str = "false",
 ) -> str:
     """Update an Asana task's title, notes, or due date. Due dates must be absolute (YYYY-MM-DD) and in the future — resolve relative dates against the current year. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
@@ -430,11 +434,14 @@ def lexi_update_asana_task(
         notes=notes,
         due_on=due_on,
         confirm=approved,
+        owner_ack=owner_ack.strip().lower() in {"1", "true", "yes"},
     )
 
 
 @mcp.tool()
-def lexi_delete_asana_task(task_gid: str, confirm: str = "false") -> str:
+def lexi_delete_asana_task(task_gid: str, confirm: str = "false",
+    owner_ack: str = "false",
+) -> str:
     """Delete an Asana task. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
@@ -442,6 +449,7 @@ def lexi_delete_asana_task(task_gid: str, confirm: str = "false") -> str:
         lexi.delete_asana_task_action,
         task_gid=task_gid,
         confirm=approved,
+        owner_ack=owner_ack.strip().lower() in {"1", "true", "yes"},
     )
 
 
@@ -471,7 +479,9 @@ def lexi_move_asana_task(
 
 
 @mcp.tool()
-def lexi_comment_asana_task(task_gid: str, comment: str, confirm: str = "false") -> str:
+def lexi_comment_asana_task(task_gid: str, comment: str, confirm: str = "false",
+    owner_ack: str = "false",
+) -> str:
     """Add a comment to an Asana task. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
@@ -480,6 +490,7 @@ def lexi_comment_asana_task(task_gid: str, comment: str, confirm: str = "false")
         task_gid=task_gid,
         comment=comment,
         confirm=approved,
+        owner_ack=owner_ack.strip().lower() in {"1", "true", "yes"},
     )
 
 

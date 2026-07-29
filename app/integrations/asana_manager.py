@@ -438,7 +438,9 @@ def _section_name_for_gid(section_gid: str) -> str:
     return ""
 
 
-def resolve_task_or_error(task: str) -> tuple[str, dict[str, Any] | None]:
+def resolve_task_or_error(
+    task: str, *, owner_ack: bool = False
+) -> tuple[str, dict[str, Any] | None]:
     """Resolve a task name to a gid, or explain why it could not be resolved.
 
     An unresolved name used to reach Asana verbatim and come back as
@@ -448,13 +450,34 @@ def resolve_task_or_error(task: str) -> tuple[str, dict[str, Any] | None]:
     raw = (task or "").strip()
     if _should_simulate_asana():
         return raw, None  # nothing live to look a name up against
-    gid = resolve_task_gid(raw)
-    if gid and gid.isdigit():
-        return gid, None
     try:
-        candidates = (search_asana_tasks(query=raw, limit=6).get("tasks") or []) if raw else []
+        candidates = (
+            (search_asana_tasks(query=raw, limit=6, mine_only=False).get("tasks") or [])
+            if raw
+            else []
+        )
     except Exception:
         candidates = []
+    exact = [c for c in candidates if str(c.get("name") or "").strip().casefold() == raw.casefold()]
+    match = exact[0] if exact else (candidates[0] if len(candidates) == 1 else None)
+    if match:
+        owner = str(match.get("assignee") or "").strip()
+        if owner and "kory" not in owner.lower() and not owner_ack:
+            # Kory may legitimately close a team task, but never silently.
+            return "", {
+                "ok": False,
+                "error_code": "owner_confirmation_required",
+                "error": (
+                    f"{match.get('name')!r} is assigned to {owner}"
+                    f"{' in ' + str(match.get('project')) if match.get('project') else ''}. "
+                    "Confirm you want to change someone else's task."
+                ),
+                "assignee": owner,
+                "task_gid": match.get("gid"),
+            }
+        return str(match.get("gid") or ""), None
+    if raw.isdigit():
+        return raw, None
     if not candidates:
         return "", {
             "ok": False,
@@ -556,11 +579,11 @@ def create_asana_task_from_chat(
     return result
 
 
-def complete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, Any]:
+def complete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: bool = False) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana complete task")
-    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid, owner_ack=owner_ack)
     if _resolve_error:
         return _resolve_error
     if _should_simulate_asana():
@@ -614,12 +637,13 @@ def update_asana_task(
     notes: str = "",
     due_on: str = "",
     approved: bool = False,
+    owner_ack: bool = False,
 ) -> dict[str, Any]:
     """Update title/notes/due date — blocked unless live writes enabled."""
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana update task")
-    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid, owner_ack=owner_ack)
     if _resolve_error:
         return _resolve_error
     data: dict[str, Any] = {}
@@ -645,11 +669,11 @@ def update_asana_task(
     }
 
 
-def delete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, Any]:
+def delete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: bool = False) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana delete task")
-    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid, owner_ack=owner_ack)
     if _resolve_error:
         return _resolve_error
     if _should_simulate_asana():
@@ -658,7 +682,9 @@ def delete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, Any
     return {"ok": True, "task_gid": task_gid, "dry_run": bool(result.get("dry_run"))}
 
 
-def search_asana_tasks(*, query: str, limit: int = 15) -> dict[str, Any]:
+def search_asana_tasks(
+    *, query: str, limit: int = 15, mine_only: bool = True
+) -> dict[str, Any]:
     """Search tasks by name across configured / related projects (read-only)."""
     needle = query.strip().lower()
     if not needle:
@@ -671,6 +697,7 @@ def search_asana_tasks(*, query: str, limit: int = 15) -> dict[str, Any]:
             limit=50,
             project_gid=str(project.get("gid") or ""),
             project_name=str(project.get("name") or ""),
+            mine_only=mine_only,
         )
         for task in listed.get("tasks") or []:
             name = str(task.get("name") or "").lower()
@@ -685,11 +712,12 @@ def move_asana_task_to_section(
     section_gid: str = "",
     section_name: str = "",
     approved: bool = False,
+    owner_ack: bool = False,
 ) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana move task section")
-    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid, owner_ack=owner_ack)
     if _resolve_error:
         return _resolve_error
     target = section_gid.strip()
@@ -730,11 +758,12 @@ def comment_on_asana_task(
     task_gid: str,
     comment: str,
     approved: bool = False,
+    owner_ack: bool = False,
 ) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana comment")
-    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid, owner_ack=owner_ack)
     if _resolve_error:
         return _resolve_error
     text = comment.strip()
