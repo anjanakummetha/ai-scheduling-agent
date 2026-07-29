@@ -886,8 +886,39 @@ def enrich_prebrief_from_hubspot(*, email: str = "", name: str = "") -> dict[str
         if email_l and (contact.get("email") or "").lower() == email_l:
             match = contact
             break
+
     if match is None and contacts:
-        match = contacts[0]
+        # HubSpot's free-text search is loose — querying "Mark" also returns
+        # "Karen Brown" via andrew.brown@markel.com. Only accept a candidate
+        # whose *name* actually contains every word asked for, and never guess
+        # between several people: showing the wrong person's Do Not Contact
+        # status is worse than asking which one Kory meant.
+        wanted = [w for w in re.split(r"\s+", (name or query).strip().lower()) if w]
+        plausible = [
+            contact
+            for contact in contacts
+            if wanted and all(word in str(contact.get("name") or "").lower() for word in wanted)
+        ]
+        if len(plausible) == 1:
+            match = plausible[0]
+        elif len(plausible) > 1:
+            lines = [f"**{len(plausible)} contacts match '{query}'** — which one?\n"]
+            for contact in plausible[:8]:
+                role = " · ".join(
+                    x for x in (contact.get("jobtitle"), contact.get("company")) if x
+                )
+                lines.append(
+                    f"• **{contact.get('name')}** — {contact.get('email')}"
+                    + (f" ({role})" if role else "")
+                )
+            return {
+                "ok": True,
+                "found": False,
+                "ambiguous": True,
+                "candidates": plausible,
+                "kory_message": "\n".join(lines),
+            }
+
     if not match:
         return {
             "ok": True,

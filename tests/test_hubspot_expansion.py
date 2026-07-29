@@ -173,6 +173,40 @@ def test_prebrief_reports_real_fields_not_unknown(mock_search, _cfg, _lifecycle,
 @patch("app.integrations.hubspot_manager.contact_deals", return_value=[])
 @patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
 @patch("app.integrations.hubspot_manager.search_contacts")
+def test_person_lookup_asks_which_one_rather_than_guessing(mock_search, _cfg, _deals):
+    """Two real Chris Gavoras exist. Guessing could show the wrong opt-out status."""
+    mock_search.return_value = {
+        "contacts": [
+            {"id": "1", "email": "chris@threeshadows.co", "name": "Chris Gavora"},
+            {"id": "2", "email": "cgavora@bockmanninc.com", "name": "Chris Gavora"},
+        ]
+    }
+    out = enrich_prebrief_from_hubspot(name="Chris Gavora")
+    assert out["ambiguous"] is True
+    assert out["found"] is False
+    assert len(out["candidates"]) == 2
+    assert "which one" in out["kory_message"].lower()
+
+
+@patch("app.integrations.hubspot_manager.contact_deals", return_value=[])
+@patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_person_lookup_ignores_loose_search_hits(mock_search, _cfg, _deals):
+    """Searching "Mark" also returns Karen Brown via andrew.brown@markel.com."""
+    mock_search.return_value = {
+        "contacts": [
+            {"id": "9", "email": "andrew.brown@markel.com", "name": "Karen Brown"},
+            {"id": "1", "email": "mark@heartlandvc.com", "name": "Mark Accomando"},
+        ]
+    }
+    out = enrich_prebrief_from_hubspot(name="Mark Accomando")
+    assert out["found"] is True
+    assert out["contact"]["name"] == "Mark Accomando"
+
+
+@patch("app.integrations.hubspot_manager.contact_deals", return_value=[])
+@patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
+@patch("app.integrations.hubspot_manager.search_contacts")
 def test_prebrief_warns_on_do_not_contact(mock_search, _cfg, _deals):
     mock_search.return_value = {
         "contacts": [

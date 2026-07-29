@@ -568,8 +568,31 @@ def lexi_hubspot_enrich_contacts(limit: str = "25") -> str:
 
 
 @mcp.tool()
+def lexi_lookup_person(name: str = "", email: str = "") -> str:
+    """Who is this person? Use for ANY question about a specific individual.
+
+    Triggers: "tell me about <person>", "who is <person>", "look up <person>",
+    "what do we know about <person>", "before my call with <person>".
+
+    Returns their job title, company, relationship stage, lead status, when Kory
+    last spoke to them, and any open deal. Also flags contacts marked **Do Not
+    Contact** — that warning appears nowhere else, so check here before saying
+    anything about reaching out to someone. Read-only.
+
+    Call this BEFORE searching the inbox: the inbox shows recent messages, this
+    shows who the person actually is. Use both when Kory wants recent context too.
+    """
+    return _wrap(
+        "lexi_lookup_person",
+        lexi.hubspot_prebrief_enrich_action,
+        email=email,
+        name=name,
+    )
+
+
+@mcp.tool()
 def lexi_hubspot_prebrief_enrich(email: str = "", name: str = "") -> str:
-    """Pull HubSpot company/lifecycle/source into a pre-meeting brief (read-only)."""
+    """Alias of lexi_lookup_person, kept for existing prebrief shortcuts."""
     return _wrap(
         "lexi_hubspot_prebrief_enrich",
         lexi.hubspot_prebrief_enrich_action,
