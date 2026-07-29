@@ -172,10 +172,14 @@ def build_today_calendar_brief() -> dict[str, Any]:
             subject = str(event.get("subject") or "(no title)")
             start_t = _format_event_time(event.get("start"), tz)
             line = f"• **{start_t}** — {subject}"
-            attendees = event.get("attendees") or []
-            if attendees:
-                names = ", ".join(str(a) for a in attendees[:3])
-                line += f" _(with {names})_"
+            # Attendees are Graph objects now that the calendar read selects
+            # them; str() on those printed the whole dict into the message.
+            names = [n for n in _attendee_names(event.get("attendees")) if not _is_from_kory(n)]
+            if names:
+                shown = ", ".join(names[:3])
+                if len(names) > 3:
+                    shown += f" +{len(names) - 3}"
+                line += f" _(with {shown})_"
             lines.append(line)
             lines.append("")  # blank line between events (Teams markdown needs it)
 
@@ -216,17 +220,46 @@ def _display_sender(sender: Any) -> str:
 
 
 def _format_event_time(raw: Any, tz: ZoneInfo) -> str:
+    """Event start as a local time string.
+
+    Graph hands back ``{"dateTime": "...", "timeZone": "..."}`` with a NAIVE
+    dateTime, and the calendar read has already converted it to Kory's zone.
+    Assuming naive meant UTC therefore subtracted the offset a second time and
+    showed a 6:30 AM session as 12:30 AM.
+    """
+    stated_zone = ""
     if isinstance(raw, dict):
+        stated_zone = str(raw.get("timeZone") or "")
         raw = raw.get("dateTime") or raw.get("date") or ""
     if not raw:
         return "?"
     try:
         dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(tz).strftime("%I:%M %p").lstrip("0")
     except ValueError:
         return str(raw)[:16]
+    if dt.tzinfo is None:
+        source = tz
+        if stated_zone:
+            try:
+                source = ZoneInfo(stated_zone)
+            except Exception:
+                source = tz
+        dt = dt.replace(tzinfo=source)
+    return dt.astimezone(tz).strftime("%I:%M %p").lstrip("0")
+
+
+def _attendee_names(attendees: Any) -> list[str]:
+    """Display names from Graph attendee objects (or plain strings)."""
+    names: list[str] = []
+    for attendee in attendees or []:
+        if isinstance(attendee, dict):
+            email_address = attendee.get("emailAddress") or {}
+            label = str(email_address.get("name") or email_address.get("address") or "").strip()
+        else:
+            label = str(attendee).strip()
+        if label and label not in names:
+            names.append(label)
+    return names
 
 
 def _guess_external_attendee(event: dict[str, Any]) -> tuple[str, str]:

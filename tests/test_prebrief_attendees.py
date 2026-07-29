@@ -310,3 +310,38 @@ def test_future_meetings_show_their_date_not_just_a_time():
 
     label = _event_when(_event("x", "2026-08-07T12:00:00", []))
     assert "Aug" in label and "12:00 PM" in label
+
+
+# --- calendar display -------------------------------------------------------
+
+
+def test_event_time_respects_the_zone_stated_on_the_event():
+    """Graph sends a NAIVE dateTime with the zone beside it, and the calendar
+    read has already converted it. Treating naive as UTC subtracted the offset
+    twice and showed a 6:30 AM session as 12:30 AM."""
+    from zoneinfo import ZoneInfo
+
+    from app.assistant.briefings import _format_event_time
+
+    mt = ZoneInfo("America/Denver")
+    assert (
+        _format_event_time({"dateTime": "2026-07-29T06:30:00", "timeZone": "America/Denver"}, mt)
+        == "6:30 AM"
+    )
+    # An explicit UTC offset is still honoured.
+    assert _format_event_time({"dateTime": "2026-07-29T12:30:00Z"}, mt) == "6:30 AM"
+    # No zone stated at all: fall back to Kory's, not UTC.
+    assert _format_event_time({"dateTime": "2026-07-29T06:30:00"}, mt) == "6:30 AM"
+
+
+def test_attendees_render_as_names_not_graph_objects():
+    """Selecting attendees for the prebrief made this line print raw dicts."""
+    from app.assistant.briefings import _attendee_names
+
+    graph = [
+        _graph_attendee("heidi.heckler@iconicfounders.com", "Heidi Heckler"),
+        _graph_attendee("nobody@outside.com"),
+    ]
+    assert _attendee_names(graph) == ["Heidi Heckler", "nobody@outside.com"]
+    assert _attendee_names(["Plain Name"]) == ["Plain Name"]
+    assert _attendee_names(None) == []
