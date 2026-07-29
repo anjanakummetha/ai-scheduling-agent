@@ -835,11 +835,16 @@ def send_outbound_email(
     approved_send: bool = False,
     send_channel: SendChannel = "kory",
     cc_emails: list[str] | None = None,
+    html_body: bool = False,
 ) -> tuple[str | None, str | None]:
     """Send email via write mailbox (sandbox loopback in pilot) or Lexi mailbox.
 
     approved_send must be True unless LEXI_REQUIRE_KORY_APPROVAL=false (tests only).
     Production path: execute_lexi_approval → comms_agent, or Hermes confirm_send=true.
+
+    html_body marks an already-formatted HTML payload. Only the Lexi channel used
+    to send HTML, so anything else arrived as plain text with the markup visible.
+    Scheduling mail composes plain text and must keep the default.
     """
     from app.safety.approval_gate import assert_outbound_send_authorized, kory_outbound_email_blocked
 
@@ -885,7 +890,12 @@ def send_outbound_email(
     configured_target = (settings.sandbox_mailbox_email or "").strip().lower()
     from app.scheduling.email_format import finalize_lexi_email_body, finalize_outbound_email_body
 
-    if channel == "lexi":
+    if html_body:
+        # Already-formatted HTML. The plain-text finalizers normalise whitespace
+        # and append a "Let's Win, / Kory" sign-off, both of which would corrupt
+        # markup that is not a person-to-person note.
+        pilot_body = body
+    elif channel == "lexi":
         pilot_body = finalize_lexi_email_body(body)
     else:
         pilot_body = finalize_outbound_email_body(body)
@@ -902,7 +912,7 @@ def send_outbound_email(
         )
 
     send_body = pilot_body
-    is_html = False
+    is_html = bool(html_body)
     inline_attachments: list[dict[str, Any]] = []
     use_draft_inline_send = False
     if channel == "lexi":
