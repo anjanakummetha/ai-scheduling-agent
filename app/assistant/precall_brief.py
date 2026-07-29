@@ -106,6 +106,31 @@ def gather_relationship_context(email: str, name: str = "") -> dict[str, Any]:
     }
 
 
+def find_attendee_by_name(
+    who: str, *, events: list[dict[str, Any]] | None = None
+) -> tuple[str, str, dict[str, Any] | None]:
+    """Resolve a name to an upcoming meeting attendee.
+
+    Someone Kory is about to meet is often not in HubSpot at all — an intro call
+    with a stranger is the normal case for a pre-call brief.
+    """
+    remaining, date_hint = _extract_date_hint(who)
+    words = [w for w in re.split(r"\W+", remaining.lower()) if len(w) > 2 and w not in _STOPWORDS]
+    if not words:
+        return "", "", None
+
+    pool = events if events is not None else upcoming_meetings()
+    if date_hint:
+        pool = [e for e in pool if _event_start_iso(e)[:10] == date_hint] or pool
+
+    for event in pool:
+        for guest_email, guest_name in external_attendees(event):
+            haystack = f"{guest_name} {guest_email}".lower()
+            if all(word in haystack for word in words):
+                return guest_email, guest_name, event
+    return "", "", None
+
+
 def _humanize_name(raw: str) -> str:
     """"mia.platon" -> "Mia Platon". Introducers often resolve to a local-part."""
     text = str(raw or "").strip()
@@ -191,6 +216,10 @@ _SYSTEM = """You write pre-call briefs for Kory Mitchell, CEO of Iconic Founders
 
 Produce EXACTLY these sections, in this order, using this markdown:
 
+**Introduced by:** <the person who connected Kory to them, from the email history —
+their name only. If they reached out cold or there is no intro in the record,
+write "Direct outreach". Never name the contact themselves.>
+
 **Who They Are** <2-4 sentences: current role, what they run, career history, location, education, board/affiliations>
 
 **What They Do** <2-3 sentences: what their business or team actually does day to day>
@@ -238,6 +267,15 @@ def build_precall_brief(
     # and research lookups have something to work with.
     if not email and crm.get("email"):
         email = str(crm["email"])
+    if not email and name:
+        # Not in the CRM — but Kory may simply have a meeting with them.
+        found_email, found_name, found_event = find_attendee_by_name(name)
+        if found_email:
+            email = found_email
+            name = found_name or name
+            if not meeting_subject and found_event is not None:
+                meeting_subject = str(found_event.get("subject") or "")
+                meeting_time = _event_when(found_event)
     display_name = name or str(crm.get("name") or "").strip() or (
         email.split("@", 1)[0] if email else ""
     )
@@ -351,12 +389,15 @@ def _format_brief(
     when = " · ".join(part for part in (meeting_subject, meeting_time) if part)
     if when:
         lines.append(f"_{when}_")
-    if introducer:
-        lines.append(f"**Introduced by:** {introducer['name']}")
-    else:
-        lines.append("**Introduced by:** Direct outreach")
     lines.append("")
-    lines.append(body.strip())
+    text = body.strip()
+    # The model names the introducer from the email record — the standalone
+    # resolver returned the contact's own address ("Jbertram") often enough that
+    # a second, disagreeing line was worse than none.
+    if introducer and "introduced by" not in text.lower():
+        lines.append(f"**Introduced by:** {introducer['name']}")
+        lines.append("")
+    lines.append(text)
 
     if crm.get("do_not_contact"):
         lines.append("\n⚠️ **Marked Do Not Contact in HubSpot.**")
@@ -427,11 +468,116 @@ def external_attendees(event: dict[str, Any]) -> list[tuple[str, str]]:
     return people
 
 
+_LOOKAHEAD_DAYS = 30
+
+_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
 def todays_meetings() -> list[dict[str, Any]]:
     from app.assistant.briefings import build_today_calendar_brief
 
     cal = build_today_calendar_brief()
     return (cal.get("events") or []) if cal.get("ok") else []
+
+
+def upcoming_meetings(days: int = _LOOKAHEAD_DAYS) -> list[dict[str, Any]]:
+    """Meetings from today through the next `days` — prep happens in advance."""
+    from datetime import datetime, timedelta
+
+    from app.assistant.briefings import _kory_tz
+
+    tz = _kory_tz()
+    now_local = datetime.now(tz)
+    start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=max(1, days))
+    try:
+        from app.integrations.outlook_calendar import get_calendar_events
+
+        events, _ = get_calendar_events(start.isoformat(), end.isoformat())
+    except Exception:
+        return []
+    live = [
+        event
+        for event in events
+        if not event.get("isCancelled")
+        and str(event.get("showAs") or "").lower() not in {"free", "workingelsewhere"}
+    ]
+    live.sort(key=lambda e: _event_start_iso(e))
+    return live
+
+
+def _event_start_iso(event: dict[str, Any]) -> str:
+    raw = event.get("start")
+    if isinstance(raw, dict):
+        raw = raw.get("dateTime") or raw.get("date") or ""
+    return str(raw or "")
+
+
+def _extract_date_hint(query: str) -> tuple[str, str]:
+    """Pull a date out of the request. Returns (remaining_query, YYYY-MM-DD or "").
+
+    "prebrief justin who I am meeting August 7th" has to resolve to the Aug 7
+    Justin, not the Aug 4 one.
+    """
+    from datetime import datetime, timedelta
+
+    from app.assistant.briefings import _kory_tz
+
+    text = query.strip()
+    today = datetime.now(_kory_tz()).date()
+
+    lowered = text.lower()
+    if "tomorrow" in lowered:
+        return re.sub(r"\btomorrow\b", "", text, flags=re.I).strip(), (
+            today + timedelta(days=1)
+        ).isoformat()
+    if "today" in lowered:
+        return re.sub(r"\btoday\b", "", text, flags=re.I).strip(), today.isoformat()
+
+    # "August 7", "Aug 7th", "on August 7"
+    month_match = re.search(
+        r"\b(" + "|".join(_MONTHS) + r")\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b", text, re.I
+    )
+    if month_match:
+        month = _MONTHS[month_match.group(1).lower()]
+        day = int(month_match.group(2))
+        year = today.year
+        try:
+            resolved = today.replace(year=year, month=month, day=day)
+        except ValueError:
+            return text, ""
+        if resolved < today:  # a month already past means next year
+            resolved = resolved.replace(year=year + 1)
+        return text[: month_match.start()].strip() + " " + text[month_match.end() :].strip(), (
+            resolved.isoformat()
+        )
+
+    # "8/7" or "8-7"
+    numeric = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", text)
+    if numeric:
+        month, day = int(numeric.group(1)), int(numeric.group(2))
+        try:
+            resolved = today.replace(month=month, day=day)
+        except ValueError:
+            return text, ""
+        if resolved < today:
+            resolved = resolved.replace(year=today.year + 1)
+        return text[: numeric.start()].strip() + " " + text[numeric.end() :].strip(), (
+            resolved.isoformat()
+        )
+    return text, ""
+
+
+_STOPWORDS = {
+    "who", "whom", "i", "am", "im", "is", "the", "my", "me", "on", "for", "about",
+    "with", "meeting", "call", "meet", "meeting's", "and", "at", "in", "a", "an",
+    "prebrief", "brief", "of", "that", "this", "next", "upcoming", "to",
+}
 
 
 def list_todays_meetings() -> dict[str, Any]:
@@ -457,46 +603,74 @@ def list_todays_meetings() -> dict[str, Any]:
     return {"ok": True, "count": len(events), "briefable": briefable, "kory_message": "\n".join(lines)}
 
 
-def _match_meeting(query: str, events: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Find a meeting by subject words, attendee name, or 'next'."""
-    text = query.strip().lower()
-    if not text:
-        return None
-    if text in {"next", "next meeting", "my next meeting"}:
-        return events[0] if events else None
+def match_meetings(query: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Meetings matching a request, best first.
 
-    best = None
-    best_score = 0
-    words = [w for w in re.split(r"\W+", text) if len(w) > 2]
-    for event in events:
+    Matches on subject words and attendee names, and honours a date in the
+    request — "justin who I am meeting August 7th" has to pick the Aug 7 Justin
+    rather than the one four days earlier.
+    """
+    remaining, date_hint = _extract_date_hint(query)
+    text = remaining.strip().lower()
+
+    pool = events
+    if date_hint:
+        pool = [e for e in events if _event_start_iso(e)[:10] == date_hint] or events
+
+    if text in {"", "next", "next meeting", "my next meeting"}:
+        return pool[:1]
+
+    words = [w for w in re.split(r"\W+", text) if len(w) > 2 and w not in _STOPWORDS]
+    if not words:
+        return pool[:1] if date_hint else []
+
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for event in pool:
         haystack = str(event.get("subject") or "").lower()
         for guest_email, guest_name in external_attendees(event):
             haystack += f" {guest_name.lower()} {guest_email.lower()}"
         score = sum(1 for word in words if word in haystack)
-        if score > best_score:
-            best, best_score = event, score
-    # Require a real overlap, not one incidental word.
-    return best if best_score >= max(1, len(words) // 2) else None
+        if score:
+            scored.append((score, event))
+    if not scored:
+        return []
+    top = max(score for score, _ in scored)
+    return [event for score, event in scored if score == top]
+
+
+def _match_meeting(query: str, events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    matches = match_meetings(query, events)
+    return matches[0] if matches else None
 
 
 def build_meeting_brief(query: str) -> dict[str, Any]:
     """Brief every external attendee on one meeting, researched in parallel."""
-    events = todays_meetings()
+    events = upcoming_meetings()
     if not events:
-        return {"ok": True, "kory_message": "_No meetings on your calendar today._"}
+        return {"ok": True, "kory_message": "_Nothing on your calendar in the next 30 days._"}
 
-    event = _match_meeting(query, events)
-    if event is None:
+    matches = match_meetings(query, events)
+    if not matches:
         listing = list_todays_meetings()
         return {
             "ok": True,
             "matched": False,
-            "kory_message": f"_No meeting today matches \"{query}\"._\n\n"
+            "kory_message": f'_No meeting in the next 30 days matches "{query}"._\n\n'
             + listing.get("kory_message", ""),
         }
+    if len(matches) > 1:
+        # Several fit — asking beats briefing the wrong meeting.
+        lines = [f'**{len(matches)} meetings match "{query}"** — which one?\n']
+        for event in matches[:6]:
+            guests = ", ".join(name for _, name in external_attendees(event)) or "internal"
+            lines.append(
+                f"• **{_event_when(event)}** — {event.get('subject')} _(with {guests})_"
+            )
+        return {"ok": True, "matched": False, "ambiguous": True, "kory_message": "\n".join(lines)}
 
+    event = matches[0]
     subject = str(event.get("subject") or "Meeting")
-    when = _event_time(event)
+    when = _event_when(event)
     guests = external_attendees(event)[:_MAX_ATTENDEES]
     if not guests:
         return {
@@ -548,6 +722,27 @@ def build_meeting_brief(query: str) -> dict[str, Any]:
         "attendee_count": len(sections),
         "kory_message": f"{header}\n\n{body}{footer}",
     }
+
+
+def _event_when(event: dict[str, Any]) -> str:
+    """Time for today, date + time for anything further out."""
+    from datetime import datetime
+
+    from app.assistant.briefings import _kory_tz
+
+    iso = _event_start_iso(event)
+    time_part = _event_time(event)
+    day = iso[:10]
+    if not day:
+        return time_part
+    today = datetime.now(_kory_tz()).date().isoformat()
+    if day == today:
+        return time_part
+    try:
+        label = datetime.fromisoformat(day).strftime("%a %b %d").replace(" 0", " ")
+    except ValueError:
+        return time_part
+    return f"{label}, {time_part}" if time_part else label
 
 
 def _event_time(event: dict[str, Any]) -> str:

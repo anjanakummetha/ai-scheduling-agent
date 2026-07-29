@@ -250,16 +250,17 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
 
     if action == "prebrief_person":
         from app.assistant.precall_brief import (
+            _match_meeting,
             build_meeting_brief,
             build_precall_brief,
-            todays_meetings,
-            _match_meeting,
+            upcoming_meetings,
         )
 
         who = str(command.get("who") or "").strip()
-        # A meeting on today's calendar wins: "prebrief the ACCU call" should
-        # cover everyone in the room, not just the first attendee.
-        if "@" not in who and _match_meeting(who, todays_meetings()) is not None:
+        # An upcoming meeting wins: "prebrief the ACCU call" should cover
+        # everyone in the room, and "prebrief justin August 7th" has to reach
+        # past today into the calendar rather than only searching HubSpot.
+        if "@" not in who and _match_meeting(who, upcoming_meetings()) is not None:
             brief = build_meeting_brief(who)
         else:
             is_email = "@" in who

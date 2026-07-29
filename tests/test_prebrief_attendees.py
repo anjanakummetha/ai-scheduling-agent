@@ -218,10 +218,11 @@ def test_meeting_match_falls_back_to_the_listing_when_nothing_matches():
     from app.assistant import precall_brief as pb
 
     events = [{"subject": "Intro call", "start": {"dateTime": "2026-07-29T14:00:00"}, "attendees": []}]
-    with patch.object(pb, "todays_meetings", return_value=events):
-        out = pb.build_meeting_brief("something unrelated entirely")
+    with patch.object(pb, "upcoming_meetings", return_value=events):
+        with patch.object(pb, "todays_meetings", return_value=events):
+            out = pb.build_meeting_brief("something unrelated entirely")
     assert out["matched"] is False
-    assert "No meeting today matches" in out["kory_message"]
+    assert "No meeting in the next 30 days matches" in out["kory_message"]
 
 
 def test_introducer_local_part_is_rendered_as_a_name():
@@ -230,3 +231,82 @@ def test_introducer_local_part_is_rendered_as_a_name():
     assert _humanize_name("mia.platon") == "Mia Platon"
     assert _humanize_name("heidi_heckler@x.com") == "Heidi Heckler"
     assert _humanize_name("Matt Maley") == "Matt Maley"
+
+
+# --- meetings beyond today --------------------------------------------------
+
+
+def _event(subject: str, iso: str, guests: list[tuple[str, str]]) -> dict:
+    return {
+        "subject": subject,
+        "start": {"dateTime": iso},
+        "attendees": [_graph_attendee(email, name) for email, name in guests],
+    }
+
+
+def test_date_in_the_request_is_understood():
+    from app.assistant.precall_brief import _extract_date_hint
+
+    remaining, when = _extract_date_hint("justin who I am meeting August 7th")
+    assert when.endswith("-08-07")
+    assert "justin" in remaining.lower()
+    assert "august" not in remaining.lower()
+
+    assert _extract_date_hint("the ACCU call 8/14")[1].endswith("-08-14")
+    assert _extract_date_hint("my next meeting")[1] == ""
+
+
+def test_a_date_picks_between_two_people_with_the_same_first_name():
+    """Two Justins: Aug 4 and Aug 7. "August 7th" must resolve to the right one."""
+    from app.assistant.precall_brief import match_meetings
+
+    events = [
+        _event("Follow-Up: Endurance Plumbing", "2026-08-04T14:00:00",
+               [("justin@yetiark.com", "Justin Bond")]),
+        _event("Intro Call - Justin", "2026-08-07T12:00:00",
+               [("jbertram@agilityep.com", "Justin Bertram")]),
+    ]
+    matched = match_meetings("justin who I am meeting August 7th", events)
+    assert len(matched) == 1
+    assert matched[0]["subject"] == "Intro Call - Justin"
+
+
+def test_without_a_date_both_matches_are_returned_so_kory_can_choose():
+    from app.assistant.precall_brief import match_meetings
+
+    events = [
+        _event("Follow-Up: Endurance Plumbing", "2026-08-04T14:00:00",
+               [("justin@yetiark.com", "Justin Bond")]),
+        _event("Intro Call - Justin", "2026-08-07T12:00:00",
+               [("jbertram@agilityep.com", "Justin Bertram")]),
+    ]
+    assert len(match_meetings("justin", events)) == 2
+
+
+def test_filler_words_do_not_match_meetings():
+    """"who I am meeting" must not score against every subject on the calendar."""
+    from app.assistant.precall_brief import match_meetings
+
+    events = [_event("Board sync", "2026-08-04T14:00:00", [("a@b.com", "Ann")])]
+    assert match_meetings("who I am meeting", events) == []
+
+
+def test_someone_only_on_the_calendar_is_still_found():
+    """An intro call with a stranger is the normal pre-call case; they will not
+    be in HubSpot."""
+    from app.assistant.precall_brief import find_attendee_by_name
+
+    events = [
+        _event("Intro Call", "2026-08-07T12:00:00", [("jbertram@agilityep.com", "Justin Bertram")])
+    ]
+    email, name, event = find_attendee_by_name("Justin Bertram", events=events)
+    assert email == "jbertram@agilityep.com"
+    assert name == "Justin Bertram"
+    assert event["subject"] == "Intro Call"
+
+
+def test_future_meetings_show_their_date_not_just_a_time():
+    from app.assistant.precall_brief import _event_when
+
+    label = _event_when(_event("x", "2026-08-07T12:00:00", []))
+    assert "Aug" in label and "12:00 PM" in label
