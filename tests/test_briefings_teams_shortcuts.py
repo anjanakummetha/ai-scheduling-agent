@@ -46,16 +46,11 @@ def test_introducer_from_intro_email():
     assert "Introduced by" in line
 
 
-@patch("app.integrations.asana_manager.list_asana_tasks")
-def test_daily_briefing_includes_asana(mock_tasks):
-    mock_tasks.return_value = {"tasks": [], "ok": True}
-    from app.assistant.briefings import build_daily_ceo_briefing
-
-    with patch("app.assistant.briefings.build_today_calendar_brief") as mock_today, patch(
-        "app.assistant.briefings.build_unanswered_brief"
-    ) as mock_unanswered:
-        mock_today.return_value = {"kory_message": "Today cal"}
-        mock_unanswered.return_value = {"kory_message": "Unanswered"}
-        brief = build_daily_ceo_briefing()
-    assert "CEO briefing" in brief["kory_message"]
-    assert "Today cal" in brief["kory_message"]
+def test_brief_command_points_at_the_dashboard():
+    """The morning package moved to the dashboard; "brief" should say so."""
+    out = handle_teams_command("brief")
+    assert out["handled"] is True
+    assert "dashboard" in out["message"].lower()
+    # The shortcuts that stayed must still be offered.
+    for shortcut in ("today", "unanswered", "prebrief"):
+        assert shortcut in out["message"].lower()

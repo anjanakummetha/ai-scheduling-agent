@@ -311,15 +311,17 @@ def lexi_today_calendar() -> str:
 
 @mcp.tool()
 def lexi_prebrief(include_research: str = "false") -> str:
-    """Pre-meeting briefs for today including who introduced. Teams shortcut: `prebrief`."""
+    """Pre-meeting briefs for today's external meetings. Teams shortcut: `prebrief`.
+
+    Web research runs automatically for anyone Kory has NOT met before — that is
+    the main value here. People he already knows get a short line instead, and
+    internal-only meetings are skipped. Set include_research=true to force
+    research on everyone, which is rarely what he wants.
+
+    For one specific person rather than today's schedule, use lexi_lookup_person.
+    """
     research = include_research.strip().lower() in {"1", "true", "yes"}
     return _wrap("lexi_prebrief", lexi.prebrief_action, include_research=research)
-
-
-@mcp.tool()
-def lexi_daily_ceo_briefing() -> str:
-    """Full morning CEO briefing (calendar + unanswered + pending + Asana). Scheduled 4:45 AM MT."""
-    return _wrap("lexi_daily_ceo_briefing", lexi.daily_ceo_briefing_action)
 
 
 @mcp.tool()

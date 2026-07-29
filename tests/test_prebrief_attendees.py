@@ -64,21 +64,23 @@ def test_meeting_subject_is_never_used_as_a_person():
     assert name == "", "the subject must not be passed off as an attendee"
 
 
-def test_internal_meeting_says_so_instead_of_looking_nobody_up():
+def test_internal_meeting_is_skipped_entirely():
+    """No outside attendee means nothing to brief — and nobody to look up."""
     with patch("app.integrations.hubspot_manager.enrich_prebrief_from_hubspot") as hs:
         out = build_prebrief(meeting_subject="WOB - internal", include_research=False)
     hs.assert_not_called()
-    assert out["found_contact"] is False
-    assert "No outside attendee" in out["kory_message"]
+    assert out["skipped"] is True
+    assert out["kory_message"] == ""
 
 
 @patch("app.assistant.briefings.resolve_introducer_for_contact", return_value=None)
-@patch("app.assistant.briefings.format_introducer_line", return_value="**Introduced by:** Unknown")
-def test_known_attendee_gets_the_hubspot_block(_fmt, _intro):
+@patch("app.assistant.briefings._mailbox_history", return_value=(True, "Last thread: *Re: call*"))
+def test_known_attendee_gets_the_hubspot_block(_mail, _intro):
     payload = {
         "ok": True,
         "found": True,
-        "kory_message": "**James Phifer** - President · ACCU Inc",
+        "contact": {"notes_last_contacted": "2026-07-22T00:00:00Z"},
+        "kory_message": "**James Phifer** — President · ACCU Inc\nStage: Deal In Progress",
     }
     with patch(
         "app.integrations.hubspot_manager.enrich_prebrief_from_hubspot", return_value=payload
@@ -90,12 +92,16 @@ def test_known_attendee_gets_the_hubspot_block(_fmt, _intro):
             include_research=False,
         )
     assert out["found_contact"] is True
-    assert "ACCU Inc" in out["kory_message"]
+    assert out["met_before"] is True
+    message = out["kory_message"]
+    assert "ACCU Inc" in message
+    # The header already names him; the CRM block must not repeat it.
+    assert message.count("James Phifer") == 1
 
 
 @patch("app.assistant.briefings.resolve_introducer_for_contact", return_value=None)
-@patch("app.assistant.briefings.format_introducer_line", return_value="**Introduced by:** Unknown")
-def test_unknown_attendee_is_reported_as_not_in_hubspot(_fmt, _intro):
+@patch("app.assistant.briefings._mailbox_history", return_value=(False, ""))
+def test_attendee_with_no_record_anywhere_reads_as_a_first_meeting(_mail, _intro):
     with patch(
         "app.integrations.hubspot_manager.enrich_prebrief_from_hubspot",
         return_value={"ok": True, "found": False},
@@ -106,4 +112,86 @@ def test_unknown_attendee_is_reported_as_not_in_hubspot(_fmt, _intro):
             include_research=False,
         )
     assert out["found_contact"] is False
-    assert "Not in HubSpot" in out["kory_message"]
+    assert out["met_before"] is False
+    assert "First meeting" in out["kory_message"]
+
+
+@patch("app.assistant.briefings._mailbox_history", return_value=(False, ""))
+def test_unknown_introducer_is_not_printed_as_noise(_mail):
+    """"Introduced by: Unknown" appeared on every meeting and told him nothing."""
+    with patch(
+        "app.integrations.hubspot_manager.enrich_prebrief_from_hubspot",
+        return_value={"ok": True, "found": False},
+    ):
+        with patch("app.assistant.briefings.resolve_introducer_for_contact", return_value=None):
+            out = build_prebrief(
+                attendee_name="Nick Allen",
+                attendee_email="nick@x.com",
+                include_research=False,
+            )
+    assert "unknown" not in out["kory_message"].lower()
+
+
+# --- research targeting: new people only -----------------------------------
+
+
+def _no_hubspot():
+    return patch(
+        "app.integrations.hubspot_manager.enrich_prebrief_from_hubspot",
+        return_value={"ok": True, "found": False},
+    )
+
+
+@patch("app.assistant.briefings.resolve_introducer_for_contact", return_value=None)
+@patch("app.assistant.briefings._mailbox_history", return_value=(False, ""))
+@patch("app.integrations.person_research.research_person")
+def test_research_runs_for_someone_kory_has_not_met(mock_research, _mail, _intro):
+    mock_research.return_value = {"web_summary": {"answer": "She founded Acme in 2019."}}
+    with _no_hubspot():
+        out = build_prebrief(attendee_name="New Person", attendee_email="new@outside.com")
+    mock_research.assert_called_once()
+    assert out["met_before"] is False
+    assert out["research_ran"] is True
+    assert "First meeting" in out["kory_message"]
+    assert "founded Acme" in out["kory_message"]
+
+
+@patch("app.assistant.briefings.resolve_introducer_for_contact", return_value=None)
+@patch("app.assistant.briefings._mailbox_history", return_value=(True, "Last thread: *Re: hi* — 2026-07-01"))
+@patch("app.integrations.person_research.research_person")
+def test_research_is_skipped_for_someone_he_already_knows(mock_research, _mail, _intro):
+    with _no_hubspot():
+        out = build_prebrief(attendee_name="Old Friend", attendee_email="known@outside.com")
+    mock_research.assert_not_called()
+    assert out["met_before"] is True
+    assert out["research_ran"] is False
+    assert "Last thread" in out["kory_message"]
+
+
+def test_research_answer_survives_the_search_payload_shape():
+    """web_summary is {"answer", "citations"}; .strip() on it raised AttributeError
+    and the caller swallowed it, so background never appeared."""
+    from app.assistant.briefings import _research_answer, _research_sources
+
+    bundle = {
+        "web_summary": {
+            "answer": "James Phifer is President of ACCU, Inc.",
+            "citations": [{"id": "https://accuinc.com/meet-the-team/"}],
+        }
+    }
+    assert _research_answer(bundle).startswith("James Phifer")
+    assert _research_sources(bundle) == ["https://accuinc.com/meet-the-team/"]
+    # A plain string still works, and a missing payload yields nothing.
+    assert _research_answer({"web_summary": "plain"}) == "plain"
+    assert _research_answer({}) == ""
+
+
+def test_attendee_name_is_not_printed_twice():
+    from app.assistant.briefings import _strip_leading_name
+
+    block = "**James Phifer** — President · ACCU Inc\nStage: Deal In Progress"
+    out = _strip_leading_name(block, "James Phifer")
+    assert out.startswith("President · ACCU Inc")
+    assert "James Phifer" not in out
+    # An unrelated block is left alone.
+    assert _strip_leading_name("Stage: Active", "James Phifer") == "Stage: Active"

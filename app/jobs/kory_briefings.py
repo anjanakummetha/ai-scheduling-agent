@@ -28,14 +28,15 @@ def _mt_now() -> datetime:
 
 
 def run_kory_briefing_cycle() -> dict[str, Any]:
-    """Called from orchestrator each cycle — idempotent nudges + daily brief."""
+    """Called from orchestrator each cycle — idempotent 24h nudges.
+
+    The 4:45 AM CEO briefing was removed: the dashboard owns the morning
+    package, and two systems deriving one from the same mailbox disagreed.
+    """
     reminders = process_kory_24h_reminders()
-    daily = process_daily_ceo_briefing_if_due()
     return {
         "kory_24h_reminders": len(reminders),
         "reminders": reminders,
-        "daily_briefing_sent": daily.get("sent", False),
-        "daily": daily,
     }
 
 
@@ -81,31 +82,6 @@ def process_kory_24h_reminders() -> list[dict[str, Any]]:
     return staged
 
 
-def process_daily_ceo_briefing_if_due(*, now: datetime | None = None) -> dict[str, Any]:
-    """Send CEO briefing once per MT day around 4:45."""
-    local = now or _mt_now()
-    target = local.replace(
-        hour=_BRIEFING_HOUR,
-        minute=_BRIEFING_MINUTE,
-        second=0,
-        microsecond=0,
-    )
-    delta_min = abs((local - target).total_seconds()) / 60.0
-    if delta_min > _BRIEFING_WINDOW_MIN:
-        return {"sent": False, "reason": "outside_window", "local_time": local.isoformat()}
-
-    day_key = local.strftime("%Y-%m-%d")
-    if _daily_briefing_already_sent(day_key):
-        return {"sent": False, "reason": "already_sent", "day": day_key}
-
-    from app.assistant.briefings import build_daily_ceo_briefing
-
-    package = build_daily_ceo_briefing()
-    message = package.get("kory_message", "")
-    _notify_daily_briefing(message, day_key=day_key)
-    _mark_daily_briefing_sent(day_key, message)
-    return {"sent": True, "day": day_key, "preview": message[:400]}
-
 
 def _kory_reminder_already_sent(conn, proposal_id: int) -> bool:
     row = conn.execute(
@@ -135,35 +111,6 @@ def _audit_reminder(conn, proposal_id: int, status: str) -> None:
     )
 
 
-def _daily_briefing_already_sent(day_key: str) -> bool:
-    with get_lexi_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT 1 FROM audit_log
-            WHERE step_name = 'daily_ceo_briefing' AND reference_id = ?
-            LIMIT 1
-            """,
-            (day_key,),
-        ).fetchone()
-    return row is not None
-
-
-def _mark_daily_briefing_sent(day_key: str, message: str) -> None:
-    with get_lexi_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO audit_log (step_name, reference_id, log_level, message, payload)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                "daily_ceo_briefing",
-                day_key,
-                "INFO",
-                "Daily CEO briefing delivered",
-                json.dumps({"preview": message[:500]}),
-            ),
-        )
-        conn.commit()
 
 
 def _notify_kory_24h_reminder(
@@ -201,22 +148,3 @@ def _notify_kory_24h_reminder(
         logger.debug("24h Teams notify skipped: %s", exc)
 
 
-def _notify_daily_briefing(message: str, *, day_key: str) -> None:
-    from app.safety.outbound_guard import teams_push_allowed
-
-    if not teams_push_allowed():
-        logger.info("Daily briefing not pushed (dry-run/suppressed/teams-off) for %s", day_key)
-        return
-    try:
-        from app.bot.teams_publisher import push_approval_text_to_teams
-        import asyncio
-
-        text = f"**Lexi — morning briefing**\n\n{message}"
-        coro = push_approval_text_to_teams(text, proposal_id=f"brief-{day_key}")
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(coro)
-        except RuntimeError:
-            asyncio.run(coro)
-    except Exception as exc:
-        logger.debug("Daily briefing Teams notify skipped: %s", exc)

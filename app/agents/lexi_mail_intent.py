@@ -133,13 +133,14 @@ def handle_lexi_direct_mail(raw_email: dict[str, Any]) -> dict[str, Any]:
         }
 
     if intent.intent == "briefing":
-        from app.assistant.briefings import build_daily_ceo_briefing
-
-        package = build_daily_ceo_briefing()
+        # Retired — the dashboard owns the morning package.
         return {
             "handled": True,
             "action": "briefing",
-            "message": package.get("kory_message", "Briefing ready."),
+            "message": (
+                "Your morning briefing is on the dashboard now. I can still send "
+                "today's calendar, unanswered emails, or a pre-meeting brief."
+            ),
             "thread_id": thread_id,
         }
 

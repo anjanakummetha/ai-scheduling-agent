@@ -13,12 +13,6 @@ from app.jobs import kory_briefings as kb
 from app.jobs import hold_lifecycle as hl
 
 
-def test_daily_briefing_not_pushed_when_teams_push_disallowed():
-    with patch("app.safety.outbound_guard.teams_push_allowed", return_value=False):
-        with patch("app.bot.teams_publisher.push_approval_text_to_teams") as mock_push:
-            kb._notify_daily_briefing("brief text", day_key="2026-07-20")
-    mock_push.assert_not_called()
-
 
 def test_24h_reminder_not_pushed_when_teams_push_disallowed():
     with patch("app.safety.outbound_guard.teams_push_allowed", return_value=False):

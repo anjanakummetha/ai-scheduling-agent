@@ -249,10 +249,18 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
         return {"ok": True, "handled": True, "message": brief.get("kory_message", "")}
 
     if action == "daily_briefing":
-        from app.assistant.briefings import build_daily_ceo_briefing
-
-        brief = build_daily_ceo_briefing()
-        return {"ok": True, "handled": True, "message": brief.get("kory_message", "")}
+        # Retired — the dashboard owns the morning package. Answer with a
+        # pointer rather than an unknown-command reply.
+        return {
+            "ok": True,
+            "handled": True,
+            "message": (
+                "Your morning briefing lives on the dashboard now — it has the full "
+                "package and stays current through the day.\n\n"
+                "I can still give you **today** (calendar), **unanswered** (emails "
+                "needing a reply), or **prebrief** (who you're meeting)."
+            ),
+        }
 
     if action == "outreach_list":
         from app.assistant.actions import list_outreach_campaigns_action

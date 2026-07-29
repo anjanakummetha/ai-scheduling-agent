@@ -188,30 +188,93 @@ def build_today_calendar_brief() -> dict[str, Any]:
     }
 
 
+def _research_answer(bundle: dict[str, Any]) -> str:
+    """Readable summary out of a research bundle.
+
+    ``web_summary`` is the search payload, normally ``{"answer", "citations"}``
+    — not a string. Calling .strip() on it raised AttributeError, which the
+    caller swallowed as "research skipped", so background never once appeared.
+    """
+    raw = bundle.get("web_summary")
+    if isinstance(raw, dict):
+        raw = raw.get("answer") or raw.get("summary") or ""
+    return str(raw or "").strip()
+
+
+def _research_sources(bundle: dict[str, Any], limit: int = 3) -> list[str]:
+    raw = bundle.get("web_summary")
+    citations = raw.get("citations") if isinstance(raw, dict) else None
+    urls: list[str] = []
+    for citation in citations or []:
+        url = citation.get("id") if isinstance(citation, dict) else str(citation)
+        if url and url not in urls:
+            urls.append(str(url))
+        if len(urls) >= limit:
+            break
+    return urls
+
+
+def _mailbox_history(email: str) -> tuple[bool, str]:
+    """(has prior contact, one-line description of the most recent thread)."""
+    if not email:
+        return False, ""
+    try:
+        from app.integrations.outlook_inbox import search_inbox
+
+        messages, _ = search_inbox(query=email, top=3)
+    except Exception:
+        return False, ""
+    if not messages:
+        return False, ""
+    latest = messages[0]
+    subject = str(latest.get("subject") or "").strip() or "(no subject)"
+    when = str(latest.get("received_at") or "")[:10]
+    return True, f"Last thread: *{subject[:70]}*" + (f" — {when}" if when else "")
+
+
+def _strip_leading_name(block: str, name: str) -> str:
+    """Drop the block's own name heading when the caller already printed it."""
+    lines = block.splitlines()
+    if not lines or not name:
+        return block
+    first = lines[0].replace("*", "").strip().lower()
+    if first.startswith(name.strip().lower()):
+        remainder = lines[0].split("—", 1)
+        rest = lines[1:]
+        if len(remainder) > 1 and remainder[1].strip():
+            rest = [remainder[1].strip()] + rest
+        return "\n".join(rest).strip()
+    return block
+
+
 def build_prebrief(
     *,
     attendee_name: str = "",
     attendee_email: str = "",
     meeting_subject: str = "",
-    include_research: bool = True,
+    include_research: bool | None = None,
 ) -> dict[str, Any]:
-    """Single pre-meeting brief with introducer + optional research."""
+    """Pre-meeting brief for one attendee.
+
+    Research is the point of this for someone Kory has not met, and noise for
+    someone he has — so by default (``include_research=None``) it runs only for
+    new people, and known contacts get a single line. Pass True or False to
+    force it either way.
+    """
     email = attendee_email.strip()
     name = attendee_name.strip()
-    lines = [f"**Pre-meeting brief**"]
-    if meeting_subject:
-        lines.append(f"**Meeting:** {meeting_subject}")
-    if name or email:
-        lines.append(f"**With:** {name or email}")
-    else:
-        # Internal-only or no attendee list — say so rather than implying we
-        # looked someone up and found nothing.
-        lines.append("_No outside attendee on the invite._")
-        return {"ok": True, "kory_message": "\n".join(lines), "found_contact": False}
 
-    intro = resolve_introducer_for_contact(email=email or "guest@unknown.io", sender=name)
-    lines.append(format_introducer_line(intro))
+    if not (name or email):
+        # Internal meeting — nothing to brief, and no one to look up.
+        return {
+            "ok": True,
+            "skipped": True,
+            "found_contact": False,
+            "kory_message": "",
+        }
 
+    contact: dict[str, Any] | None = None
+    hubspot_block = ""
     found_contact = False
     try:
         from app.integrations.hubspot_manager import enrich_prebrief_from_hubspot
@@ -219,42 +282,73 @@ def build_prebrief(
         hs = enrich_prebrief_from_hubspot(email=email, name=name)
         if hs.get("ok") and hs.get("found"):
             found_contact = True
-            lines.append("")
-            lines.append(hs.get("kory_message", ""))
-        elif hs.get("ok"):
-            lines.append("_Not in HubSpot._")
+            contact = hs.get("contact")
+            hubspot_block = hs.get("kory_message", "")
     except Exception:
         pass
 
-    research_block = ""
-    if include_research and (name or email):
+    crm_contacted = bool(contact and str(contact.get("notes_last_contacted") or "").strip())
+    has_mail, last_thread = _mailbox_history(email)
+    met_before = crm_contacted or has_mail
+    wants_research = (not met_before) if include_research is None else include_research
+
+    header = f"**{name or email}**"
+    if meeting_subject:
+        header += f" — {meeting_subject}"
+    lines = [header]
+
+    body = _strip_leading_name(hubspot_block, name) if hubspot_block else ""
+    if met_before:
+        # He knows them: enough to jog his memory, not a page of background.
+        if body:
+            lines.append(body)
+        if last_thread:
+            lines.append(last_thread)
+        if not body and not last_thread:
+            lines.append("_Prior contact on record._")
+    else:
+        lines.append("🆕 **First meeting** — no prior contact on record.")
+        if body:
+            lines.append(body)
+
+    intro = resolve_introducer_for_contact(email=email or "guest@unknown.io", sender=name)
+    intro_line = format_introducer_line(intro)
+    # "Introduced by: Unknown" is noise on every meeting; only show a real one.
+    if intro and "unknown" not in intro_line.lower():
+        lines.append(intro_line)
+
+    research_ran = False
+    if wants_research:
         try:
             from app.integrations.person_research import research_person
 
+            company = str((contact or {}).get("company") or "")
             bundle = research_person(
                 name or email.split("@", 1)[0],
+                company=company,
                 email=email,
-                include_inbox=True,
+                include_inbox=False,
                 include_news=False,
             )
-            summary = (bundle.get("web_summary") or "").strip()
+            summary = _research_answer(bundle)
             if summary:
-                research_block = summary[:1200]
-                lines.append("\n**Background:**")
-                lines.append(research_block)
-            threads = bundle.get("prior_threads") or []
-            if threads:
-                lines.append("\n**Prior threads:**")
-                for t in threads[:3]:
-                    lines.append(f"• {t.get('subject') or '(no subject)'}")
+                research_ran = True
+                lines.append("")
+                lines.append(f"**Background:** {summary[:900]}")
+                sources = _research_sources(bundle, limit=2)
+                if sources:
+                    lines.append("_Sources: " + " · ".join(sources) + "_")
         except Exception as exc:
-            lines.append(f"\n_Research skipped ({type(exc).__name__})._")
+            lines.append(f"\n_Background lookup unavailable ({type(exc).__name__})._")
 
     return {
         "ok": True,
+        "skipped": False,
         "attendee_email": email or None,
         "attendee_name": name or None,
         "found_contact": found_contact,
+        "met_before": met_before,
+        "research_ran": research_ran,
         "introducer": intro.__dict__ if intro else None,
         "kory_message": "\n".join(lines),
     }
@@ -274,7 +368,10 @@ def build_prebriefs_for_today(*, include_research: bool = False) -> dict[str, An
             "kory_message": "**Pre-meeting briefs**\n\n_No meetings today — nothing to brief._",
         }
 
-    sections: list[str] = ["**Pre-meeting briefs — today**\n"]
+    sections: list[str] = []
+    briefed = 0
+    internal = 0
+    new_people = 0
     for event in events[:8]:
         subject = str(event.get("subject") or "Meeting")
         attendee_email, attendee_name = _guess_external_attendee(event)
@@ -282,54 +379,40 @@ def build_prebriefs_for_today(*, include_research: bool = False) -> dict[str, An
             attendee_name=attendee_name,
             attendee_email=attendee_email,
             meeting_subject=subject,
-            include_research=include_research,
+            # None means "research new people only" — the caller can force it.
+            include_research=True if include_research else None,
         )
+        if brief.get("skipped"):
+            internal += 1
+            continue
+        briefed += 1
+        if not brief.get("met_before"):
+            new_people += 1
         sections.append(brief.get("kory_message", ""))
         sections.append("")
 
-    return {
-        "ok": True,
-        "count": len(events),
-        "kory_message": "\n".join(sections).strip(),
-    }
+    if not sections:
+        note = "_No external meetings today"
+        note += f" ({internal} internal)._" if internal else "._"
+        return {
+            "ok": True,
+            "count": 0,
+            "kory_message": f"**Pre-meeting briefs — today**\n\n{note}",
+        }
 
-
-def build_daily_ceo_briefing() -> dict[str, Any]:
-    """4:45 AM MT package — calendar, unanswered, pending approvals, Asana due."""
-    tz = _kory_tz()
-    now_local = datetime.now(tz)
-    header = f"**CEO briefing — {now_local.strftime('%A, %B %d').replace(' 0', ' ')}**\n"
-
-    parts = [header]
-
-    cal = build_today_calendar_brief()
-    parts.append(cal.get("kory_message", ""))
-    parts.append("")
-
-    unanswered = build_unanswered_brief(hours=48)
-    parts.append(unanswered.get("kory_message", ""))
-    parts.append("")
-
-    pending = _pending_approval_summary()
-    parts.append(pending)
-    parts.append("")
-
-    asana = _asana_due_summary()
-    parts.append(asana)
-    parts.append("")
-
-    deals = _hubspot_deals_summary()
-    parts.append(deals)
-
-    prebrief_note = (
-        "\n_Say **prebrief** for meeting context (who introduced + research)._"
-    )
-    parts.append(prebrief_note)
+    header = f"**Pre-meeting briefs — today** ({briefed} external"
+    if new_people:
+        header += f", {new_people} you haven't met"
+    header += ")\n"
+    if internal:
+        sections.append(f"_{internal} internal meeting(s) not briefed._")
 
     return {
         "ok": True,
-        "generated_at": now_local.isoformat(),
-        "kory_message": "\n".join(parts).strip(),
+        "count": briefed,
+        "internal_count": internal,
+        "new_people": new_people,
+        "kory_message": header + "\n" + "\n".join(sections).strip(),
     }
 
 
@@ -358,40 +441,6 @@ def _display_sender(sender: Any) -> str:
         addr = value.get("emailAddress") if isinstance(value.get("emailAddress"), dict) else value
         return str(addr.get("name") or addr.get("address") or "unknown")
     return str(value or "unknown")
-
-
-def _pending_approval_summary() -> str:
-    from app.agents.comms_agent import get_lexi_pending_queue
-
-    items = get_lexi_pending_queue()
-    if not items:
-        return "**Pending approvals:** None — you're caught up on Lexi drafts."
-    lines = [f"**Pending approvals:** {len(items)} draft(s) waiting\n"]
-    for item in items[:5]:
-        lines.append(f"• **{item.subject}** — {_display_sender(item.sender)}")
-        lines.append("")
-    if len(items) > 5:
-        lines.append(f"_…and {len(items) - 5} more. Say `pending`._")
-    return "\n".join(lines)
-
-
-def _asana_due_summary() -> str:
-    try:
-        from app.integrations.asana_manager import summarize_asana_for_briefing
-
-        return summarize_asana_for_briefing()
-    except Exception as exc:
-        return f"**Asana:** unavailable ({type(exc).__name__})."
-
-
-def _hubspot_deals_summary() -> str:
-    try:
-        from app.integrations.hubspot_manager import deals_snapshot_for_brief
-
-        snap = deals_snapshot_for_brief(limit=5)
-        return snap.get("kory_message", "**Deals:** unavailable.")
-    except Exception as exc:
-        return f"**Deals:** unavailable ({type(exc).__name__})."
 
 
 def _format_event_time(raw: Any, tz: ZoneInfo) -> str:

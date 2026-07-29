@@ -887,11 +887,6 @@ def prebrief_action(*, include_research: bool = False) -> dict[str, Any]:
     return build_prebriefs_for_today(include_research=include_research)
 
 
-def daily_ceo_briefing_action() -> dict[str, Any]:
-    from app.assistant.briefings import build_daily_ceo_briefing
-
-    return build_daily_ceo_briefing()
-
 
 def list_asana_tasks_action(*, bucket: str = "all", mine_only: bool = True) -> dict[str, Any]:
     from app.integrations.asana_manager import list_asana_tasks
