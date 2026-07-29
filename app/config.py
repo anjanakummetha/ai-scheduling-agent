@@ -237,6 +237,9 @@ class Settings:
     hubspot_composio_connection_id: str | None = (
         os.getenv("HUBSPOT_COMPOSIO_CONNECTION_ID", "").strip() or None
     )
+    # Kory's HubSpot contact-owner id. Reads span the whole portal; writes are
+    # scoped to contacts he owns unless he explicitly confirms someone else's.
+    hubspot_kory_owner_id: str = os.getenv("HUBSPOT_KORY_OWNER_ID", "159133511").strip()
     # Explicit live-write kill switches for CRM/task systems. Keep false for UAT.
     asana_live_writes_enabled: bool = os.getenv(
         "LEXI_ASANA_LIVE_WRITES_ENABLED", "false"

@@ -502,12 +502,35 @@ def lexi_hubspot_status() -> str:
 
 @mcp.tool()
 def lexi_hubspot_cleanup_proposals(inactive_days: str = "180") -> str:
-    """Propose inactive contact cleanup — staged locally, no HubSpot writes until approved."""
+    """CRM health report for Kory's contacts: where the book is thin. Read-only."""
     try:
         days = int(inactive_days.strip() or "180")
     except ValueError:
         days = 180
     return _wrap("lexi_hubspot_cleanup_proposals", lexi.hubspot_cleanup_proposals_action, inactive_days=days)
+
+
+@mcp.tool()
+def lexi_hubspot_health_report(all_owners: str = "false") -> str:
+    """Where Kory's CRM is incomplete — counts are portal-wide, not a sample. Read-only."""
+    every = all_owners.strip().lower() in {"1", "true", "yes"}
+    return _wrap("lexi_hubspot_health_report", lexi.hubspot_health_report_action, all_owners=every)
+
+
+@mcp.tool()
+def lexi_hubspot_compare_books() -> str:
+    """Compare Kory's contact book against the other IFG owners. Read-only."""
+    return _wrap("lexi_hubspot_compare_books", lexi.hubspot_compare_books_action)
+
+
+@mcp.tool()
+def lexi_hubspot_recent_changes(days: str = "7") -> str:
+    """What changed in HubSpot lately: new contacts and deal stage movements. Read-only."""
+    try:
+        n = max(1, min(90, int(days.strip() or "7")))
+    except ValueError:
+        n = 7
+    return _wrap("lexi_hubspot_recent_changes", lexi.hubspot_recent_changes_action, days=n)
 
 
 @mcp.tool()
@@ -531,13 +554,17 @@ def lexi_hubspot_duplicate_merges(limit: str = "50") -> str:
 
 
 @mcp.tool()
-def lexi_hubspot_lead_source_fills(limit: str = "25") -> str:
-    """Propose lead source/lifecycle fills from email history — staged only."""
+def lexi_hubspot_enrich_contacts(limit: str = "25") -> str:
+    """Propose job title/company fills from Kory's own email signatures.
+
+    Blank fields only — an existing value is never overwritten. Staged for
+    approval; nothing is written to HubSpot while writes are blocked.
+    """
     try:
         n = max(1, min(50, int(limit.strip() or "25")))
     except ValueError:
         n = 25
-    return _wrap("lexi_hubspot_lead_source_fills", lexi.hubspot_lead_source_fills_action, limit=n)
+    return _wrap("lexi_hubspot_enrich_contacts", lexi.hubspot_enrichment_action, limit=n)
 
 
 @mcp.tool()
@@ -557,9 +584,16 @@ def lexi_hubspot_meeting_note(
     note: str,
     meeting_subject: str = "",
     confirm: str = "false",
+    owner_ack: str = "false",
 ) -> str:
-    """Stage a HubSpot note after a meeting (writes blocked for now)."""
+    """Stage a HubSpot note after a meeting (writes blocked for now).
+
+    If the contact belongs to another IFG owner this returns
+    owner_confirmation_required naming them; re-call with owner_ack=true only
+    after Kory confirms he means to touch someone else's record.
+    """
     approved = confirm.strip().lower() in {"1", "true", "yes"}
+    ack = owner_ack.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_hubspot_meeting_note",
         lexi.hubspot_meeting_note_action,
@@ -567,6 +601,7 @@ def lexi_hubspot_meeting_note(
         note=note,
         meeting_subject=meeting_subject,
         confirm=approved,
+        owner_ack=ack,
     )
 
 

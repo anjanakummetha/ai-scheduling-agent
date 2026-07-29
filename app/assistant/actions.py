@@ -998,9 +998,38 @@ def hubspot_duplicate_merges_action(*, limit: int = 50) -> dict[str, Any]:
 
 
 def hubspot_lead_source_fills_action(*, limit: int = 25) -> dict[str, Any]:
-    from app.integrations.hubspot_manager import propose_lead_source_fills
+    """Retained name; lead-source fills were retired for contact enrichment."""
+    return hubspot_enrichment_action(limit=limit)
 
-    return propose_lead_source_fills(limit=limit)
+
+def hubspot_enrichment_action(*, limit: int = 25) -> dict[str, Any]:
+    from app.integrations.hubspot_manager import propose_field_enrichment
+
+    return propose_field_enrichment(limit=limit)
+
+
+def hubspot_health_report_action(*, all_owners: bool = False) -> dict[str, Any]:
+    from app.integrations.hubspot_manager import crm_health_report
+
+    return crm_health_report(owner_id=None if all_owners else undefined_owner_default())
+
+
+def undefined_owner_default() -> str:
+    from app.integrations.hubspot_manager import kory_owner_id
+
+    return kory_owner_id()
+
+
+def hubspot_compare_books_action() -> dict[str, Any]:
+    from app.integrations.hubspot_manager import compare_books
+
+    return compare_books()
+
+
+def hubspot_recent_changes_action(*, days: int = 7) -> dict[str, Any]:
+    from app.integrations.hubspot_manager import recent_changes
+
+    return recent_changes(days=days)
 
 
 def hubspot_prebrief_enrich_action(*, email: str = "", name: str = "") -> dict[str, Any]:
@@ -1015,6 +1044,7 @@ def hubspot_meeting_note_action(
     note: str,
     meeting_subject: str = "",
     confirm: bool = False,
+    owner_ack: bool = False,
 ) -> dict[str, Any]:
     from app.integrations.hubspot_manager import stage_meeting_note
 
@@ -1023,6 +1053,7 @@ def hubspot_meeting_note_action(
         note=note,
         meeting_subject=meeting_subject,
         approved=confirm,
+        owner_ack=owner_ack,
     )
 
 
