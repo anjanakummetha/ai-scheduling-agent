@@ -225,3 +225,38 @@ def test_create_reports_the_board_it_actually_used(monkeypatch):
 
     result = am._create_asana_task(title="T", notes="N", section="Personal")
     assert result["board"] == "Personal", result
+
+
+def test_unresolvable_task_name_explains_itself(monkeypatch):
+    """An unresolved name reached Asana verbatim and returned
+    "task: Not a Long: <name>", which got relayed as "commenting isn't
+    supported". Say which task is meant instead."""
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5: {"tasks": []})
+    gid, err = am.resolve_task_or_error("does-not-exist")
+    assert gid == "" and err and "No task found" in err["error"]
+
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5: {"tasks": [
+        {"gid": "1", "name": "book flights"}, {"gid": "2", "name": "book hotel"},
+    ]})
+    gid, err = am.resolve_task_or_error("book")
+    assert gid == ""
+    assert "matches 2 tasks" in err["error"], err
+    assert len(err["candidates"]) == 2
+
+
+def test_writes_refuse_an_ambiguous_name(monkeypatch):
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(am, "search_asana_tasks", lambda *, query, limit=5: {"tasks": [
+        {"gid": "1", "name": "book flights"}, {"gid": "2", "name": "book hotel"},
+    ]})
+    called = []
+    monkeypatch.setattr(am, "execute_asana_tool", lambda s, a: called.append(s))
+
+    out = am.delete_asana_task(task_gid="book", approved=True)
+    assert out["ok"] is False and not called, "must not call Asana with an ambiguous name"

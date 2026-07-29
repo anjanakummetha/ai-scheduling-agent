@@ -438,6 +438,42 @@ def _section_name_for_gid(section_gid: str) -> str:
     return ""
 
 
+def resolve_task_or_error(task: str) -> tuple[str, dict[str, Any] | None]:
+    """Resolve a task name to a gid, or explain why it could not be resolved.
+
+    An unresolved name used to reach Asana verbatim and come back as
+    "task: Not a Long: <name>", which was then relayed to Kory as the feature
+    being unsupported. Better to say which task is meant.
+    """
+    raw = (task or "").strip()
+    if _should_simulate_asana():
+        return raw, None  # nothing live to look a name up against
+    gid = resolve_task_gid(raw)
+    if gid and gid.isdigit():
+        return gid, None
+    try:
+        candidates = (search_asana_tasks(query=raw, limit=6).get("tasks") or []) if raw else []
+    except Exception:
+        candidates = []
+    if not candidates:
+        return "", {
+            "ok": False,
+            "error": f"No task found matching {raw!r}.",
+            "candidates": [],
+        }
+    return "", {
+        "ok": False,
+        "error": (
+            f"{raw!r} matches {len(candidates)} tasks — which one? "
+            + "; ".join(str(c.get("name")) for c in candidates[:5])
+        ),
+        "candidates": [
+            {"gid": c.get("gid"), "name": c.get("name"), "project": c.get("project")}
+            for c in candidates[:5]
+        ],
+    }
+
+
 def _add_task_to_section_if_configured(task_gid: str, section: str = "") -> str:
     section_gid = resolve_section_gid(section) if section.strip() else settings.asana_section_gid
     if not section_gid:
@@ -524,7 +560,9 @@ def complete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, A
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana complete task")
-    task_gid = resolve_task_gid(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    if _resolve_error:
+        return _resolve_error
     if _should_simulate_asana():
         return {"ok": True, "task_gid": task_gid, "simulated": True, "dry_run": True}
     result = execute_asana_tool(
@@ -581,7 +619,9 @@ def update_asana_task(
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana update task")
-    task_gid = resolve_task_gid(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    if _resolve_error:
+        return _resolve_error
     data: dict[str, Any] = {}
     if title.strip():
         data["name"] = title.strip()
@@ -609,7 +649,9 @@ def delete_asana_task(*, task_gid: str, approved: bool = False) -> dict[str, Any
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana delete task")
-    task_gid = resolve_task_gid(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    if _resolve_error:
+        return _resolve_error
     if _should_simulate_asana():
         return {"ok": True, "task_gid": task_gid, "simulated": True, "dry_run": True}
     result = execute_asana_tool("ASANA_DELETE_TASK", {"task_gid": task_gid})
@@ -647,7 +689,9 @@ def move_asana_task_to_section(
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana move task section")
-    task_gid = resolve_task_gid(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    if _resolve_error:
+        return _resolve_error
     target = section_gid.strip()
     if not target and section_name.strip():
         target = resolve_section_gid(section_name)
@@ -690,7 +734,9 @@ def comment_on_asana_task(
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana comment")
-    task_gid = resolve_task_gid(task_gid)
+    task_gid, _resolve_error = resolve_task_or_error(task_gid)
+    if _resolve_error:
+        return _resolve_error
     text = comment.strip()
     if not text:
         return {"ok": False, "error": "comment is required"}
