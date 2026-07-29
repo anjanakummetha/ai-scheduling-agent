@@ -39,7 +39,20 @@ def get_calendar_events(start_iso: str, end_iso: str) -> tuple[list[dict[str, An
             "end_datetime": _convert_iso_timezone(end_iso, SCHEDULING_TIMEZONE, OUTLOOK_TIMEZONE),
             "timezone": OUTLOOK_TIMEZONE,
             "top": 250,
-            "select": ["id", "subject", "start", "end", "showAs", "isCancelled", "isAllDay"],
+            "select": [
+                "id",
+                "subject",
+                "start",
+                "end",
+                "showAs",
+                "isCancelled",
+                "isAllDay",
+                # Needed by the pre-meeting brief to identify who Kory is
+                # meeting; without them it fell back to using the whole
+                # subject line as a person's name.
+                "attendees",
+                "organizer",
+            ],
         },
     )
     data = _coerce_data(result["data"])
@@ -132,7 +145,20 @@ def get_write_calendar_events(start_iso: str, end_iso: str) -> tuple[list[dict[s
             "end_datetime": _convert_iso_timezone(end_iso, SCHEDULING_TIMEZONE, OUTLOOK_TIMEZONE),
             "timezone": OUTLOOK_TIMEZONE,
             "top": 250,
-            "select": ["id", "subject", "start", "end", "showAs", "isCancelled", "isAllDay"],
+            "select": [
+                "id",
+                "subject",
+                "start",
+                "end",
+                "showAs",
+                "isCancelled",
+                "isAllDay",
+                # Needed by the pre-meeting brief to identify who Kory is
+                # meeting; without them it fell back to using the whole
+                # subject line as a person's name.
+                "attendees",
+                "organizer",
+            ],
         },
     )
     data = _coerce_data(result["data"])

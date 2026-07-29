@@ -203,20 +203,28 @@ def build_prebrief(
         lines.append(f"**Meeting:** {meeting_subject}")
     if name or email:
         lines.append(f"**With:** {name or email}")
+    else:
+        # Internal-only or no attendee list — say so rather than implying we
+        # looked someone up and found nothing.
+        lines.append("_No outside attendee on the invite._")
+        return {"ok": True, "kory_message": "\n".join(lines), "found_contact": False}
 
     intro = resolve_introducer_for_contact(email=email or "guest@unknown.io", sender=name)
     lines.append(format_introducer_line(intro))
 
-    if email or name:
-        try:
-            from app.integrations.hubspot_manager import enrich_prebrief_from_hubspot
+    found_contact = False
+    try:
+        from app.integrations.hubspot_manager import enrich_prebrief_from_hubspot
 
-            hs = enrich_prebrief_from_hubspot(email=email, name=name)
-            if hs.get("ok") and hs.get("found"):
-                lines.append("")
-                lines.append(hs.get("kory_message", ""))
-        except Exception:
-            pass
+        hs = enrich_prebrief_from_hubspot(email=email, name=name)
+        if hs.get("ok") and hs.get("found"):
+            found_contact = True
+            lines.append("")
+            lines.append(hs.get("kory_message", ""))
+        elif hs.get("ok"):
+            lines.append("_Not in HubSpot._")
+    except Exception:
+        pass
 
     research_block = ""
     if include_research and (name or email):
@@ -246,6 +254,7 @@ def build_prebrief(
         "ok": True,
         "attendee_email": email or None,
         "attendee_name": name or None,
+        "found_contact": found_contact,
         "introducer": intro.__dict__ if intro else None,
         "kory_message": "\n".join(lines),
     }
@@ -400,15 +409,32 @@ def _format_event_time(raw: Any, tz: ZoneInfo) -> str:
 
 
 def _guess_external_attendee(event: dict[str, Any]) -> tuple[str, str]:
-    attendees = event.get("attendees") or []
-    for addr in attendees:
-        low = str(addr).lower()
+    """First non-IFG attendee as (email, display name).
+
+    Graph returns attendees as {"emailAddress": {"address", "name"}}; the older
+    string handling is kept for any caller that passes plain addresses. Returns
+    empty strings when no outside attendee can be identified — the meeting
+    subject is NOT a person's name, and passing it as one produced lookups like
+    "Teams Call – James Phifer (ACCU Inc) | Matt Maley & Kory Mitchell (IFG)"
+    that could never match a contact.
+    """
+    for attendee in event.get("attendees") or []:
+        address = ""
+        display = ""
+        if isinstance(attendee, dict):
+            email_address = attendee.get("emailAddress") or {}
+            address = str(email_address.get("address") or "").strip()
+            display = str(email_address.get("name") or "").strip()
+        else:
+            address = str(attendee).strip()
+        low = address.lower()
+        if not low or "@" not in low:
+            continue
         if _is_from_kory(low):
             continue
         if "iconicfounders" in low or "ifg.vc" in low:
             continue
-        if "@" in low:
-            local = low.split("@", 1)[0].replace(".", " ").title()
-            return low, local
-    subject = str(event.get("subject") or "")
-    return "", subject.split("—")[0].strip() or subject.split("-")[0].strip()
+        if display and "@" not in display:
+            return low, display
+        return low, low.split("@", 1)[0].replace(".", " ").title()
+    return "", ""
