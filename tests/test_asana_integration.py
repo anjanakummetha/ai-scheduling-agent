@@ -22,6 +22,26 @@ def test_today_is_kept():
     assert normalize_due_on(today) == today
 
 
+def test_recent_past_dates_are_not_thrown_a_year_forward():
+    """A task due yesterday must not silently become due next year.
+
+    The MT reference and the local date differ across midnight, so "today" was
+    landing a year out — with Asana live writes on."""
+    from datetime import timedelta
+
+    for days in (1, 3, 14):
+        recent = (date.today() - timedelta(days=days)).isoformat()
+        assert normalize_due_on(recent) == recent, f"{days}d ago must be left alone"
+
+
+def test_clearly_stale_dates_still_roll_forward():
+    """The original bug: "August 3" resolved to last year."""
+    from datetime import timedelta
+
+    stale = (date.today() - timedelta(days=300)).isoformat()
+    assert normalize_due_on(stale) > date.today().isoformat()
+
+
 def test_unparseable_input_is_not_mangled():
     """Truncating to 10 chars turned "next friday" into "next frida"."""
     assert normalize_due_on("next friday") == "next friday"

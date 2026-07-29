@@ -106,6 +106,18 @@ def gather_relationship_context(email: str, name: str = "") -> dict[str, Any]:
     }
 
 
+def _humanize_name(raw: str) -> str:
+    """"mia.platon" -> "Mia Platon". Introducers often resolve to a local-part."""
+    text = str(raw or "").strip()
+    if not text or " " in text:
+        return text
+    text = text.split("@", 1)[0]
+    parts = [p for p in re.split(r"[._-]+", text) if p]
+    if not parts:
+        return text
+    return " ".join(part.capitalize() if part.islower() else part for part in parts)
+
+
 def _light_hubspot(email: str, name: str) -> dict[str, Any]:
     """One line of CRM context — not the headline.
 
@@ -150,7 +162,9 @@ def _research(name: str, email: str, company: str) -> dict[str, Any]:
             company=company,
             email=email,
             include_inbox=False,
-            include_news=True,
+            # News is a second search for ~4s and rarely earns its place in the
+            # brief; the background answer already carries what Kory needs.
+            include_news=False,
         )
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -243,7 +257,11 @@ def build_precall_brief(
             sender=str(first.get("from") or name),
         )
         if info and (info.name or "").strip():
-            introducer = {"name": info.name, "email": info.email, "source": info.source}
+            introducer = {
+                "name": _humanize_name(info.name),
+                "email": info.email,
+                "source": info.source,
+            }
     except Exception:
         introducer = None
 
@@ -357,43 +375,178 @@ def _format_brief(
     return "\n".join(lines).strip()
 
 
-def build_precall_briefs_for_today() -> dict[str, Any]:
-    """A brief per external meeting today; internal meetings are skipped."""
-    from app.assistant.briefings import _guess_external_attendee, build_today_calendar_brief
+_IFG_DOMAINS = ("iconicfounders.com", "ifg.vc")
+_MAX_ATTENDEES = 4
+
+
+def _attendee_pairs(event: dict[str, Any]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for attendee in event.get("attendees") or []:
+        if isinstance(attendee, dict):
+            email_address = attendee.get("emailAddress") or {}
+            address = str(email_address.get("address") or "").strip()
+            display = str(email_address.get("name") or "").strip()
+        else:
+            address, display = str(attendee).strip(), ""
+        if address:
+            pairs.append((address.lower(), display))
+    return pairs
+
+
+def external_attendees(event: dict[str, Any]) -> list[tuple[str, str]]:
+    """Every outside attendee on an invite as (email, display name).
+
+    Colleagues sometimes appear twice on one invite — once on their IFG address
+    and once on a personal one. Matching on domain alone briefed a teammate as
+    an outside guest, so anyone whose name also appears on an IFG address is
+    treated as internal.
+    """
+    from app.assistant.briefings import _is_from_kory
+
+    pairs = _attendee_pairs(event)
+    internal_names = {
+        display.strip().lower()
+        for address, display in pairs
+        if display.strip() and any(domain in address for domain in _IFG_DOMAINS)
+    }
+
+    people: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for address, display in pairs:
+        if "@" not in address or address in seen:
+            continue
+        if _is_from_kory(address) or any(domain in address for domain in _IFG_DOMAINS):
+            continue
+        if display.strip().lower() in internal_names:
+            continue  # same colleague on a personal address
+        seen.add(address)
+        if display and "@" not in display:
+            people.append((address, display))
+        else:
+            people.append((address, address.split("@", 1)[0].replace(".", " ").title()))
+    return people
+
+
+def todays_meetings() -> list[dict[str, Any]]:
+    from app.assistant.briefings import build_today_calendar_brief
 
     cal = build_today_calendar_brief()
-    if not cal.get("ok"):
-        return cal
-    events = cal.get("events") or []
+    return (cal.get("events") or []) if cal.get("ok") else []
 
-    sections: list[str] = []
-    internal = 0
-    for event in events[:6]:
-        attendee_email, attendee_name = _guess_external_attendee(event)
-        if not (attendee_email or attendee_name):
-            internal += 1
-            continue
-        brief = build_precall_brief(
-            name=attendee_name,
-            email=attendee_email,
-            meeting_subject=str(event.get("subject") or ""),
-            meeting_time=_event_time(event),
-        )
-        if brief.get("ok"):
-            sections.append(brief["kory_message"])
 
+def list_todays_meetings() -> dict[str, Any]:
+    """Fast list of today's meetings so Kory can pick one — no research."""
+    events = todays_meetings()
+    if not events:
+        return {"ok": True, "count": 0, "kory_message": "_No meetings on your calendar today._"}
+
+    lines = ["**Today's meetings** — say `prebrief <meeting>` for a full brief\n"]
+    briefable = 0
+    for event in events:
+        subject = str(event.get("subject") or "(no title)")
+        when = _event_time(event)
+        guests = external_attendees(event)
+        if guests:
+            briefable += 1
+            who = ", ".join(name for _, name in guests[:3])
+            lines.append(f"• **{when}** — {subject} _(with {who})_")
+        else:
+            lines.append(f"• **{when}** — {subject} _(internal)_")
+    if not briefable:
+        lines.append("\n_No external attendees today._")
+    return {"ok": True, "count": len(events), "briefable": briefable, "kory_message": "\n".join(lines)}
+
+
+def _match_meeting(query: str, events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Find a meeting by subject words, attendee name, or 'next'."""
+    text = query.strip().lower()
+    if not text:
+        return None
+    if text in {"next", "next meeting", "my next meeting"}:
+        return events[0] if events else None
+
+    best = None
+    best_score = 0
+    words = [w for w in re.split(r"\W+", text) if len(w) > 2]
+    for event in events:
+        haystack = str(event.get("subject") or "").lower()
+        for guest_email, guest_name in external_attendees(event):
+            haystack += f" {guest_name.lower()} {guest_email.lower()}"
+        score = sum(1 for word in words if word in haystack)
+        if score > best_score:
+            best, best_score = event, score
+    # Require a real overlap, not one incidental word.
+    return best if best_score >= max(1, len(words) // 2) else None
+
+
+def build_meeting_brief(query: str) -> dict[str, Any]:
+    """Brief every external attendee on one meeting, researched in parallel."""
+    events = todays_meetings()
+    if not events:
+        return {"ok": True, "kory_message": "_No meetings on your calendar today._"}
+
+    event = _match_meeting(query, events)
+    if event is None:
+        listing = list_todays_meetings()
+        return {
+            "ok": True,
+            "matched": False,
+            "kory_message": f"_No meeting today matches \"{query}\"._\n\n"
+            + listing.get("kory_message", ""),
+        }
+
+    subject = str(event.get("subject") or "Meeting")
+    when = _event_time(event)
+    guests = external_attendees(event)[:_MAX_ATTENDEES]
+    if not guests:
+        return {
+            "ok": True,
+            "matched": True,
+            "kory_message": f"**{subject}**{(' · ' + when) if when else ''}\n\n"
+            "_Internal meeting — no outside attendees to brief._",
+        }
+
+    # Each brief is ~12s of network I/O, so run them together rather than
+    # serially: a three-person meeting used to blow past the chat timeout.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(person: tuple[str, str]) -> dict[str, Any]:
+        guest_email, guest_name = person
+        try:
+            return build_precall_brief(
+                name=guest_name,
+                email=guest_email,
+                meeting_subject=subject,
+                meeting_time=when,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "name": guest_name}
+
+    with ThreadPoolExecutor(max_workers=min(4, len(guests))) as pool:
+        results = list(pool.map(_one, guests))
+
+    sections = [r["kory_message"] for r in results if r.get("ok") and r.get("kory_message")]
+    failed = [r for r in results if not r.get("ok")]
     if not sections:
-        note = "_No external meetings today"
-        note += f" ({internal} internal)._" if internal else "._"
-        return {"ok": True, "count": 0, "kory_message": f"**Pre-call briefs — today**\n\n{note}"}
+        return {
+            "ok": False,
+            "matched": True,
+            "kory_message": f"Couldn't build briefs for **{subject}**.",
+        }
 
-    header = f"**Pre-call briefs — today** ({len(sections)} external)\n"
-    footer = f"\n_{internal} internal meeting(s) not briefed._" if internal else ""
+    header = f"**{subject}**" + (f" · {when}" if when else "")
+    if len(sections) > 1:
+        header += f" — {len(sections)} attendees"
+    body = "\n\n---\n\n".join(sections)
+    footer = ""
+    if failed:
+        names = ", ".join(str(f.get("name") or "?") for f in failed)
+        footer = f"\n\n_Couldn't brief: {names}._"
     return {
         "ok": True,
-        "count": len(sections),
-        "internal_count": internal,
-        "kory_message": header + "\n\n---\n\n".join(sections) + footer,
+        "matched": True,
+        "attendee_count": len(sections),
+        "kory_message": f"{header}\n\n{body}{footer}",
     }
 
 

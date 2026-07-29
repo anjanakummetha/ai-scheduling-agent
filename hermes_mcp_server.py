@@ -311,15 +311,28 @@ def lexi_today_calendar() -> str:
 
 @mcp.tool()
 def lexi_prebrief(include_research: str = "false") -> str:
-    """Pre-call briefs for every external meeting on Kory's calendar today.
+    """List today's meetings so Kory can choose one to be briefed on. Fast.
 
-    Each brief covers who they are and what they do (web research), how Kory
-    knows them (his own email history), who introduced them, and the angle for
-    the call. Internal-only meetings are skipped. Teams shortcut: `prebrief`.
-
-    For one specific person, use lexi_precall_brief instead.
+    Shows each meeting with its external attendees. Does NOT research anyone —
+    call lexi_meeting_brief or lexi_precall_brief once he names one. Teams
+    shortcut: `prebrief`.
     """
     return _wrap("lexi_prebrief", lexi.prebrief_action)
+
+
+@mcp.tool()
+def lexi_meeting_brief(meeting: str) -> str:
+    """Full pre-call brief on EVERY external attendee of one meeting.
+
+    Triggers: "prebrief my 2pm", "brief me on the ACCU call", "who am I meeting
+    with at 3 and what should I know", "prep me for my next meeting".
+
+    Accepts part of the meeting subject, an attendee's name, or "next". Takes
+    ~15 seconds per attendee, so it is scoped to one meeting rather than the
+    whole day. For a person who is not on today's calendar, use
+    lexi_precall_brief.
+    """
+    return _wrap("lexi_meeting_brief", lexi.meeting_brief_action, meeting=meeting)
 
 
 @mcp.tool()

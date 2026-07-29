@@ -882,17 +882,19 @@ def today_calendar_brief_action() -> dict[str, Any]:
 
 
 def prebrief_action(*, include_research: bool = False) -> dict[str, Any]:
-    """Pre-call briefs for today's external meetings.
+    """Today's meetings, listed so Kory can pick one to brief.
 
-    include_research is accepted for backwards compatibility and ignored —
-    research and introducer are always part of a pre-call brief now.
+    Briefing every meeting meant ~15s of research per attendee and blew past the
+    chat timeout — and the dashboard already emails him the day's package. This
+    stays instant; the research happens once he names a meeting or a person.
     """
-    from app.assistant.precall_brief import build_precall_briefs_for_today
+    from app.assistant.precall_brief import list_todays_meetings
 
-    return build_precall_briefs_for_today()
+    return list_todays_meetings()
 
 
 def precall_brief_action(*, person: str = "") -> dict[str, Any]:
+    """Full brief on one person, by name or email."""
     from app.assistant.precall_brief import build_precall_brief
 
     who = (person or "").strip()
@@ -900,6 +902,16 @@ def precall_brief_action(*, person: str = "") -> dict[str, Any]:
         return {"ok": False, "error": "person required", "kory_message": "Who should I brief you on?"}
     is_email = "@" in who
     return build_precall_brief(name="" if is_email else who, email=who if is_email else "")
+
+
+def meeting_brief_action(*, meeting: str = "") -> dict[str, Any]:
+    """Full brief on every external attendee of one meeting."""
+    from app.assistant.precall_brief import build_meeting_brief, list_todays_meetings
+
+    query = (meeting or "").strip()
+    if not query:
+        return list_todays_meetings()
+    return build_meeting_brief(query)
 
 
 

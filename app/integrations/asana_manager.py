@@ -602,6 +602,11 @@ def complete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: boo
     }
 
 
+# Anything staler than this is treated as a wrong-year resolution, not a
+# deliberate past date.
+_DUE_DATE_GRACE_DAYS = 30
+
+
 def normalize_due_on(value: str) -> str:
     """Keep a due date from landing in the past.
 
@@ -619,6 +624,14 @@ def normalize_due_on(value: str) -> str:
     today = datetime.now(tz=MT).date()
     if parsed >= today:
         return parsed.isoformat()
+
+    # Only a clearly stale date is a wrong-year artifact. A date that is barely
+    # past is far more likely to be today read from a different timezone, or a
+    # deliberate "due yesterday" — and silently moving either a full year out is
+    # much worse than leaving it alone.
+    if (today - parsed).days <= _DUE_DATE_GRACE_DAYS:
+        return parsed.isoformat()
+
     for bump in (1, 2):
         try:
             shifted = parsed.replace(year=parsed.year + bump)

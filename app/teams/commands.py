@@ -243,20 +243,30 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
         return {"ok": True, "handled": True, "message": brief.get("kory_message", "")}
 
     if action == "prebrief":
-        from app.assistant.precall_brief import build_precall_briefs_for_today
+        from app.assistant.precall_brief import list_todays_meetings
 
-        brief = build_precall_briefs_for_today()
-        return {"ok": True, "handled": True, "message": brief.get("kory_message", "")}
+        listing = list_todays_meetings()
+        return {"ok": True, "handled": True, "message": listing.get("kory_message", "")}
 
     if action == "prebrief_person":
-        from app.assistant.precall_brief import build_precall_brief
+        from app.assistant.precall_brief import (
+            build_meeting_brief,
+            build_precall_brief,
+            todays_meetings,
+            _match_meeting,
+        )
 
         who = str(command.get("who") or "").strip()
-        is_email = "@" in who
-        brief = build_precall_brief(
-            name="" if is_email else who,
-            email=who if is_email else "",
-        )
+        # A meeting on today's calendar wins: "prebrief the ACCU call" should
+        # cover everyone in the room, not just the first attendee.
+        if "@" not in who and _match_meeting(who, todays_meetings()) is not None:
+            brief = build_meeting_brief(who)
+        else:
+            is_email = "@" in who
+            brief = build_precall_brief(
+                name="" if is_email else who,
+                email=who if is_email else "",
+            )
         return {
             "ok": bool(brief.get("ok")),
             "handled": True,

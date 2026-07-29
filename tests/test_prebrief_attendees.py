@@ -159,3 +159,74 @@ def test_brief_requires_someone_to_brief():
     from app.assistant.precall_brief import build_precall_brief
 
     assert build_precall_brief()["ok"] is False
+
+
+# --- meeting scope: cost and colleagues ------------------------------------
+
+
+def test_colleague_on_a_personal_address_is_not_an_outside_guest():
+    """Sujash appears twice on one invite — IFG address and UC Davis."""
+    from app.assistant.precall_brief import external_attendees
+
+    event = {
+        "attendees": [
+            _graph_attendee("Kory.Mitchell@iconicfounders.com", "Kory Mitchell"),
+            _graph_attendee("sujash.barman@iconicfounders.com", "Sujash Barman"),
+            _graph_attendee("sjbarman@ucdavis.edu", "Sujash Barman"),
+            _graph_attendee("nick.allen.cse@gmail.com", "Nick Allen"),
+        ]
+    }
+    assert external_attendees(event) == [("nick.allen.cse@gmail.com", "Nick Allen")]
+
+
+def test_every_outside_attendee_is_returned_not_just_the_first():
+    from app.assistant.precall_brief import external_attendees
+
+    event = {
+        "attendees": [
+            _graph_attendee("kory.mitchell@iconicfounders.com", "Kory Mitchell"),
+            _graph_attendee("a@outside.com", "Ann Alpha"),
+            _graph_attendee("b@other.com", "Bob Beta"),
+        ]
+    }
+    assert external_attendees(event) == [
+        ("a@outside.com", "Ann Alpha"),
+        ("b@other.com", "Bob Beta"),
+    ]
+
+
+def test_bare_prebrief_lists_meetings_without_researching_anyone():
+    """Briefing the whole day cost ~15s per attendee and timed out."""
+    from app.assistant import precall_brief as pb
+
+    events = [
+        {"subject": "Intro call", "start": {"dateTime": "2026-07-29T14:00:00"},
+         "attendees": [_graph_attendee("x@outside.com", "Ex Ternal")]},
+        {"subject": "Team sync", "start": {"dateTime": "2026-07-29T10:00:00"},
+         "attendees": [_graph_attendee("k@iconicfounders.com", "Kory Mitchell")]},
+    ]
+    with patch.object(pb, "todays_meetings", return_value=events):
+        with patch.object(pb, "build_precall_brief") as brief:
+            out = pb.list_todays_meetings()
+    brief.assert_not_called()
+    assert out["briefable"] == 1
+    assert "Intro call" in out["kory_message"]
+    assert "internal" in out["kory_message"]
+
+
+def test_meeting_match_falls_back_to_the_listing_when_nothing_matches():
+    from app.assistant import precall_brief as pb
+
+    events = [{"subject": "Intro call", "start": {"dateTime": "2026-07-29T14:00:00"}, "attendees": []}]
+    with patch.object(pb, "todays_meetings", return_value=events):
+        out = pb.build_meeting_brief("something unrelated entirely")
+    assert out["matched"] is False
+    assert "No meeting today matches" in out["kory_message"]
+
+
+def test_introducer_local_part_is_rendered_as_a_name():
+    from app.assistant.precall_brief import _humanize_name
+
+    assert _humanize_name("mia.platon") == "Mia Platon"
+    assert _humanize_name("heidi_heckler@x.com") == "Heidi Heckler"
+    assert _humanize_name("Matt Maley") == "Matt Maley"
