@@ -239,13 +239,18 @@ def _create_asana_task(*, title: str, notes: str, section: str = "") -> dict[str
         }
 
     try:
-        task_id, log_id = _create_task_via_composio(title=title, notes=notes, section=section)
+        task_id, log_id, placed_gid = _create_task_via_composio(
+            title=title, notes=notes, section=section
+        )
         return {
             "ok": bool(task_id),
             "task_id": task_id,
             "title": title,
             "notes": notes,
-            "board": ASANA_BOARD_NAME,
+            # The board the task actually landed on. This used to report a
+            # constant, so a task filed under Personal was announced as
+            # Reservation Reminders.
+            "board": _section_name_for_gid(placed_gid) or "(unfiled)",
             "simulated": False,
             "composio_log_id": log_id,
             "error": None if task_id else "Composio returned no task id.",
@@ -328,7 +333,7 @@ def _should_simulate_asana() -> bool:
 
 def _create_task_via_composio(
     *, title: str, notes: str, section: str = ""
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, str]:
     project_gid = settings.asana_project_gid
     if not project_gid:
         raise RuntimeError("ASANA_PROJECT_GID is not configured.")
@@ -342,12 +347,12 @@ def _create_task_via_composio(
     }
     result = execute_asana_tool(ASANA_CREATE_TOOL, arguments)
     if result.get("dry_run"):
-        return f"asana-dry-run-{uuid.uuid4().hex[:12]}", result.get("log_id")
+        return f"asana-dry-run-{uuid.uuid4().hex[:12]}", result.get("log_id"), ""
     task_id = _extract_task_id(result.get("data"))
     if not task_id:
         raise RuntimeError("Composio Asana create returned no task id.")
-    _add_task_to_section_if_configured(task_id, section)
-    return task_id, result.get("log_id")
+    placed_gid = _add_task_to_section_if_configured(task_id, section)
+    return task_id, result.get("log_id"), placed_gid
 
 
 _SECTION_CACHE: dict[str, list[dict[str, str]]] = {}
@@ -424,10 +429,19 @@ def resolve_task_gid(task: str) -> str:
     return raw
 
 
-def _add_task_to_section_if_configured(task_gid: str, section: str = "") -> None:
+def _section_name_for_gid(section_gid: str) -> str:
+    if not section_gid:
+        return ""
+    for row in list_project_sections():
+        if row["gid"] == section_gid:
+            return row["name"]
+    return ""
+
+
+def _add_task_to_section_if_configured(task_gid: str, section: str = "") -> str:
     section_gid = resolve_section_gid(section) if section.strip() else settings.asana_section_gid
     if not section_gid:
-        return
+        return ""
     try:
         execute_asana_tool(
             "ASANA_ADD_TASK_TO_SECTION",
@@ -436,8 +450,10 @@ def _add_task_to_section_if_configured(task_gid: str, section: str = "") -> None
                 "section_gid": section_gid,
             },
         )
+        return section_gid
     except Exception:
-        pass
+        logger.debug("Could not file task %s under section %s.", task_gid, section_gid)
+        return ""
 
 
 def _extract_task_id(data: Any) -> str | None:
@@ -452,7 +468,7 @@ def _extract_task_id(data: Any) -> str | None:
     return None
 
 
-TaskBucket = Literal["overdue", "due_today", "upcoming", "all"]
+TaskBucket = Literal["overdue", "due_today", "upcoming", "all", "completed"]
 
 TASK_FIELDS = ["name", "completed", "due_on", "notes", "assignee", "assignee.name"]
 
@@ -907,6 +923,11 @@ def _filter_tasks_by_bucket(tasks: list[dict[str, Any]], *, bucket: TaskBucket) 
     from datetime import date
 
     today = date.today().isoformat()
+    if bucket == "completed":
+        # Asana hides these from active views; Kory still needs to see them.
+        done = [t for t in tasks if t.get("completed")]
+        done.sort(key=lambda t: str(t.get("due_on") or ""), reverse=True)
+        return done
     active = [t for t in tasks if not t.get("completed")]
     if bucket == "all":
         return active

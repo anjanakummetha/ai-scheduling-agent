@@ -190,3 +190,38 @@ def test_personal_project_counts_as_korys(monkeypatch):
     assert am.is_korys_task({"assignee": None}, project_gid="personal") is True
     assert am.is_korys_task({"assignee": None}, project_gid="shared") is False
     assert am.is_korys_task({"assignee": "Kory Mitchell"}, project_gid="shared") is True
+
+
+def test_completed_bucket_returns_finished_work():
+    """"Show me my completed tasks" had no bucket to answer from — every view
+    filtered to incomplete, so finished work was unreachable."""
+    from app.integrations.asana_manager import _filter_tasks_by_bucket
+
+    tasks = [
+        {"name": "done", "completed": True, "due_on": "2026-08-01"},
+        {"name": "open", "completed": False, "due_on": "2026-08-01"},
+    ]
+    assert [t["name"] for t in _filter_tasks_by_bucket(tasks, bucket="completed")] == ["done"]
+    assert [t["name"] for t in _filter_tasks_by_bucket(tasks, bucket="all")] == ["open"]
+
+
+def test_create_reports_the_board_it_actually_used(monkeypatch):
+    """A task filed under Personal was announced as "Reservation Reminders"
+    because the response returned a constant instead of the real section."""
+    import app.integrations.asana_manager as am
+
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(
+        am, "settings", type("S", (), {"asana_project_gid": "p1", "asana_section_gid": ""})()
+    )
+    monkeypatch.setattr(am, "resolve_section_gid", lambda section, project_gid="": "sec-personal")
+    monkeypatch.setattr(am, "list_project_sections", lambda project_gid="": [
+        {"gid": "sec-personal", "name": "Personal"},
+        {"gid": "sec-resv", "name": "Reservation Reminders"},
+    ])
+    monkeypatch.setattr(am, "execute_asana_tool", lambda slug, args: (
+        {"data": {"data": {"gid": "9"}}} if slug == "ASANA_CREATE_A_TASK" else {"data": {}}
+    ))
+
+    result = am._create_asana_task(title="T", notes="N", section="Personal")
+    assert result["board"] == "Personal", result

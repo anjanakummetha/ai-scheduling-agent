@@ -365,7 +365,7 @@ def lexi_list_asana_boards() -> str:
 
 @mcp.tool()
 def lexi_list_asana_tasks(bucket: str = "due_today", who: str = "kory") -> str:
-    """List Asana tasks: overdue | due_today | upcoming | all (read-only).
+    """List Asana tasks: overdue | due_today | upcoming | all | completed (read-only).
 
     Defaults to Kory's own tasks. Shared boards hold other people's work, so
     pass who='all' only when he asks about the team — and say whose a task is
