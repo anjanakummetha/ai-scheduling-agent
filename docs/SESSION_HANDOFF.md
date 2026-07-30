@@ -1,108 +1,121 @@
-# Lexi Production Deployment — Session Handoff (2026-07-24)
+# Lexi + CEO Dashboard — Session Handoff (updated 2026-07-30)
 
-Lexi (AI executive assistant for Kory Mitchell) + the CEO Dashboard were **deployed to production and verified live** this session. The full scheduling pipeline is proven working; live sends are currently dialed back OFF pending four bug fixes that are implemented locally but not yet deployed.
+**Resume phrase:** *"test the scheduling email + Outlook features end to end."*
+
+Two repos, one box:
+- **Lexi** `~/AI_Scheduling_Agent` → `/home/lexi/AI_Scheduling_Agent` (services `lexi-hermes`, `lexi-api`)
+- **Dashboard** `CEO_Executive_Dashboard--main/` (its own git repo, gitignored by the outer one) → `/opt/ceo-dashboard` (service `ceo-dashboard`, branch `deploy-prep-phase1`)
+
+`srv1686061.hstgr.cloud` is **multi-tenant** — never reboot it, never restart another tenant's units.
 
 ---
 
-## 1. CURRENT PRODUCTION STATE (as of end of session)
+## 1. NEXT UP — scheduling email / Outlook features
 
-**Everything is deployed, live, and safe.** Lexi runs in a **sends-CLOSED posture** (reads/triages/drafts/briefs; no live email sends or calendar holds until re-enabled).
+This is the priority and the only thing between Lexi and daily use. **Lifetime proposals: `no_reply_needed` 4,242 · `rejected` 6 · `executed` 1.** Triage works; the execution half has never had one clean loop.
 
-| Component | Where | State |
-|---|---|---|
-| Lexi worker + Teams gateway | `lexi-hermes.service` (combined: worker :8780 + hermes gateway :3978) | ✅ live, healthy |
-| Read-only API (dashboard data) | `lexi-api.service` :8081 | ✅ live |
-| CEO Dashboard | `ceo-dashboard.service` :3000 (Node 20 static at `/opt/node20`) | ✅ live |
-| Watchdog (5-min health) + hourly DB backup | `lexi-watchdog.timer`, `lexi-backup.timer` | ✅ active |
-| Public routing / TLS | Sujash's **Traefik** via `/docker/traefik/dynamic/lexi.yml` (one added file) | ✅ valid Let's Encrypt |
+### Three blockers, in order
+1. **Teams card buttons are dead.** The Hermes gateway (`hermes_cli/gateway.py`, `microsoft_teams` SDK) has no Adaptive Card `Action.Submit` handling, so taps get a conversational reply and `handle_teams_card_submit` never runs. Confirmed repeatedly. Agreed direction: `LEXI_TEAMS_TEXT_ONLY=true` + execution-backed confirmations (only claim success when a tool returned success). **Not implemented.**
+2. **A plain "Reply" is invisible.** Mail goes out from lexi@, so a normal Reply lands only in Lexi's mailbox, which nothing ingests (`LEXI_POLL_LEXI_MAILBOX=false`, deliberately). Guests must Reply All today — they won't.
+3. **Stale conclusions without calling a tool** — Lexi has insisted a thread wasn't visible while describing an offer she'd already sent. SOUL.md rules added; never stress-tested on the scheduling path.
 
-- **Public URL:** `https://srv1686061.hstgr.cloud` → dashboard; `/api/messages` → Teams gateway; `/webhooks/composio` → worker.
-- **Dashboard login:** username `kory` / password `KoryLexi2026`.
-- **Lexi code:** `/home/lexi/AI_Scheduling_Agent` — now a **git checkout of `main`** (6434c62). Runs as user `lexi`.
-- **DB:** `/home/lexi/AI_Scheduling_Agent/data/lexi.db` — **WAL mode enabled** this session (fixes lock contention).
+### Also open on scheduling
+- Approval cards go stale (`teams_approval_notified_at` never re-pushed; the card carries its own draft copy, so approving a stale card overwrites the good draft).
+- The Teams push claims delivery before delivering — a failed delivery is silently permanent.
+- A transient send failure parks a proposal in `needs_kory` with no retry path from Teams.
+- Holds are created `showAs=busy`, not tentative.
+- Hold/event titles use the mashed name ("Intro: Anjanakummetha <> Kory Mitchell").
 
-**Live safety posture (in `/home/lexi/AI_Scheduling_Agent/.env`):**
+### Untested scheduling paths
+Hold reminder before release (E-3), expiry release (E-4), Friday cleanup (E-5), counter-proposal to a **busy** time (H-4 — safety-critical, must ask, never auto-book), reject-all → re-offer (H-5), vague reply (H-6), thread-context retention (H-7), 24h nudge (M-1). Closed-posture: escalation when nothing fits (I-1/I-2), email-to-Lexi commands (J-1/J-2/J-3), `remember` in Teams (K-1), Kory-voice drafting (L-1/L-2). Plan: `docs/SCHEDULING_LIVE_TEST_PLAN.md`.
+
+Test mail comes from **anjanakummetha@gmail.com** (the only address available). G-1 (unknown-TZ disclosure) isn't testable from it — its Date header reveals MT.
+
+---
+
+## 2. CURRENT PRODUCTION STATE
+
 ```
-LEXI_ENV=production
-LEXI_WRITE_MODE=kory
-LEXI_DRY_RUN=false
-LEXI_KORY_SPACE_READ_ONLY=false     # calendar-hold capability on...
-LEXI_KORY_OUTBOUND_BLOCKED=true     # ...but sends BLOCKED (holds are coupled to send, so nothing writes)
-LEXI_REQUIRE_KORY_APPROVAL=true
-LEXI_ALLOW_IMMEDIATE_SEND=false
-LEXI_AUTO_EXECUTE_ENABLED=false
-LEXI_HEIDI_ESCALATION_ENABLED=false
-# Asana/HubSpot/outreach live-writes all false
+LEXI_ENV=production           LEXI_WRITE_MODE=kory        LEXI_DRY_RUN=false
+LEXI_KORY_OUTBOUND_BLOCKED=false    ← real sends possible
+LEXI_REQUIRE_KORY_APPROVAL=true     ← nothing sends without approval
+LEXI_ASANA_LIVE_WRITES_ENABLED=true      ← ON (Kory NON-IFG only)
+LEXI_HUBSPOT_LIVE_WRITES_ENABLED=false   ← OFF
+LEXI_HUBSPOT_BCC_ENABLED=false           ← OFF until the scheduler is done
+LEXI_TEAMS_TEXT_ONLY=false               ← still using cards
+LEXI_ORCHESTRATOR_BACKUP_POLL_MINUTES=5  ← test-window value (was 30)
 ```
-On-server env backups: `.env.closed-backup`, `.env.rung1-backup`, `.env.closed-posture-*`, `.env.pre-redeploy-*`.
+398 Lexi tests pass (~4s, nothing deselected). Dashboard: `tsc`, `eslint`, `next build`, read-only guard, `npm run test:email` all clean.
 
 ---
 
-## 2. KEY FACTS DISCOVERED (differed from the prior handoff)
+## 3. WHAT SHIPPED THIS SESSION
 
-- **The "stale June build" was actually LIVE at Rung 3** on Kory's real accounts (WRITE_MODE=kory, DRY_RUN=false, outbound unblocked), running ~3 days — NOT read-only/harmless as the prior handoff claimed. Brought to closed posture during redeploy.
-- **The VPS is multi-tenant.** It also hosts **Sujash's** (`barmansujash4@` on the Tailscale net) work: a Hostinger "Hermes Agent" Docker container, a separate `/opt/hermes` gateway, an IFG-wide dashboard, **Traefik** (owns 80/443), and Tailscale. The user owns Lexi; Sujash owns the surrounding infra. Deploy was done to **coexist** — Sujash's components untouched.
-- **Architecture on the box** ≠ the repo's `deploy/` split-unit design. It uses the **combined** `hermes gateway run` + `hermes_mcp_server.py` model at `/home/lexi/AI_Scheduling_Agent` (NOT `/opt/lexi`, NOT Caddy). We updated in place and added `lexi-api` + Traefik route rather than re-architecting.
-- **The local `.env` Anthropic key was unfunded** ("credit balance too low"); the user's funded prod key is now in the server `.env` (verified live on `claude-haiku-4-5` + `claude-sonnet-5`).
-- **Delegation is CC-based**: Lexi actively schedules only when a thread is delegated to it (CC `lexi@iconicfounders.com`), default on (`LEXI_DELEGATION_CC_ONLY=true`). Non-delegation inbound is triaged and deferred to Kory (`no_reply_needed`).
-- **Holds are coupled to Send** in the Teams card ("Holds are placed on Calendar after you send") — so holds-only (Rung 1) isn't reachable via the card; enabling holds requires enabling sends.
+**HubSpot reads fixed** (`6694cbd`→`8ecbeba`). Every read omitted `properties`, so HubSpot returned its 6-field default and company/jobtitle/lifecycle/lead-status/source/last-contacted were empty everywhere. Consequences: outreach fell back to `contacts[:limit]` with **no Do-Not-Contact check anywhere** (62 of Kory's); cleanup read 50 of 2,153 and recommended archiving ~79% of the book. IFG uses a **custom lifecycle pipeline with numeric stage ids**, so the default-name guards matched nothing. Cleanup is now a read-only report; `propose_lead_source_fills` retired (`hs_analytics_source` is OFFLINE for every contact). Writes still off, guards built and tested.
 
-**Connection IDs / addresses (all in server `.env`):** Outlook(Kory) `ca_qORrE-NzPib2`, Lexi mailbox `ca_4BTJ6d0O8sSZ` (lexi@iconicfounders.com), Asana `ca_cISuS3L6HDZn` (project GID 1211141447026980), HubSpot `ca_jdY18Wb0L46M`, LinkedIn `ca_c_o9UMJRZkMe`; Composio entity `Kory`. Composio Outlook trigger `ti_PCV0xB_btFwV`. Teams app id `f284770c-60f5-4bb6-ae15-655baed26a6a`.
+**Pre-call briefs rebuilt** (`d627d11`→`6b9c56a`). `prebrief` lists today instantly; `prebrief <meeting>` researches every external attendee concurrently; `prebrief <person>` works by name or email, looks 30 days ahead, parses dates, and asks when a name is ambiguous. Research + introducer always run — no modes.
 
----
+**4:45 AM briefing email is LIVE** (`4ed8911`, first real send 2026-07-30). Dashboard **composes**, Lexi **sends** — the dashboard cannot send by design (`check-no-write-slugs.mjs` fails its build on any non-read Composio slug). `lexi-morning-briefing.timer` (`America/Denver`, enabled, survives reboot), retry ×3 / 2 min, `OnFailure` → Teams alert. Lexi's own 4:45 Teams push and `briefing` command were removed.
 
-## 3. DECISIONS MADE
-
-- **In-place update, not clean re-deploy** — update the live checkout to latest `main`, keep the proven combined-gateway architecture, add the dashboard + read-only API alongside. Full backups taken first (DB + configs + code tree, on VPS and the Mac).
-- **Coexist with Sujash's stack** — expose via his Traefik with one additive file; never edit his containers/routes; never force-restart the VPS.
-- **Fresh DB** kept (June DB backed up); **WAL enabled** for concurrency.
-- **Enablement ladder walked to approved-sends and proven, then dialed back to closed** while bugs are fixed (user-endorsed "prove once, then dial back").
-- **Every write stays human-approved in Teams** — immediate/auto send never enabled; the approval tap stays the user's action (not automated).
-- **Keys that transited chat** (Anthropic, Composio, dashboard secrets) should be **rotated** — still pending.
+**Dashboard**: Asana now reads all 8 projects filtered to Kory's tasks (was pinned to `Kory NON-IFG`, hiding 20 of 33); tasks grouped board → section; Key Insights and the morning summary rewritten with real criteria; colleagues no longer researched for bios; Lexi Assistant panel removed.
 
 ---
 
-## 4. WHAT WAS PROVEN WORKING (live)
+## 4. BUGS WORTH REMEMBERING — nearly all were confident wrong answers, not errors
 
-Health 200 · Teams bidirectional round-trip (`today` → reply) · email ingestion (webhook + 30-min poll) · dashboard over HTTPS with real data + AI briefing · watchdog + backups · **full delegation → propose (correct Tue slots in Kory's TZ) → approve → real email SENT** to a controlled test address. On Composio timeout mid-send, Lexi correctly bailed with **no partial write** (safety behavior confirmed).
-
----
-
-## 5. BUGS FOUND (fixed locally, NOT yet deployed)
-
-Implemented on branch **`bugfix/live-scheduling`**; hermetic suite passed **308**. Uncommitted, not merged, not deployed. Details in `docs/`-adjacent scratchpad `rung1-bugs-found.md` and memory `lexi-prod-live-state.md`.
-
-1. **Send/hold/status atomicity (most serious):** email sent but holds + status writes failed under SQLite lock → email out, calendar unprotected, status stuck `pending_approval` (duplicate risk). Fix: transition proposal out of pending the instant send succeeds; resilient hold placement; cut excessive calendar-discovery calls. (WAL already mitigates the lock.)
-2. **CC-poll miss:** Kory's delegation replies (CC lexi@ in his Sent folder) not detected (`is_delegation=0`) because `OUTLOOK_GET_MESSAGE`/sent-folder poll didn't fetch CC/To recipients. Fix: fetch ccRecipients/toRecipients through the whole chain.
-3. **Time misparse:** a vague "Tuesday/Wednesday afternoon" reply became a fake "Friday 00:27 MT" conflict ping. Fix: don't fabricate a specific time / conflict when only day/period preferences are present.
-4. **False "Heidi has been flagged":** LLM wording in a Kory-facing message while Heidi escalation is OFF (verified NO email went to Heidi). Fix: prompt instruction + hard scrub of any "Heidi" mention when the gate is off.
+- `normalize_due_on` threw **today's date a year forward** (MT vs local across midnight) — with Asana writes ON.
+- Pipeline `isClosed` arrives as the **string** `"false"`, which is truthy in Python.
+- HubSpot stage-history requests **cap at 50 objects**; asking for 100 failed and was swallowed into "no deals moved" (there were 97).
+- Signature parsing pulled **Kory's own quoted footer** out of reply chains onto other people's records.
+- `today` showed **6:30 AM as 12:30 AM** — Graph sends a naive dateTime beside its zone, already converted; the code assumed naive meant UTC and converted twice. Same command printed attendees as **raw Graph dicts** (a regression from selecting attendees for the prebrief).
+- A **correct, tested tool the model never calls is not a working feature** — "tell me about X" went to inbox search until the tool was renamed and given trigger phrasings.
 
 ---
 
-## 6. ACTION ITEMS / NEXT STEPS (in order)
+## 5. DEPLOY MECHANICS
 
-1. **Review the diff** on `bugfix/live-scheduling`, then commit + push + merge to `main` (agent repo `anjanakummetha/AI_Scheduling_Agent-`). Confirm CI green.
-2. **Deploy fixes to server:** `ssh root@srv1686061.hstgr.cloud`, then as lexi: `cd /home/lexi/AI_Scheduling_Agent && git pull` → `systemctl restart lexi-hermes.service` → verify health.
-3. **Re-test** the delegation → approve → send/hold flow; confirm all four bugs fixed (holds land, status updates, no false conflict, no Heidi mention, Kory-sent delegation detected).
-4. **Re-open approved sends** (`LEXI_KORY_OUTBOUND_BLOCKED=false`) once verified; keep it there for daily use.
-5. **Rotate secrets** that transited chat (Anthropic + Composio keys, dashboard password/token); update server `.env` + dashboard `.env.production`; restart; re-verify.
-6. **Optional:** rebuild Kory voice profile against real Outlook history (`rebuild_voice_profile()`); update `KORY_USER_GUIDE.html` with live URL + login.
+**Lexi:**
+```bash
+ssh -i ~/.ssh/lexi_vps_ed25519 root@srv1686061.hstgr.cloud
+cd /home/lexi/AI_Scheduling_Agent
+G="git -c safe.directory=/home/lexi/AI_Scheduling_Agent"   # dubious-ownership guard
+$G stash push -q data/kory_voice_profile.json; $G fetch origin main -q
+$G merge --ff-only origin/main; $G stash pop -q
+systemctl restart lexi-hermes.service
+```
+
+**Dashboard** (from `CEO_Executive_Dashboard--main/`, node 20):
+```bash
+export PATH=/Users/anjanakummetha/.nvm/versions/node/v20.20.0/bin:$PATH
+rm -rf .next && node_modules/.bin/next build
+rsync -az --exclude '.env*' --exclude 'data/' -e "$SSH" .next/standalone/ root@…:/opt/ceo-dashboard/
+rsync -az --delete                          -e "$SSH" .next/static/    root@…:/opt/ceo-dashboard/.next/static/
+ssh … 'chown -R ceo:ceo /opt/ceo-dashboard/.next && systemctl restart ceo-dashboard.service'
+```
+⚠️ The standalone rsync runs **without `--delete`** (so it can't wipe `data/` or `.next/static`) — **deleted files must be removed on the box by hand**. A stale compiled route survived a deploy this way.
 
 ---
 
-## 7. ACCESS & KEY COMMANDS
+## 6. KEY COMMANDS
 
-- **SSH:** `ssh root@srv1686061.hstgr.cloud` (key `~/.ssh/lexi_vps_ed25519` on the Mac; already installed on the VPS). IP 2.24.111.64.
-- **Health:** `curl -s http://127.0.0.1:8780/api/health` (on the box).
-- **Logs:** app → `/home/lexi/AI_Scheduling_Agent/logs/lexi.log`; gateway → `/home/lexi/.hermes/logs/gateway.log`; `journalctl -u lexi-hermes`.
-- **Posture check:** `LEXI_ENV=production .venv/bin/python -c "import app.config as c,json;print(json.dumps(c.safety_posture_summary()))"`
-- **Enable approved sends (Rung 3):** `sed -i 's|^LEXI_KORY_OUTBOUND_BLOCKED=.*|LEXI_KORY_OUTBOUND_BLOCKED=false|' .env && systemctl restart lexi-hermes.service`
-- **Rollback:** `cp .env.closed-backup .env && systemctl restart lexi-hermes.service` (or restore DB via `deploy/restore_lexi_db.sh`).
-- **Teams commands:** `today`, `brief`, `pending`, then `send`/`approve #N` to approve. Delegation trigger = CC `lexi@iconicfounders.com` on a scheduling thread.
-- **Backups:** on VPS `/home/lexi/backups/`; copies on Mac scratchpad `vps-backup-20260723-pre-redeploy/`.
+```bash
+# Lexi
+.venv/bin/python -m pytest tests/ -q -p no:cacheprovider
+.venv/bin/python scripts/morning_briefing_email.py --dry-run     # briefing without sending
+systemctl list-timers lexi-morning-briefing.timer
+journalctl -u lexi-morning-briefing.service -n 50
+
+# Dashboard
+npm run test:no-write-slugs && npm run test:email
+```
 
 ---
 
-## 8. NET STATUS
+## 7. STANDING RULES
 
-Lexi + CEO Dashboard are **deployed, live, HTTPS, and safe**, coexisting cleanly with Sujash's stack. The end-to-end assistant pipeline is **proven**. Four rough edges from live UAT are **fixed and tested locally, awaiting review → deploy → re-test → re-open sends**. Resume phrase for next session: **"finish the Lexi bug-fix deploy."**
+- Never touch Kory's real surfaces without asking. Sandbox/Lexi-mailbox writes are pre-authorised.
+- **HubSpot stays off the dashboard** — it's on his larger IFG board. Don't re-propose it.
+- **Don't sync meeting data** between the dashboard and Lexi; one owner per capability.
+- Asana writes stay on **Kory NON-IFG**; reads span all projects; changing someone else's task needs an acknowledgement naming them.
+- **Verify against the live API, not the chat.** Almost every defect this month produced a plausible wrong answer rather than an error.
+- Secrets that transited chat still need rotation. Local `.env` Anthropic keys are stale — prod has the working ones.
