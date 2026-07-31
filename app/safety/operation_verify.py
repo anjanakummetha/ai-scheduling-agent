@@ -52,7 +52,7 @@ def verify_draft_reply(
         if not re_search_lexi_signoff(text):
             result.ok = False
             result.errors.append(
-                "Lexi draft must end with Thank you, / Lexi / Assistant to Kory Mitchell / "
+                "Lexi draft must end with Thank you, / Lexi Knightly / Executive Assistant / "
                 "lexi@iconicfounders.com (one line each)."
             )
         else:
@@ -142,7 +142,7 @@ def re_search_lexi_signoff(text: str) -> bool:
 
     return bool(
         re.search(
-            r"Thank you,?\s*\n\s*Lexi\s*\n\s*Assistant to Kory Mitchell\s*\n\s*"
+            r"Thank you,?\s*\n\s*Lexi Knightly\s*\n\s*Executive Assistant\s*\n\s*"
             r"lexi@iconicfounders\.com\s*$",
             text.strip(),
             flags=re.IGNORECASE,

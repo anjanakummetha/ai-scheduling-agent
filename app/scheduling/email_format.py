@@ -536,8 +536,8 @@ def _strip_lexi_closing(text: str) -> str:
     if lowered.endswith(block_lower):
         return text[: -len(LEXI_SIGNOFF_BLOCK)].rstrip()
     patterns = [
-        r"(?:Best|Thank you),?\s*\n\s*Lexi(?:\s*\n.*)?$",
-        r"Lexi\s*\n\s*Assistant to Kory Mitchell.*$",
+        r"(?:Best|Thank you),?\s*\n\s*Lexi(?:\s+Knightly)?(?:\s*\n.*)?$",
+        r"Lexi(?:\s+Knightly)?\s*\n\s*(?:Executive Assistant|Assistant to Kory Mitchell).*$",
     ]
     for pattern in patterns:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL).rstrip()

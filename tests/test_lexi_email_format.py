@@ -7,7 +7,7 @@ from app.safety.operation_verify import re_search_lexi_signoff, verify_draft_rep
 def test_lexi_signoff_block() -> None:
     body = finalize_lexi_email_body("Hi,\n\nA few times that work:\n\n• Tuesday 2pm MT")
     assert body.endswith(
-        "Thank you,\nLexi\nAssistant to Kory Mitchell\nlexi@iconicfounders.com"
+        "Thank you,\nLexi Knightly\nExecutive Assistant\nlexi@iconicfounders.com"
     )
     # A bare "Hi," opener is intentionally dropped by _dedupe_lexi_opening; the
     # scheduling content and bullet are preserved.

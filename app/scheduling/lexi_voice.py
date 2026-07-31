@@ -8,8 +8,8 @@ VOICE_MODE_LEXI = "lexi"
 # Standard Lexi outbound sign-off (plain text; one line each).
 LEXI_SIGNOFF_LINES: tuple[str, ...] = (
     "Thank you,",
-    "Lexi",
-    "Assistant to Kory Mitchell",
+    "Lexi Knightly",
+    "Executive Assistant",
     "lexi@iconicfounders.com",
 )
 LEXI_SIGNOFF_BLOCK = "\n".join(LEXI_SIGNOFF_LINES)

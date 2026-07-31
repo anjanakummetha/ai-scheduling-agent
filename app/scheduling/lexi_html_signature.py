@@ -48,13 +48,14 @@ def _embedded_logo_data_uri() -> str | None:
 def lexi_signature_logo_enabled() -> bool:
     """Whether the sign-off shows the IFG logo at all.
 
-    Removed for now (the inline image rendered distorted). Re-enable by setting a
-    hosted LEXI_SIGNATURE_LOGO_URL or LEXI_SIGNATURE_EMBED_LOGO=true once a clean
-    asset is in place.
+    On by default (embedded as an inline CID attachment). The earlier distortion
+    was the <img> forcing the 1024x678 asset into a 132x132 square — fixed by
+    scaling on width only. Set LEXI_SIGNATURE_EMBED_LOGO=false to disable, or a
+    hosted LEXI_SIGNATURE_LOGO_URL to serve it without an attachment.
     """
     if lexi_signature_logo_url() is not None:
         return True
-    return os.getenv("LEXI_SIGNATURE_EMBED_LOGO", "false").lower() in {"1", "true", "yes"}
+    return os.getenv("LEXI_SIGNATURE_EMBED_LOGO", "true").lower() in {"1", "true", "yes"}
 
 
 def resolve_lexi_signature_logo_src(*, prefer_cid: bool = False) -> str | None:
@@ -67,7 +68,7 @@ def resolve_lexi_signature_logo_src(*, prefer_cid: bool = False) -> str | None:
         return url
     if prefer_cid or not url:
         return f"cid:{_INLINE_LOGO_CID}"
-    if os.getenv("LEXI_SIGNATURE_EMBED_LOGO", "false").lower() in {"1", "true", "yes"}:
+    if os.getenv("LEXI_SIGNATURE_EMBED_LOGO", "true").lower() in {"1", "true", "yes"}:
         return _embedded_logo_data_uri()
     return f"cid:{_INLINE_LOGO_CID}"
 
@@ -132,9 +133,11 @@ def build_lexi_html_signature_block(*, use_cid: bool = True) -> str:
     logo_src = resolve_lexi_signature_logo_src(prefer_cid=use_cid)
     logo_cell = ""
     if logo_src:
+        # Width-only sizing: the asset is 1024x678, so a forced square height
+        # distorts it. Email clients scale proportionally from width alone.
         logo_cell = (
             f'<img src="{html.escape(logo_src, quote=True)}" '
-            'alt="Iconic Founders Group" width="132" height="132" '
+            'alt="Iconic Founders Group" width="132" '
             'style="display:block;width:132px;height:auto;border:0;" />'
         )
     company = (
@@ -146,9 +149,9 @@ def build_lexi_html_signature_block(*, use_cid: bool = True) -> str:
         'style="color:#0563c1;text-decoration:underline;">lexi@iconicfounders.com</a>'
     )
     contact = (
-        '<div style="font-size:15px;font-weight:normal;color:#000000;margin:0 0 4px 0;">Lexi</div>'
+        '<div style="font-size:15px;font-weight:normal;color:#000000;margin:0 0 4px 0;">Lexi Knightly</div>'
         f'<div style="margin:0 0 4px 0;">{company}</div>'
-        '<div style="margin:0 0 4px 0;color:#333333;">Assistant to Kory Mitchell</div>'
+        '<div style="margin:0 0 4px 0;color:#333333;">Executive Assistant</div>'
         f'<div style="margin:0;">{email}</div>'
     )
     if not logo_cell:
