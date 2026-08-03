@@ -24,6 +24,21 @@ These are product/config decisions the tests depend on. Confirm with Kory (or de
 
 ---
 
+## 0b. Capability gaps that must be BUILT before their tests can run
+
+Found 2026-08-03 by reading the code, not by testing. Groups N and O below are written against the *intended* behaviour; the tests will fail today because the capability does not exist yet. Build first, then test.
+
+| # | Gap | Evidence | Needed for |
+|---|---|---|---|
+| **CG-1** | **Email to lexi@ never reaches the agent.** `app/agents/lexi_mail_intent.py` is a regex router with canned replies — it runs *instead of* the LLM orchestrator (`app/orchestrator.py:272`). The parsed `instruction` string is captured and then **discarded** for the `asana` and `hubspot` intents. So *"Change the deadline on the term sheet task to Friday"* matches on the word "task" and Lexi replies with **a list of tasks due today**, ignoring the instruction. *"Draft an email to Sarah about the LP update"* matches nothing and gets the generic ack. | `lexi_mail_intent.py:139-160`, `:190-199` | N-2 … N-8 |
+| **CG-2** | **Lexi never answers the email.** `handle_lexi_direct_mail` returns `{"message": …}`; `process_inbound_email` returns that dict to the poller and **nothing sends it**. There is no email reply and no Teams push on this path. Kory emails lexi@ and gets silence — the side effect (e.g. memory saved) happens invisibly. | `orchestrator.py:274-278`; no notify call on the direct-mail branch | N-1, and every N test's confirmation |
+| **CG-3** | **No approval loop on the email channel.** Teams actions route through the approval card; email-originated commands have no equivalent. An emailed "draft an email to Sarah and send it" needs the same *stage → Kory approves → execute* gate, or it becomes an unapproved-send path. | absence of a card/confirm step in the direct-mail branch | N-6, N-7, O-5 |
+| **CG-4** | **The reply-to-briefing path is only as fast as the poll.** Kory's reply to the 4:45 AM briefing lands in his **Sent Items**; ingestion is the 5-minute `_poll_outlook_ingress`, not the webhook. Expect up to ~5 min, and confirm nothing dedupes it away as "already tracked". | `orchestrator.py:710-733` | N-1 |
+
+**Decision needed (D-4):** for CG-1, route mail-to-lexi@ into the same LLM tool-loop Teams uses (preferred — one brain, all capabilities, tools already exist as `update_asana_task_action`, `draft_outbound_email_preview`, `send_outbound_email_confirmed`) or keep the regex router and widen it case by case. Recommendation: **route to the LLM loop**, keep the regex layer only as a fast path for `dont_schedule`.
+
+---
+
 ## Phase 0 — Preflight (read-only, 15 min)
 
 All on the box unless noted. Every item must pass before Phase 1.
@@ -109,6 +124,41 @@ For each case read the draft in the Teams card and cross-check against Kory's **
 | L-1 | Draft in Kory's voice on request | In Teams: "draft a reply to Anjana about the intro call in my voice." | Draft card in **Kory's voice**, sign-off "Let's Win" (not bold), never "Best/Warmly/Regards", no YPO mention. Editable like any card. |
 | L-2 | Default voice is Lexi | Confirm all delegation/offer drafts from A–C signed as Lexi, Lexi voice. | No accidental Kory-voice on auto-drafts. |
 
+### Group N — Email-to-Lexi as a full command channel (blocked on CG-1…CG-4)
+
+The premise: **email is a first-class way to talk to Lexi**, equal to Teams. Kory replies to the 4:45 AM briefing, or writes lexi@ cold, and gets work done. Every test here is from **Kory's real Outlook → lexi@** (which puts the message in his Sent Items — allow ~5 min, see CG-4). Asana/HubSpot writes stay staged-only for the closed phase.
+
+| ID | Scenario | Expected |
+|---|---|---|
+| N-1 | **Reply to the briefing email** | Reply to the 4:45 AM briefing: "Thanks — what's on my calendar Thursday?" | Ingested from Sent Items within one poll; **Lexi answers by email on the same thread** (this is CG-2 — today nothing comes back). Not swallowed as "conversation already tracked". |
+| N-2 | **Update a task deadline** | "Move the term sheet review task to Friday." | Correct task resolved by name (`search_asana_tasks`), the *specific* task and *specific* new due date echoed back for confirmation — **not** a dump of today's tasks (CG-1). Closed phase: staged, no real Asana write. |
+| N-3 | Ambiguous task reference | "Push the LP task out a week." with 2+ matching tasks | Lexi names the candidates and asks which — never guesses. |
+| N-4 | Task update on someone else's task | Same as N-2 but a task Kory doesn't own | Requires the owner-acknowledgement gate (`owner_ack`) naming the person; refuses without it. |
+| N-5 | Create a task by email | "Add a task to follow up with Doug next Tuesday." | Staged with correct title + due date; **Kory NON-IFG project only**; no real write while closed. |
+| N-6 | **Draft an email to a third party** | "Draft an email to anjanakummetha@gmail.com letting her know I'll be in Denver next week." | A real draft comes back **to Kory for approval** — correct recipient, subject, body, and voice; **nothing sends** without an explicit approval step (CG-3). |
+| N-7 | Revise that draft by email | Reply: "Make it shorter and mention Thursday." | Revised draft returned; the revision is applied, the thread context (recipient/subject) is retained, not re-asked. |
+| N-8 | Multi-instruction email | "Move the term sheet task to Friday and draft a note to Doug about it." | Both instructions handled, or an explicit statement of what was and wasn't done — never silently drops one. |
+| N-9 | Unknown / out-of-scope request | "Book me a flight to Austin." | Honest "I can't do that" naming what she *can* do — no fabricated confirmation. |
+| N-10 | Non-Kory sender writes lexi@ | From anjanakummetha@gmail.com, To: lexi@ only: "Update Kory's task." | **Refused** — command authority is Kory's alone. Outside mail to lexi@ must never execute an instruction. Safety-critical. |
+| N-11 | Failure is reported honestly | Force a tool failure (e.g. bad task gid) | The email reply says it failed; never "Done!" for an operation that didn't succeed (execution-backed confirmation rule). |
+
+### Group O — Outbound email drafting, end to end (draft-level while closed)
+
+Covers the drafting stack that has never been exercised live: `draft_outbound_email_preview` → Kory approves → `send_outbound_email_confirmed`, plus the channel inference that picks the Kory vs Lexi mailbox.
+
+| ID | Scenario | Expected |
+|---|---|---|
+| O-1 | Cold draft to a new recipient (Teams) | "Draft an email to anjanakummetha@gmail.com about the Denver trip." | Preview card: correct `to`, sensible subject, complete body, `send_channel` resolved, `preview_only: true`, nothing sent. |
+| O-2 | **Channel inference** | One draft written as Kory ("I'll be in town…"), one as Lexi ("Kory asked me to…"). | `infer_outbound_send_channel` picks `kory` vs `lexi` correctly; From address matches; Kory-voice drafts never go out over the Lexi mailbox by accident. |
+| O-3 | **Signature + logo render** | Any Lexi-voice draft. | Ends exactly *Thank you, / Lexi Knightly / Executive Assistant / lexi@iconicfounders.com* — passes `verify_draft_reply`; HTML build carries the inline `cid:ifg-logo.png` attachment and `needs_draft=True`. |
+| O-4 | Draft a reply into an existing thread | "Reply to Anjana's last email and tell her Thursday works." | Correct thread/subject (`Re:`), quoted history handled, recipients preserved, no duplicate proposal created. |
+| O-5 | **Confirm gate** | Attempt a send without approval. | `confirm_send` false → refused with a clear message. No path sends without explicit approval. |
+| O-6 | Length / tone instruction | "Shorter, warmer." | Instruction actually changes the draft; sign-off block still intact and correct. |
+| O-7 | Multiple recipients / CC | "Draft to Anjana, CC Doug." | Recipients split correctly; Kory CC'd per rule (only when not already on the thread); no BCC to HubSpot while `LEXI_HUBSPOT_BCC_ENABLED=false`. |
+| O-8 | Dry-run honesty | With `LEXI_DRY_RUN=true`. | Result clearly flags `dry_run`; Lexi does not claim the email was sent. |
+
+**Phase 3 continuation (sends OPEN):** re-run **O-1 → send** for real — verify the mail arrives at anjanakummetha@gmail.com, From = the right mailbox, and **the signature block + IFG logo render correctly in a real inbox** (Gmail web, Gmail mobile, and Outlook). The CID draft+attach path has never run against a real send. Then **N-6 → send** for the email-channel equivalent.
+
 ### Group S — Safety while closed
 
 | ID | Scenario | Expected |
@@ -151,6 +201,11 @@ For each case read the draft in the Teams card and cross-check against Kory's **
 | E-3 | 3-day no-reply reminder | Ignore an offer thread (`LT-E3`). Fast-forward instead of waiting: `sqlite3 … "update holds set created_at = datetime(created_at,'-2 days'), expires_at = datetime(expires_at,'-2 days') where proposal_id=<N>;"` then wait a cycle. | **Before** release: Teams reminder card with a drafted nudge to Anjana, requiring Kory approval (notification-before-action requirement). Approving sends the follow-up. |
 | E-4 | Expiry release + notify | Push the same holds past expiry (`-4 days`). | Holds deleted from Outlook; Teams note "hold released (no reply)"; status consistent. |
 | E-5 | Friday next-week cleanup | (Observational / optional) If a test spans Friday, confirm the weekly cleanup only touches stale next-week holds. |
+| E-6 | **Conflict appears between offer and confirm** | After the offer sends, manually book something over the accepted slot in Kory's calendar, then have Anjana accept it. | Re-checked at confirm time: the clash is caught, Kory is asked in Teams, **no double-booking**. Safety-critical — the calendar is authoritative at the moment of booking, not at the moment of offering. |
+| E-7 | **Reschedule a booked meeting** | After H-1 books an event, Anjana emails "can we move it to Thursday?" | Existing event is *moved or cancelled+rebooked* (one meeting on the calendar, not two), attendee notified, holds consistent. |
+| E-8 | **Cancel a booked meeting** | "I need to cancel Tuesday." | Event removed from Kory's calendar, cancellation sent to the attendee, proposal status terminal — no orphaned holds left behind. |
+| E-9 | Hold/event titles | Inspect the titles created in E-1/H-1. | Readable human name, not the mashed local-part ("Intro: Anjanakummetha <> Kory Mitchell") — known open defect. |
+| E-10 | Holds land on the right calendar | Inspect in Outlook. | Work **Calendar**, never Kory Master Calendar (ALL); `showAs` **tentative**, not busy — known open defect. |
 
 ### Group H — Recipient replies & counter-proposals
 
@@ -163,6 +218,9 @@ For each case read the draft in the Teams card and cross-check against Kory's **
 | H-5 | Rejects all → re-offer | Anjana: "None of these work, following week?" | Holds released, status `pending_reoffer`, fresh compliant slots in the requested window → new approval card → send → new holds. |
 | H-6 | Vague reply mid-thread | Anjana: "Maybe later in the week?" | Handled gracefully (clarify or offer late-week slots) — again no invented conflicts (Rung-1 fix (b) under real send conditions). |
 | H-7 | Thread context retention | In her reply, Anjana references earlier details ("like I said, I'm near downtown Denver"). | Later drafts reflect thread history (location/TZ/context carried, not re-asked). |
+| H-8 | **Guest declines the calendar invite** | Anjana accepts by email (H-1), the event is created, then she **declines the Outlook invite**. | The decline is noticed and surfaced to Kory; the event isn't left sitting as confirmed. |
+| H-9 | Guest goes silent after accepting | Accept, then no response to the invite at all. | No spurious re-offer, no released event; state stays coherent. |
+| H-10 | Reply arrives from a different address | Anjana replies from a second address on the same thread. | Matched to the existing proposal by thread, not by sender — no duplicate proposal. |
 
 ### Group M — Background jobs & ops (observational, during the window)
 
@@ -312,8 +370,9 @@ Now: a discrete trip leg blocks only a 3h buffer around itself; an all-day/6h+ b
 
 ### Never tested — requires sends OPEN (Phase 3)
 - **D-1** edit draft in card → send · **D-2** send+hold atomicity + no double-send · **D-3** disregard · **D-4** bare `send` · **D-5** CC/BCC on real sent mail (Kory CC'd only when not already on thread)
-- **E-1** holds land as tentative on the work Calendar (never Master) · **E-2** confirm → other holds removed · **E-3** 3-day reminder card *before* release · **E-4** expiry release + notify · **E-5** Friday next-week cleanup
-- **H-1** accepts an offered slot → invite · **H-2** Teams meeting link on the invite · **H-3** counter-proposes a free time · **H-4** counter-proposes a busy time (must ask Kory, never auto-book) · **H-5** rejects all → re-offer · **H-6** vague mid-thread reply · **H-7** thread-history retention
+- **E-1** holds land as tentative on the work Calendar (never Master) · **E-2** confirm → other holds removed · **E-3** 3-day reminder card *before* release · **E-4** expiry release + notify · **E-5** Friday next-week cleanup · **E-6** conflict appearing between offer and confirm (no double-booking) · **E-7** reschedule a booked meeting · **E-8** cancel a booked meeting · **E-9** titles · **E-10** right calendar + tentative
+- **H-1** accepts an offered slot → invite · **H-2** Teams meeting link on the invite · **H-3** counter-proposes a free time · **H-4** counter-proposes a busy time (must ask Kory, never auto-book) · **H-5** rejects all → re-offer · **H-6** vague mid-thread reply · **H-7** thread-history retention · **H-8** guest declines the invite · **H-9** guest silent after accepting · **H-10** reply from a different address
+- **O-1/N-6 real sends** — the signature + inline IFG logo have never rendered in a real inbox (Gmail web/mobile, Outlook); the CID draft+attach path is untested against a live send
 - **M-1** 24h Kory nudge · **M-2** 4:45 AM MT briefing · **M-3** multi-day stability · **M-4** Composio budget after a full window
 
 ### RUN 4 — "remember" verified, and it was broken (2026-07-26, `a44fe13`)
@@ -332,6 +391,8 @@ Also verified by direct call: `dont_schedule`, `remember` and `asana` intents al
 - **J-1** email lexi@ "don't schedule with X" · **J-2** "remember that…" changes future scheduling · **J-3** "remind me to…" stages an Asana task without a real write
 - **K-1** `remember` via Teams + updating an existing rule · **K-2** memory survives a restart
 - **L-1** Kory-voice draft on request (sign-off "Let's Win", no YPO) · **L-2** auto-drafts stay Lexi-voice
+- **Group N — the whole email-to-Lexi command channel.** J-1/J-2/J-3 only cover *don't-schedule*, *remember* and *remind-me*. Task-deadline updates, drafting mail to a third party, revision, multi-instruction mail, non-Kory senders, and honest failure reporting are all untested — and per **CG-1…CG-4** mostly unbuilt: the channel is a regex router that discards the instruction and never replies.
+- **Group O — the outbound drafting stack.** L-1/L-2 only check *voice*. Draft-to-a-new-recipient, channel inference (kory vs lexi mailbox), the `confirm_send` gate, revision, CC handling, dry-run honesty, and the signature/logo render are all untested.
 - **C-2/C-3/C-6** hard blocks, lunch exception-only, coffee/happy-hour/dinner shaping — only C-1/C-4 exercised
 - **A-2** a genuine non-scheduling *inbound* stays silent (only verified on Kory's own sent mail)
 - **G-1** unknown-TZ disclosure — **not testable from anjanakummetha@gmail.com** (its own Date header reveals MT, confidence `inferred`). Needs a sender with no TZ signal.
