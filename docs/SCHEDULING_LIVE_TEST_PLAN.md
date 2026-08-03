@@ -248,16 +248,63 @@ curl -s http://127.0.0.1:8780/api/health
 cd /home/lexi/AI_Scheduling_Agent && LEXI_ENV=production .venv/bin/python -c "import app.config as c,json;print(json.dumps(c.safety_posture_summary(),indent=2))"
 
 # live logs while testing
-journalctl -u lexi-hermes -f
+# NOTE (2026-08-03): `journalctl -u lexi-hermes` returns NOTHING — the service
+# logs to a file, not journald. Use this instead, everywhere in this doc.
+LOG=/home/lexi/AI_Scheduling_Agent/logs/lexi.log
+tail -f $LOG
+grep "^$(date +%F)" $LOG | grep -E "\| (ERROR|CRITICAL) \|"   # real errors only;
+      # a bare case-insensitive grep for "error" matches URLs and payloads and lies to you
+grep "^$(date +%F)" $LOG | grep -i "webhooks/composio"        # webhook ingress proof
 
 # DB state (adjust the id from P0-7)
 DB=/home/lexi/AI_Scheduling_Agent/data/lexi.db
 sqlite3 $DB "select p.id,p.status,t.subject,p.voice_mode,p.is_delegation,p.recipient_timezone from proposals p left join email_threads t on t.thread_id=p.thread_id where p.id > <MARK> order by p.id desc;"
 sqlite3 $DB "select id,proposal_id,event_id,slot_start,slot_end,expires_at from holds where id > <MARK>;"
+# Schema notes (verified 2026-08-03): `proposals` has NO subject column — join
+# email_threads as above. `holds` has NO status column and NO start_utc; it uses
+# slot_start/slot_end, and a released hold is marked by writing the literal
+# string 'released' into expires_at. The E-3/E-4 fast-forward SQL is still valid.
 sqlite3 $DB "select id,step_name,log_level,message,timestamp from audit_log where id > <MARK> order by id desc limit 40;"
 sqlite3 $DB "select fact_key,fact_value,source from kory_memory;"
 sqlite3 $DB "select * from recipient_profiles;"
 ```
+
+---
+
+## RUN 5 — Phase 0 preflight, 2026-08-03 (read-only, from the box)
+
+| ID | Result | Evidence |
+|---|---|---|
+| P0-1 | ✅ **pass** | `lexi-hermes` active; health `ok`, `db_writable: true`, heartbeat 21s, `teams_cards_ready: true`, `teams_conversation_captured: true`. Composio 4,250 MTD / 200k (2.1%), 1,022 today. |
+| P0-2 | ⚠️ **pass with 2 deviations** | `LEXI_ENV=production`, `WRITE_MODE=kory`, `DRY_RUN=false`, `REQUIRE_KORY_APPROVAL=true`, `AUTO_EXECUTE=false`, `ALLOW_IMMEDIATE_SEND=false`, `HUBSPOT_LIVE_WRITES=false`, `OUTREACH_LIVE_SENDS=false`, `HEIDI_ESCALATION=false`. **Deviations:** `LEXI_KORY_OUTBOUND_BLOCKED=false` (Phase 1 assumes `true`) and `LEXI_ASANA_LIVE_WRITES_ENABLED=true` (plan text says false throughout). See PF-4/PF-5. |
+| P0-3 | ✅ **pass** | Webhook ingress live: `POST /webhooks/composio → 202` at 13:53:58Z; **2,805** webhook hits today; real inbound triaged end-to-end (proposal 6182 created from a live thread). Not backup-poll-only. |
+| P0-4 | ✅ **pass** | Readable: **Kory Master Calendar (ALL)**, **Calendar**, Birthdays, Kory's tasks. Group calendars absent as expected (B-01 / V-2 — all sync into Master). **Plan text corrected:** it listed a *family calendar* as required, which contradicts the standing **no-family-busy-read** ruling. Not a gap. |
+| P0-5 | ⏸ **blocked** | Needs a human in Teams (`help`, `today`, `pending`). |
+| P0-6 | ✅ **pass** | `lexi-hourly-13.db` written 13:00Z, checked 13:54Z → 54 min old. Timers healthy: watchdog fired 1m47s ago, backup 53m ago, morning-briefing 3h08m ago. |
+| P0-7 | ✅ **recorded** | Marks at 2026-08-03 13:52Z — `proposals` **6181**, `holds` **13**, `audit_log` **23472**. Proposals climb continuously (real inbound), so treat the mark as a timestamped floor, not a static number. |
+| P0-8 | ⏸ **blocked** | Awaiting the D-1/D-2 decisions below. |
+
+**Zero ERROR/CRITICAL lines today** (0 in `2026-08-03`; the 80 hits from a naive case-insensitive `error` grep are URL/payload noise across 11 days — see the evidence-kit warning).
+
+### Preflight findings
+
+| # | Finding | Impact |
+|---|---|---|
+| **PF-1** | **`journalctl -u lexi-hermes` returns nothing** — the service logs to `/home/lexi/AI_Scheduling_Agent/logs/lexi.log`. Every log command previously in this doc was silently useless. | Fixed in the evidence kit. Would have made every test look like "nothing happened". |
+| **PF-2** | **`LEXI_SIGNATURE_EMBED_LOGO=false` is explicitly set in prod `.env:76`.** | The new code defaults to `true`, but an explicit `false` wins. Deploying `f2e5ed4` alone will **not** show the logo — the flag must be flipped in the same change. |
+| **PF-3** | **`LEXI_TEAMS_INBOUND_NOTIFY_MODE=delegation_only`** — narrower than the `delegation_and_followups` this doc assumed. Live proof: `Auto-skipped proposal 6182 (delegation_only_mode) — not important enough for Teams.` | Cold inbound is triaged and staged but **never pings Teams**. Half of Group A is untestable until D-1 is applied. |
+| **PF-4** | **Sends are already OPEN** (`LEXI_KORY_OUTBOUND_BLOCKED=false`), gated only by `REQUIRE_KORY_APPROVAL`. | Phase 1's "zero external writes" is a convention, not an enforced state. One approve tap sends for real. |
+| **PF-5** | **`LEXI_ASANA_LIVE_WRITES_ENABLED=true`** against Kory's real Asana (scoped to Kory NON-IFG). | **J-3 as written is wrong** — it expects "staged, no real write". It would create a real task. |
+| **PF-6** | **15 stale proposals sit in an actionable state** — 10 `pending_approval` + 5 `awaiting_reply_prompt`, all `TEST — intro` / `TEST — chat draft` from 2026-07-29, all `teams_approval_notified_at = never`. | With PF-4, any of these is one tap from a real send. Also breaks **D-4** ("bare `send` resolves when exactly one pending") — there are 15. Clear before Phase 1. |
+| **PF-7** | All 13 holds carry the fake `event_id = 'evt-1'` and `expires_at = 'released'`. | Confirms no real hold has ever reached Outlook. E-1/E-10 will be the first genuine test of the hold path. |
+
+### Decisions needed before P0-8
+
+- **D-1 (was open):** set `LEXI_TEAMS_INBOUND_NOTIFY_MODE=important` for the test window, or Group A stays invisible. Revert to taste at sign-off.
+- **D-2:** already satisfied — `LEXI_HUBSPOT_BCC_ENABLED=false` is in place.
+- **D-5 (new, from PF-4):** re-close sends for Phase 1 (`LEXI_KORY_OUTBOUND_BLOCKED=true`) so S-1 is testable and accidents are impossible, then re-open at Phase 2 as planned — **or** knowingly run Phase 1 with sends live and rely on not tapping approve. Recommend re-closing; it costs one restart and makes S-1 a real test instead of an assumption.
+- **D-6 (new, from PF-5):** for J-3, either set `LEXI_ASANA_LIVE_WRITES_ENABLED=false` for the window, or change J-3's expectation to "a real task is created in Kory NON-IFG, then delete it in cleanup." Recommend the former — it matches the plan's own ground rule.
+- **D-7 (new, from PF-6):** clear the 15 stale test proposals (reject/close) before Phase 1.
 
 ---
 
