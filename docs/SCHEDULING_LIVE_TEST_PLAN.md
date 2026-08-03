@@ -271,7 +271,7 @@ sqlite3 $DB "select * from recipient_profiles;"
 
 ---
 
-## RUN 5 — Phase 0 preflight, 2026-08-03 (read-only, from the box)
+## RUN 5 — Phase 0 preflight, 2026-08-03 — ✅ COMPLETE (8/8)
 
 | ID | Result | Evidence |
 |---|---|---|
@@ -279,7 +279,7 @@ sqlite3 $DB "select * from recipient_profiles;"
 | P0-2 | ⚠️ **pass with 2 deviations** | `LEXI_ENV=production`, `WRITE_MODE=kory`, `DRY_RUN=false`, `REQUIRE_KORY_APPROVAL=true`, `AUTO_EXECUTE=false`, `ALLOW_IMMEDIATE_SEND=false`, `HUBSPOT_LIVE_WRITES=false`, `OUTREACH_LIVE_SENDS=false`, `HEIDI_ESCALATION=false`. **Deviations:** `LEXI_KORY_OUTBOUND_BLOCKED=false` (Phase 1 assumes `true`) and `LEXI_ASANA_LIVE_WRITES_ENABLED=true` (plan text says false throughout). See PF-4/PF-5. |
 | P0-3 | ✅ **pass** | Webhook ingress live: `POST /webhooks/composio → 202` at 13:53:58Z; **2,805** webhook hits today; real inbound triaged end-to-end (proposal 6182 created from a live thread). Not backup-poll-only. |
 | P0-4 | ✅ **pass** | Readable: **Kory Master Calendar (ALL)**, **Calendar**, Birthdays, Kory's tasks. Group calendars absent as expected (B-01 / V-2 — all sync into Master). **Plan text corrected:** it listed a *family calendar* as required, which contradicts the standing **no-family-busy-read** ruling. Not a gap. |
-| P0-5 | ⏸ **blocked** | Needs a human in Teams (`help`, `today`, `pending`). |
+| P0-5 | ✅ **pass** (post-restart) | `help`, `today`, `pending` all behaved as expected against the new posture; `today` matched Kory's real Outlook. Run after P0-8 so the roundtrip was tested on the config Phase 1 actually uses. |
 | P0-6 | ✅ **pass** | `lexi-hourly-13.db` written 13:00Z, checked 13:54Z → 54 min old. Timers healthy: watchdog fired 1m47s ago, backup 53m ago, morning-briefing 3h08m ago. |
 | P0-7 | ✅ **recorded** | Marks at 2026-08-03 13:52Z — `proposals` **6181**, `holds` **13**, `audit_log` **23472**. Proposals climb continuously (real inbound), so treat the mark as a timestamped floor, not a static number. |
 | P0-8 | ✅ **pass** (14:06Z) | Deployed `7f87947 → f2e5ed4`; all four env changes applied and verified; 15 stale proposals cleared; single restart of `lexi-hermes` only. See § P0-8 below. |
