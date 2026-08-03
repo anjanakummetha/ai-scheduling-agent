@@ -282,7 +282,7 @@ sqlite3 $DB "select * from recipient_profiles;"
 | P0-5 | ⏸ **blocked** | Needs a human in Teams (`help`, `today`, `pending`). |
 | P0-6 | ✅ **pass** | `lexi-hourly-13.db` written 13:00Z, checked 13:54Z → 54 min old. Timers healthy: watchdog fired 1m47s ago, backup 53m ago, morning-briefing 3h08m ago. |
 | P0-7 | ✅ **recorded** | Marks at 2026-08-03 13:52Z — `proposals` **6181**, `holds` **13**, `audit_log` **23472**. Proposals climb continuously (real inbound), so treat the mark as a timestamped floor, not a static number. |
-| P0-8 | ⏸ **blocked** | Awaiting the D-1/D-2 decisions below. |
+| P0-8 | ✅ **pass** (14:06Z) | Deployed `7f87947 → f2e5ed4`; all four env changes applied and verified; 15 stale proposals cleared; single restart of `lexi-hermes` only. See § P0-8 below. |
 
 **Zero ERROR/CRITICAL lines today** (0 in `2026-08-03`; the 80 hits from a naive case-insensitive `error` grep are URL/payload noise across 11 days — see the evidence-kit warning).
 
@@ -298,13 +298,40 @@ sqlite3 $DB "select * from recipient_profiles;"
 | **PF-6** | **15 stale proposals sit in an actionable state** — 10 `pending_approval` + 5 `awaiting_reply_prompt`, all `TEST — intro` / `TEST — chat draft` from 2026-07-29, all `teams_approval_notified_at = never`. | With PF-4, any of these is one tap from a real send. Also breaks **D-4** ("bare `send` resolves when exactly one pending") — there are 15. Clear before Phase 1. |
 | **PF-7** | All 13 holds carry the fake `event_id = 'evt-1'` and `expires_at = 'released'`. | Confirms no real hold has ever reached Outlook. E-1/E-10 will be the first genuine test of the hold path. |
 
-### Decisions needed before P0-8
+### Decisions — ALL RESOLVED AND APPLIED 2026-08-03 14:06Z
 
-- **D-1 (was open):** set `LEXI_TEAMS_INBOUND_NOTIFY_MODE=important` for the test window, or Group A stays invisible. Revert to taste at sign-off.
-- **D-2:** already satisfied — `LEXI_HUBSPOT_BCC_ENABLED=false` is in place.
-- **D-5 (new, from PF-4):** re-close sends for Phase 1 (`LEXI_KORY_OUTBOUND_BLOCKED=true`) so S-1 is testable and accidents are impossible, then re-open at Phase 2 as planned — **or** knowingly run Phase 1 with sends live and rely on not tapping approve. Recommend re-closing; it costs one restart and makes S-1 a real test instead of an assumption.
-- **D-6 (new, from PF-5):** for J-3, either set `LEXI_ASANA_LIVE_WRITES_ENABLED=false` for the window, or change J-3's expectation to "a real task is created in Kory NON-IFG, then delete it in cleanup." Recommend the former — it matches the plan's own ground rule.
-- **D-7 (new, from PF-6):** clear the 15 stale test proposals (reject/close) before Phase 1.
+| # | Ruling | Applied as |
+|---|---|---|
+| D-1 | Widen cold-inbound notifications for the window | `LEXI_TEAMS_INBOUND_NOTIFY_MODE=important` (value confirmed valid at `app/config.py:149`; clears the two early-return modes, then applies newsletter / no-reply / low-priority filters) |
+| D-2 | Already satisfied | `LEXI_HUBSPOT_BCC_ENABLED=false` |
+| D-5 | Re-close sends for Phase 1 | `LEXI_KORY_OUTBOUND_BLOCKED=true` → re-open at Phase 2 |
+| D-6 | Asana staging-only this window | `LEXI_ASANA_LIVE_WRITES_ENABLED=false` |
+| D-7 | Clear stale test data | 15 proposals (`created_at < 2026-08-01`, `pending_approval` + `awaiting_reply_prompt`) set to `rejected`; none left actionable |
+| PF-2 | Logo flag un-pinned | `LEXI_SIGNATURE_EMBED_LOGO=true` |
+
+### P0-8 — deploy + posture, 2026-08-03 14:06Z
+
+Run as one script, one restart (`scratchpad/p0_8_deploy_and_posture.sh`). `.env` and a full SQLite `.backup` taken first: `.env.bak.phase0.20260803-140555`, `data/lexi-prephase1-20260803-140555.db`.
+
+- **Deployed** `7f87947 → f2e5ed4` (fast-forward, 9 files). The logo asset grew 27,106 → 137,992 bytes, confirming the JPEG-mislabelled-as-PNG file was replaced by the real PNG.
+- **Posture verified live** after restart: `OUTBOUND_BLOCKED=true`, `ASANA_LIVE_WRITES=false`, `HUBSPOT_LIVE_WRITES=false`, `REQUIRE_KORY_APPROVAL=true`, `AUTO_EXECUTE=false`, `ALLOW_IMMEDIATE_SEND=false`, `DRY_RUN=false`, `WRITE_MODE=kory`.
+- **Health after restart:** `ok`, heartbeat 3.4s, `db_writable`, cards ready, conversation captured.
+- **Clean start:** orchestrator up in webhook_primary_backup_poll mode, webhook listening on `:8780`, MCP tools loaded. **Today is 5,258 log lines, 100% INFO — zero ERROR/CRITICAL.**
+- **Sujash's container untouched** — `hermes-agent-teuw-hermes-agent-1` still `Up 2 weeks`, uptime unchanged, proving no container restart. `traefik` likewise.
+
+**Signature verified in the prod environment** (read-only, no send): sign-off renders as *Thank you, / Lexi Knightly / Executive Assistant / lexi@iconicfounders.com*; `re_search_lexi_signoff` → True; `verify_draft_reply(voice_mode="lexi").ok` → True; **1 inline attachment** `ifg-logo.png`; `needs_draft=True`; `cid:ifg-logo.png` present; no forced `height=` attribute; "Assistant to Kory Mitchell" absent. **O-3 passes at draft level** — only the real-inbox render remains (Phase 3).
+
+**Refreshed P0-7 marks — use these, not the pre-deploy ones:** `proposals` **6188**, `holds` **13**, `audit_log` **23492**, at **2026-08-03 14:06:07Z**.
+
+### Historical errors to watch for recurrence under test load
+
+None today, but the log carries these from 2026-07-29/30 — both are classes that could resurface once Phase 3 puts real traffic through:
+
+- `sqlite3.OperationalError: database is locked` — contention risk once holds/events start writing concurrently with the poller.
+- `ErrorInvalidMailboxItemId: Item '<id>' doesn't belong to the targeted mailbox '521488ff-…'` and repeated `OUTLOOK_GET_MESSAGE … 404` — the mailbox-scoped Graph id problem (`17e9043`). Directly relevant to why `LEXI_POLL_LEXI_MAILBOX` stays false; if it reappears, do not "fix" it by enabling that poll.
+- `webhook_normalization | Failed to normalize Composio webhook payload` and `outlook_poll | Outlook poll failed for folder=inbox role=read`.
+
+**Logging caveat for anyone reading this file:** date-filtering the log with `awk '$0 >= "<ts>"'` is wrong — traceback and continuation lines don't start with a timestamp and sort in regardless, making old errors look current. Use `awk '/^<date-prefix>/{f=1} f'` instead.
 
 ---
 
