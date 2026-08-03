@@ -27,10 +27,23 @@ class PreApprovalReport:
     meeting_type_key: str = ""
     meeting_type_label: str = ""
     rules_passed: bool = False
+    # Only true when a requested window was actually found AND every slot checked
+    # against it. Without this the summary claimed "match requested window" even
+    # when no window had been parsed — false assurance on every un-windowed offer.
+    window_verified: bool = False
+    window_label: str = ""
 
     def summary(self) -> str:
         if self.ok and not self.warnings:
-            return "Calendar verified — slots clear conflicts, rules pass, and match requested window."
+            if self.window_verified:
+                return (
+                    "Calendar verified — slots clear conflicts, rules pass, and fall inside "
+                    f"the requested window ({self.window_label})."
+                )
+            return (
+                "Calendar verified — slots clear conflicts and rules pass. "
+                "No specific window was requested, so these are the next available times."
+            )
         parts = []
         if not self.ok:
             parts.append("BLOCKED: " + "; ".join(self.checks))
@@ -65,6 +78,7 @@ def verify_before_kory_approval(
     body: str = "",
     meeting_format: str | None = None,
     window_expanded: bool = False,
+    window: Any = None,
 ) -> PreApprovalReport:
     """Fail closed unless calendar is readable and slots pass conflict + Kory rules."""
     busy = list(calendar_context.get("busy_events") or [])
@@ -121,13 +135,23 @@ def verify_before_kory_approval(
                     f"for {meeting_spec.label}"
                 )
 
-    if plan and plan.window and not window_expanded:
-        for index, slot in enumerate(slots, start=1):
-            if not slot_date_in_window(slot, plan.window):
-                report.ok = False
-                report.checks.append(
-                    f"slot {index} outside requested window ({plan.window.label})"
-                )
+    # The window the engine actually used, which is often inferred from the email
+    # rather than carried on the plan. Keying this off plan.window alone meant a
+    # sender's stated timeframe was never enforced whenever the plan lacked one.
+    effective_window = window or (plan.window if plan else None)
+    if effective_window and not window_expanded:
+        report.window_label = effective_window.label
+        outside = [
+            index
+            for index, slot in enumerate(slots, start=1)
+            if not slot_date_in_window(slot, effective_window)
+        ]
+        for index in outside:
+            report.ok = False
+            report.checks.append(
+                f"slot {index} outside requested window ({effective_window.label})"
+            )
+        report.window_verified = not outside
 
     rule_check = ValidationResult(valid=True)
     for slot in slots:

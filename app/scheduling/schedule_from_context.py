@@ -15,6 +15,26 @@ from app.scheduling.window_fallback import build_failure_kory_message
 MIN_SLOTS = MIN_SLOT_OPTIONS
 
 
+def _window_from_diagnostics(diagnostics: dict[str, Any]) -> Any:
+    """Rebuild the window the slot engine used, as recorded in its diagnostics."""
+    from datetime import date
+
+    from app.scheduling.scheduling_window import SchedulingWindow
+
+    raw = diagnostics.get("scheduling_window")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SchedulingWindow(
+            start=date.fromisoformat(str(raw["start"])),
+            end=date.fromisoformat(str(raw["end"])),
+            source=str(raw.get("source") or "engine"),
+            label=str(raw.get("label") or ""),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 @dataclass
 class ScheduleFromContextResult:
     ok: bool
@@ -216,19 +236,24 @@ def schedule_from_context(
         )
 
     slots = engine.slots[:MAX_SLOT_OPTIONS]
+    # window_expanded means the engine *deliberately* searched wider. It must not
+    # be set just because slots landed outside the requested window: doing that
+    # converted a violation into an accepted expansion, so a sender who asked for
+    # one week silently got offers three weeks out and the gate still reported ok.
     window_expanded = bool(engine.diagnostics.get("window_expanded")) or bool(
         engine.diagnostics.get("morning_preference_relaxed")
     )
-    if plan and plan.window and slots and not window_expanded:
-        from app.scheduling.scheduling_window import slot_date_in_window
-
-        if any(not slot_date_in_window(slot, plan.window) for slot in slots):
-            window_expanded = True
+    # The engine infers its own window when the plan carries none, so read back
+    # whichever one actually applied rather than trusting plan.window.
+    effective_window = (plan.window if (plan and plan.window) else None) or _window_from_diagnostics(
+        engine.diagnostics
+    )
 
     gate = verify_before_kory_approval(
         slots=slots,
         calendar_context=calendar_context,
         plan=plan,
+        window=effective_window,
         intent=intent,
         subject=subj,
         body=scheduling_body,

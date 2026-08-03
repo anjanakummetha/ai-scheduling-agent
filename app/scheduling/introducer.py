@@ -109,7 +109,7 @@ def extract_introducer_from_email(
         return None
 
     if sender_email and not _is_kory(sender_email) and not _is_lexi(sender_email):
-        name = _display_name_from_sender(sender) or sender_email.split("@", 1)[0]
+        name = _display_name_from_sender(sender) or _name_from_email(sender_email)
         return IntroducerInfo(name=name, email=sender_email, source="intro_sender")
 
     # Third party on CC who isn't Kory/Lexi/guest
@@ -119,11 +119,40 @@ def extract_introducer_from_email(
         if _is_kory(cc) or _is_lexi(cc) or cc in guest_emails:
             continue
         return IntroducerInfo(
-            name=cc.split("@", 1)[0].replace(".", " ").title(),
+            name=_name_from_email(cc),
             email=cc,
             source="cc_chain",
         )
     return None
+
+
+def _name_from_email(email: str) -> str:
+    """Human-readable name for an address with no display name on the header.
+
+    Prefers the name already learned for this contact — the profile store holds
+    "Anjana Kummetha" while the local part is "anjanakummetha", and it was the
+    raw local part that reached meeting titles and Teams cards.
+    """
+    address = (email or "").strip().lower()
+    if not address:
+        return ""
+
+    try:
+        from app.storage.recipient_profiles import get_recipient_profile
+
+        profile = get_recipient_profile(address) or {}
+        stored = str(profile.get("display_name") or "").strip()
+        if stored:
+            return stored
+    except Exception:  # profile store unavailable — fall back to the local part
+        pass
+
+    local = address.split("@", 1)[0]
+    # dots/underscores/hyphens are word separators; a run-together local part
+    # ("anjanakummetha") can't be split reliably, so title-case it as one word.
+    cleaned = re.sub(r"[._-]+", " ", local)
+    cleaned = re.sub(r"\d+", "", cleaned).strip()
+    return cleaned.title() if cleaned else local
 
 
 def _display_name_from_sender(sender: str) -> str | None:
@@ -150,6 +179,11 @@ def resolve_introducer_for_contact(
     if profile:
         name = (profile.get("introducer_name") or "").strip()
         intro_email = (profile.get("introducer_email") or "").strip() or None
+        # Rows written before the name fix stored the bare local part
+        # ("anjanakummetha"). Recompute those at read time rather than migrating,
+        # so the stored value can't keep leaking into meeting titles and cards.
+        if name and intro_email and name.lower() == intro_email.split("@", 1)[0].lower():
+            name = _name_from_email(intro_email)
         if name:
             return IntroducerInfo(
                 name=name,
