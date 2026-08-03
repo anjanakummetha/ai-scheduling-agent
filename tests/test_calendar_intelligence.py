@@ -90,8 +90,15 @@ def test_horizon_tightens_for_next_week() -> None:
         body="Find me 3 times next week for a 30-minute virtual intro call.",
         now=now,
     )
-    assert days <= 14
+    # Still far tighter than the max — the point of the trim is not loading a
+    # full quarter for a one-week ask. But it must clear the requested week by
+    # three weeks, because propose_meeting_slots retries at +1w/+2w/+3w when that
+    # week is full and can only offer times the loaded calendar covers.
+    from app.config import settings
+
     assert days >= 7
+    assert days < settings.lexi_calendar_search_days_max
+    assert days <= 14 + 24
 
 
 def test_cape_town_tour_on_master_blocks_as_travel() -> None:
