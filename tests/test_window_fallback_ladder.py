@@ -60,3 +60,18 @@ def test_open_horizon_plan_suppresses_window_reinference() -> None:
 
 def test_plan_without_window_handles_none() -> None:
     assert _plan_without_window(None) is None
+
+
+def test_shifted_window_is_labelled_by_its_real_week() -> None:
+    """The label lands on Kory's approval card, so it must name the week.
+
+    "week of August 17 (+3w)" made him work out that an August request was
+    being answered with September.
+    """
+    from app.scheduling.window_fallback import _shift_plan_window
+
+    shifted = _shift_plan_window(_plan_with_window(), week_offset=3)
+    assert shifted.window is not None
+    assert shifted.window.start == date(2026, 9, 7)
+    assert shifted.window.label == "week of September 7"
+    assert "+3w" not in shifted.window.label

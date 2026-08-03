@@ -69,11 +69,15 @@ def _shift_plan_window(plan: SchedulingPlan, *, week_offset: int) -> SchedulingP
     if not window:
         return plan
     delta = timedelta(days=7 * week_offset)
+    new_start = window.start + delta
     shifted = SchedulingWindow(
-        start=window.start + delta,
+        start=new_start,
         end=window.end + delta,
         source="fallback",
-        label=f"{window.label} (+{week_offset}w)",
+        # Name the actual week. "(+3w)" made Kory do the arithmetic to find out
+        # a request for August was being answered with September, and this label
+        # is what lands on his approval card.
+        label=f"week of {new_start.strftime('%B')} {new_start.day}",
     )
     return SchedulingPlan(
         task_type=plan.task_type,
