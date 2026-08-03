@@ -41,6 +41,13 @@ def _label_from_slots(slots: list[dict[str, str]]) -> str | None:
 
 
 def _plan_without_window(plan: SchedulingPlan | None) -> SchedulingPlan | None:
+    """Drop the window so the engine may search the open horizon.
+
+    source="open_horizon" is load-bearing: find_valid_slots re-infers a window
+    from the email text whenever the plan carries none, so without this marker
+    the fallback re-derived the very window it was trying to widen past and the
+    whole ladder became a no-op.
+    """
     if plan is None:
         return None
     return SchedulingPlan(
@@ -50,7 +57,7 @@ def _plan_without_window(plan: SchedulingPlan | None) -> SchedulingPlan | None:
         meeting_format=plan.meeting_format,
         urgency=plan.urgency,
         draft_context=plan.draft_context,
-        source=plan.source,
+        source="open_horizon",
         raw=dict(plan.raw),
     )
 
