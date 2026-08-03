@@ -489,6 +489,11 @@ def dedupe_and_filter_blocking_events(
     return blocking, audit
 
 
+# propose_meeting_slots retries the requested window at +1w, +2w and +3w before
+# giving up, so the loaded calendar must reach at least three weeks past it.
+_LADDER_HEADROOM_DAYS = 24
+
+
 def resolve_calendar_horizon_days(
     *,
     subject: str = "",
@@ -510,7 +515,13 @@ def resolve_calendar_horizon_days(
     window = infer_scheduling_window(subject=subject, body=body, now=now)
     if window:
         days_needed = (window.end - today).days + 2
-        days_needed = max(7, days_needed)
+        # Headroom for the fallback ladder. When the requested window is too full,
+        # propose_meeting_slots retries +1w/+2w/+3w — but it can only offer times
+        # the loaded context covers, so trimming the horizon to the window end
+        # left those retries searching dates with no calendar data and finding
+        # nothing. Coffee hit this every time: ~1 slot a week means the ladder is
+        # the normal path, not the exception.
+        days_needed = max(7, days_needed + _LADDER_HEADROOM_DAYS)
         base = min(base, days_needed)
 
     # Month names / relative far-future cues
