@@ -225,3 +225,34 @@ def list_prior_email_threads(
         params.append(limit)
         rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def humanize_email_local_part(email: str) -> str:
+    """Best-effort name from an address alone, with no profile to consult."""
+    local = (email or "").strip().split("@", 1)[0]
+    cleaned = re.sub(r"[._\-]+", " ", local)
+    cleaned = re.sub(r"\d+", "", cleaned).strip()
+    return cleaned.title() if cleaned else local
+
+
+def display_name_for_email(email: str | None) -> str:
+    """The one place a contact's display name is resolved.
+
+    Four modules grew their own copy of "name from email" and drifted: the
+    profile store held "Anjana Kummetha" while a Teams card title still read
+    "Anjanakummetha", because only some paths consulted the store. Prefer the
+    learned name; fall back to the local part.
+    """
+    raw = (email or "").strip()
+    if not raw:
+        return "unknown"
+    if "@" not in raw:
+        return raw
+    try:
+        profile = get_recipient_profile(raw) or {}
+        stored = str(profile.get("display_name") or "").strip()
+        if stored:
+            return stored
+    except Exception:  # store unavailable — the address still has to render
+        pass
+    return humanize_email_local_part(raw)

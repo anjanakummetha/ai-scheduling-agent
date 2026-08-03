@@ -22,13 +22,18 @@ def display_subject(subject: str | None, *, max_len: int = 72) -> str:
 
 
 def display_sender(sender: str | None) -> str:
-    """Prefer name from email when only address is stored."""
+    """Prefer the learned display name; fall back to the address's local part.
+
+    This renders Teams card titles, so deriving straight from the local part put
+    "Anjanakummetha" in front of Kory while the profile store already held
+    "Anjana Kummetha".
+    """
     raw = (sender or "unknown").strip()
     if "@" not in raw:
         return raw
-    local = raw.split("@", 1)[0]
-    local = re.sub(r"[._]+", " ", local).strip()
-    return local.title() if local else raw
+    from app.storage.recipient_profiles import display_name_for_email
+
+    return display_name_for_email(raw)
 
 
 def format_received_at(received_at: str | None) -> str:

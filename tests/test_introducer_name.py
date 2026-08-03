@@ -41,3 +41,24 @@ def test_stale_localpart_introducer_row_is_repaired_on_read() -> None:
     info = resolve_introducer_for_contact(email=email)
     assert info is not None
     assert info.name == "Anjana Kummetha"
+
+
+def test_teams_card_title_uses_the_learned_name() -> None:
+    """A Teams card title read "(Anjanakummetha)" while the store held the name.
+
+    display_sender is what renders card titles; it derived from the local part
+    and never consulted the profile store.
+    """
+    from app.bot.teams_format import display_sender
+    from app.storage.recipient_profiles import record_display_name
+
+    email = "anjanakummetha@test-cardtitle.com"
+    record_display_name(email, "Anjana Kummetha")
+    assert display_sender(email) == "Anjana Kummetha"
+
+
+def test_display_sender_falls_back_without_a_profile() -> None:
+    from app.bot.teams_format import display_sender
+
+    assert display_sender("jane.doe@test-cardtitle.com") == "Jane Doe"
+    assert display_sender("unknown") == "unknown"

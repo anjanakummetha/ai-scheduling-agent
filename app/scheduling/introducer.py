@@ -137,22 +137,9 @@ def _name_from_email(email: str) -> str:
     if not address:
         return ""
 
-    try:
-        from app.storage.recipient_profiles import get_recipient_profile
+    from app.storage.recipient_profiles import display_name_for_email
 
-        profile = get_recipient_profile(address) or {}
-        stored = str(profile.get("display_name") or "").strip()
-        if stored:
-            return stored
-    except Exception:  # profile store unavailable — fall back to the local part
-        pass
-
-    local = address.split("@", 1)[0]
-    # dots/underscores/hyphens are word separators; a run-together local part
-    # ("anjanakummetha") can't be split reliably, so title-case it as one word.
-    cleaned = re.sub(r"[._-]+", " ", local)
-    cleaned = re.sub(r"\d+", "", cleaned).strip()
-    return cleaned.title() if cleaned else local
+    return display_name_for_email(address)
 
 
 def _display_name_from_sender(sender: str) -> str | None:
