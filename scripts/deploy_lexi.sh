@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Canonical Lexi deploy: fast-forward main, restart BOTH services, verify.
+#
+# Two services run this codebase and they restart independently:
+#   lexi-hermes.service  gateway + MCP + worker           (:3978, :8780)
+#   lexi-api.service     read-only API for the dashboard  (:8081, separate uvicorn)
+#
+# Restarting only lexi-hermes leaves api_v1.py changes serving stale code — a new
+# endpoint 404s and looks like it was never deployed.
+#
+# Usage:  ssh root@<host> 'bash -s' < scripts/deploy_lexi.sh
+set -uo pipefail
+
+APP=/home/lexi/AI_Scheduling_Agent
+G="git -c safe.directory=$APP"
+cd "$APP" || exit 1
+STAMP=$(date +%Y%m%d-%H%M%S)
+
+echo "########## BACKUP ##########"
+cp .env ".env.bak.deploy.$STAMP" && echo "  env -> .env.bak.deploy.$STAMP"
+sqlite3 data/lexi.db ".backup data/lexi-deploy-$STAMP.db" && echo "  db  -> data/lexi-deploy-$STAMP.db"
+
+echo
+echo "########## DEPLOY ##########"
+echo "  before: $($G log --oneline -1)"
+STASHED=0
+if ! $G diff --quiet -- data/kory_voice_profile.json 2>/dev/null; then
+  $G stash push -q -- data/kory_voice_profile.json && STASHED=1
+fi
+$G fetch origin main -q
+if ! $G merge --ff-only origin/main; then
+  echo "  !!! MERGE FAILED — nothing restarted."
+  [ "$STASHED" = "1" ] && $G stash pop -q
+  exit 1
+fi
+[ "$STASHED" = "1" ] && $G stash pop -q
+echo "  after:  $($G log --oneline -1)"
+
+echo
+echo "########## RESTART BOTH SERVICES ##########"
+systemctl restart lexi-hermes.service
+systemctl restart lexi-api.service
+sleep 8
+echo "  lexi-hermes: $(systemctl is-active lexi-hermes.service)"
+echo "  lexi-api   : $(systemctl is-active lexi-api.service)"
+
+echo
+echo "########## VERIFY ##########"
+curl -s --max-time 15 http://127.0.0.1:8780/api/health; echo
+TOKEN=$(grep -E "^LEXI_API_TOKEN=" .env | cut -d= -f2- | tr -d '"' | tr -d "'")
+if [ -n "$TOKEN" ]; then
+  echo -n "  api /health: "
+  curl -s -o /dev/null -w "HTTP %{http_code}\n" --max-time 8 \
+    -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8081/api/v1/health
+fi
+LEXI_ENV=production .venv/bin/python -c "
+import json, app.config as c
+print('  posture:', json.dumps(c.safety_posture_summary()))
+"
+
+echo
+echo "########## CO-TENANT UNTOUCHED ##########"
+docker ps --format '  {{.Names}}  {{.Status}}' | grep -E 'hermes-agent|traefik' || echo "  !! container missing — investigate"

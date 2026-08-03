@@ -244,6 +244,13 @@ Covers the drafting stack that has never been exercised live: `draft_outbound_em
 ## Evidence kit (copy-paste)
 
 ```bash
+# DEPLOY — use scripts/deploy_lexi.sh. TWO services run this codebase and restart
+# independently: lexi-hermes.service (gateway+MCP+worker, :3978/:8780) and
+# lexi-api.service (read-only dashboard API, :8081, its own uvicorn). Restarting
+# only lexi-hermes leaves api_v1.py changes serving stale code — a new endpoint
+# 404s and looks like it was never deployed. Verified 2026-08-03.
+#   ssh root@srv1686061.hstgr.cloud 'bash -s' < scripts/deploy_lexi.sh
+
 # health + posture
 curl -s http://127.0.0.1:8780/api/health
 cd /home/lexi/AI_Scheduling_Agent && LEXI_ENV=production .venv/bin/python -c "import app.config as c,json;print(json.dumps(c.safety_posture_summary(),indent=2))"
