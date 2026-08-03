@@ -336,6 +336,32 @@ None today, but the log carries these from 2026-07-29/30 — both are classes th
 
 ---
 
+## RUN 5 — Phase 1, Group A: ✅ COMPLETE (5/5), 2026-08-03
+
+Sends CLOSED (`LEXI_KORY_OUTBOUND_BLOCKED=true`) throughout. Baseline mark: proposals > 6188.
+
+| ID | Result | Evidence |
+|---|---|---|
+| A-1 | ✅ pass | Proposal **6190** `awaiting_reply_prompt`; Teams reply-prompt card posted 14:16:18, **1s** after ingestion, and **confirmed delivered in Teams by the tester**. Triage `referral_or_intro`, priority `medium`, confidence **0.95**. No slots, no draft, nothing sent — correct for this state. |
+| A-2 | ✅ pass | Proposal **6193** → `no_reply_needed` / `non_scheduling` / `low`, auto-skipped `non_scheduling_low_priority`. No card. |
+| A-3 | ✅ pass | Identical reply on the LT-A1 thread. **Both** dedupe layers fired: `_conversation_has_proposal` at 14:21:29 (`Conversation … already tracked — skipping duplicate triage`), then `_thread_already_ingested` at 14:22:14 ×3 (`already ingested; skipping duplicate ingress`). Still exactly one proposal (6190); no second card. |
+| A-4 | ✅ pass (observational) | Satisfied by the 14:22:14 lines above — the backup poll re-listed the folder and skipped mail the webhook had already handled. No duplicates created. |
+| A-5 | ✅ pass (ongoing) | Six real inbounds triaged during the window, correctly split: cards for `FW: Travis?` (6189), `Advice on Project Management` (6191), `YPO request - Construction Network` (6194), `Enhancing Team Productivity` (6195); skipped `Summer is winding down…` (6192) as `newsletter_or_digest`. **Nothing sent to any real contact.** |
+
+**The `[TEST]` prefix does not distort triage** — 6190 came back `referral_or_intro`/`medium` at 0.95 confidence, not downgraded to `non_scheduling`/`low`. The convention is safe to keep for the rest of the run.
+
+**D-1 held under its real risk.** Widening to `important` did *not* degrade into notify-on-everything: the newsletter filter and the `non_scheduling`+`low` filter both still bite (6192, 6193 skipped). Confirmed on real mail, not just test mail.
+
+### Observations to resolve before sign-off (not failures)
+
+| # | Observation |
+|---|---|
+| **OB-1** | **Notification volume under `important`:** four real-inbound cards in fourteen minutes (14:08–14:22). Correct behaviour, but this is the noise level Kory would actually live with — feed it into the D-1 keep-or-revert decision with real numbers rather than a guess. |
+| **OB-2** | Cold-inbound proposals default to **`voice_mode=kory`, `send_channel=kory`** (6190). Harmless while no draft exists, but if a draft is generated from this state without flipping, it comes out in Kory's voice — exactly what **L-2** forbids. Verify at the drafting step. |
+| **OB-3** | `priority_contacts_config` in production is still **demo data** — `priority@example.com`, *"Demo placeholder priority contact."* The priority-contacts feature is effectively unconfigured. Decide whether to populate or remove it. |
+
+---
+
 ## RUN 1 RESULTS — 2026-07-26 (sends CLOSED)
 
 Config applied: `LEXI_HUBSPOT_BCC_ENABLED=false` (D-2 decision), notify mode left `delegation_only` (D-1 decision: cold inbound intentionally silent). `.env` backup: `.env.bak.testwindow.20260726-183148`. Baseline marks: proposals>3379, holds>0, audit>15723.
