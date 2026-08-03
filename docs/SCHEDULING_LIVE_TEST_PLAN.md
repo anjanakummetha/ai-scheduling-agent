@@ -5,7 +5,8 @@
 **Tester setup:** Anjana sends test emails from `anjanakummetha@gmail.com` → `kory.mitchell@iconicfounders.com`, and has access to Kory's Outlook and the Lexi/Hermes Teams chat. Production box: `ssh root@srv1686061.hstgr.cloud` (multi-tenant — never force-restart the VPS, never touch Sujash's containers).
 
 **Ground rules for every test:**
-- Run tests **serially, one thread at a time**, each with a **unique subject** (e.g. `Coffee chat — LT-C1`) so DB rows, Teams cards, and log lines are unambiguous.
+- Run tests **serially, one thread at a time**, each with a **unique subject** so DB rows, Teams cards, and log lines are unambiguous.
+- **Every test subject starts with `[TEST]`** (set 2026-08-03) so Kory can ignore them at a glance in his real inbox. Format: `[TEST] <natural subject> — LT-<id>`, e.g. `[TEST] Coffee chat — LT-C1`. Verified safe: the only TEST-keyed branch is `_skip_inbound_for_local_test_mode` (`orchestrator.py:897`), which is inert unless `LEXI_LOCAL_MODE=true` — not set in either prod env file. **But** the subject is fed to the triage LLM, so watch that the prefix doesn't drag a proposal to `non_scheduling`/`low`, which `important` mode auto-skips (`inbound_filter.py`). Check `intent_classification` and `priority_tier` on the first few proposals; if the prefix downgrades them, move the marker to the end of the subject rather than dropping it.
 - Orchestrator cycle is 30s and webhook delivery adds latency — allow **~1–2 minutes** after each email before judging "nothing happened."
 - Asana and HubSpot are **Kory's REAL accounts** — live writes must stay `false` throughout (reads/staging only).
 - After every phase, record evidence (§ Evidence kit) and mark the tracker (§ Tracker).
