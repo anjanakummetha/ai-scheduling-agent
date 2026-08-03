@@ -94,3 +94,66 @@ def test_api_disabled_without_env(monkeypatch):
     c = TestClient(create_app())
     # Router not mounted → 404, never an unauthenticated data leak.
     assert c.get("/api/v1/pending-approvals").status_code == 404
+
+
+# --- /unanswered-scheduling -------------------------------------------------
+# Teams no longer cards cold scheduling mail, so these asks have to surface
+# somewhere. This endpoint is what the morning briefing batches.
+
+
+@pytest.fixture
+def seed_aged_scheduling():
+    """Three staged asks: 50h old, 2h old, and one already handled."""
+    import uuid
+
+    made = []
+    with get_lexi_connection() as conn:
+        for label, age, status in (
+            ("stale", "-50 hours", "awaiting_reply_prompt"),
+            ("fresh", "-2 hours", "awaiting_reply_prompt"),
+            ("handled", "-50 hours", "executed"),
+        ):
+            thread = f"unans-{label}-{uuid.uuid4().hex[:8]}"
+            conn.execute(
+                "INSERT INTO email_threads(thread_id, subject, sender) VALUES (?,?,?)",
+                (thread, f"[TEST] {label} ask", "prospect@example.com"),
+            )
+            cur = conn.execute(
+                "INSERT INTO proposals(thread_id, status, intent_classification, created_at) "
+                "VALUES (?,?,?,datetime('now',?))",
+                (thread, status, "referral_or_intro", age),
+            )
+            made.append((label, cur.lastrowid))
+        conn.commit()
+    return dict(made)
+
+
+def test_unanswered_scheduling_requires_a_token(client) -> None:
+    assert client.get("/api/v1/unanswered-scheduling").status_code == 401
+
+
+def test_unanswered_scheduling_returns_only_aged_staged_asks(client, seed_aged_scheduling) -> None:
+    # max_days=3 isolates the seeded rows from whatever history the DB carries.
+    response = client.get(
+        "/api/v1/unanswered-scheduling?min_hours=24&max_days=3",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 200
+    ids = {item["id"] for item in response.json()["items"]}
+
+    assert seed_aged_scheduling["stale"] in ids, "a 50h-old staged ask must surface"
+    assert seed_aged_scheduling["fresh"] not in ids, "a 2h-old ask is not yet unanswered"
+    assert seed_aged_scheduling["handled"] not in ids, "executed proposals are done"
+
+
+def test_unanswered_scheduling_reports_age_and_oldest_first(client, seed_aged_scheduling) -> None:
+    response = client.get(
+        "/api/v1/unanswered-scheduling?min_hours=24&max_days=3",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    items = response.json()["items"]
+    stale = next(i for i in items if i["id"] == seed_aged_scheduling["stale"])
+    assert stale["age_hours"] >= 24
+    assert stale["requester"] == "prospect@example.com"
+    ages = [i["age_hours"] for i in items]
+    assert ages == sorted(ages, reverse=True), "oldest first — it has waited longest"

@@ -97,6 +97,55 @@ def pending_approvals() -> dict[str, Any]:
     return {"count": len(items), "items": items}
 
 
+@router.get("/unanswered-scheduling", dependencies=[Depends(_require_token)])
+def unanswered_scheduling(min_hours: int = 24, max_days: int = 7) -> dict[str, Any]:
+    """Scheduling asks staged but still unactioned — one batched line for the brief.
+
+    Teams is reserved for decisions only Kory can make, so a cold scheduling
+    email no longer raises a card. This is the counterweight: the same asks,
+    aged and batched into the morning briefing rather than interrupting.
+
+    `awaiting_reply_prompt` is the staged-and-waiting state — a proposal Lexi
+    parked because nobody delegated it to her.
+
+    Oldest first, since those have waited longest, but bounded by `max_days`:
+    without that bound a daily brief would re-surface the same long-dead asks
+    every morning and the section would stop being read.
+    """
+    min_hours = max(1, min(int(min_hours), 24 * 30))
+    max_days = max(1, min(int(max_days), 90))
+    with get_lexi_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.id, p.status, p.intent_classification, p.priority_tier,
+                   p.created_at, t.subject, t.sender,
+                   CAST((julianday('now') - julianday(p.created_at)) * 24 AS INTEGER) AS age_hours
+            FROM proposals AS p
+            LEFT JOIN email_threads AS t ON t.thread_id = p.thread_id
+            WHERE p.status = 'awaiting_reply_prompt'
+              AND p.created_at <= datetime('now', ?)
+              AND p.created_at >= datetime('now', ?)
+            ORDER BY p.created_at ASC
+            LIMIT 25
+            """,
+            (f"-{min_hours} hours", f"-{max_days} days"),
+        ).fetchall()
+
+    items = [
+        {
+            "id": r["id"],
+            "subject": r["subject"] or "(no subject)",
+            "requester": _clean_email(r["sender"]),
+            "intent": r["intent_classification"],
+            "priority": r["priority_tier"],
+            "age_hours": r["age_hours"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+    return {"count": len(items), "min_hours": min_hours, "items": items}
+
+
 @router.get("/holds", dependencies=[Depends(_require_token)])
 def holds() -> dict[str, Any]:
     with get_lexi_connection() as conn:
