@@ -362,6 +362,41 @@ Sends CLOSED (`LEXI_KORY_OUTBOUND_BLOCKED=true`) throughout. Baseline mark: prop
 
 ---
 
+## RUN 5 — Phase 1, Group B (in progress), 2026-08-03
+
+### B-1 — failed, five defects fixed, re-run passes
+
+First run (proposal 6196): sender asked for **"the week of the 10th"**; Lexi offered **Aug 18, Aug 26, Sep 2**, and the approval gate reported the slots *"match requested window"*. Everything about delegation worked — one proposal from the inbox+Sent-Items pair, `is_delegation=1`, Lexi voice, correct greeting, new sign-off, no Heidi text. Only slot selection was wrong.
+
+| # | Defect | Fix |
+|---|---|---|
+| **DEF-1** | `infer_scheduling_window` understood only *relative* phrases. Every calendar date — `week of the 10th`, `August 10-14`, `August 12`, `next Tuesday`, `the 12th`, `end of the month` — returned `None`, which the engine reads as "no constraint" and answers from a 60–120 day horizon. | Date parser added after the relative branches, most-specific first so a range isn't read as the single date starting it. Durations (`30 minutes`) still return `None`. `d22cd20` |
+| **DEF-2** | The window was only enforced when it hung off `plan.window`, but the engine infers its own whenever the plan lacks one — so a stated timeframe went unchecked on exactly the path that parsed it. Worse, `schedule_from_context` set `window_expanded=True` *because* slots fell outside the window, converting a violation into an accepted expansion. | Both the gate and `schedule_from_context` now use the window that actually applied; the flag means only what it says. `d22cd20` |
+| **DEF-3** | `PreApprovalReport.summary()` claimed *"match requested window"* unconditionally whenever there were no warnings — asserting a check it never ran. This is why the defect survived earlier runs. | Names the window it verified, or states plainly that none was requested. `d22cd20` |
+| **DEF-4** | Introducer names fell back to the raw email local part (`anjanakummetha`) while the profile store already held `Anjana Kummetha`. | Prefers the stored display name; stale rows repaired on read, no migration. `d22cd20` |
+| **DEF-5** | **The actual root cause.** `"check-in"` was a travel keyword, so `IFG + Sujash \| Check-in (Mon+Wed+Fri)` (26 events), `Kory + Dan Phillips \| biweekly check-in` (5) and the marketing biweekly (2) were travel — **33 of 41** travel-classified events. That marked **36 days** as travel, blanketed Mon–Fri of the requested week, left no usable non-travel day, and shifted the window to *"week of August 17 (after travel)"*. The shift logic was correct all along (V-3: it only moves when zero usable weekdays remain) — it was fed bad input. | Narrowed to `hotel check-in` / `flight check-in`. Real trips are flagged by `blocking_class`, not the subject heuristic, so nothing genuine was lost. **41 travel events → 10; 36 travel days → 8.** `f694a86` |
+| **DEF-7** | A *second* window override, found only because DEF-5's fix exposed it: `propose_meeting_slots` walks the window forward (+1w, +2w, +3w, then no window) whenever the requested one yields <2 slots, and set `window_expanded=True`, suppressing the gate's window check. `next week` came back as `next week (+1w)` reporting a clean match. | Not blocked — Kory has ~1 coffee slot a week, so refusing every expansion would make coffee scheduling unusable. The deviation is now a gate warning (*"no availability for week of August 10 — offering week of August 17 instead"*) that reaches the approval card, so Kory decides. `3a9c2e9` |
+
+**B-1r re-run — ✅ PASS** (proposal **6235**, virtual intro, "week of the 17th"):
+one proposal only · `is_delegation=1` · `voice_mode`/`send_channel` = `lexi` · **slots Aug 17, 18, 19 — all inside the requested Aug 17–23** · 30-min duration honoured · greeting "Hi Anjana," · window named back to the sender · correct sign-off · no Heidi text · `pending_approval`, nothing sent.
+
+**The notify-mode change verified in the live flow**, which no config check could prove:
+```
+15:27:44  Auto-skipped proposal 6235 (delegation_and_followups_cold_inbound)
+15:33:26  Posted Lexi approval card to Teams for proposal 6235
+```
+Anjana's cold email was silent; the card appeared only once Kory's CC reply delegated it. Same proposal id reused — no duplicate.
+
+### Open items from this run
+
+| # | Item |
+|---|---|
+| **DEF-6** | The escalation string concatenates raw engine internals onto Kory-facing text — `"...Should I try a different week? Engine diagnostics: {'candidates_scored': 0, ...}"` — and never names the real blocker (travel Aug 11–15; Monday's only gap is 60 min). **I-1 requires naming the blocker with 2–3 concrete options.** Fix during Group I. |
+| **OB-4** | **Kory's coffee availability cannot support the offer pattern.** Week of the 10th: travelling Aug 11–15, and Monday's three gaps (09:30–10:30, 12:30–13:15, 15:30–16:00) all fail a 60-min block + **90-min reserve**; he already has an 08:30 coffee. Week of the 17th: **1** slot. Week of the 24th: **1**. With `MIN_SLOT_OPTIONS=2`, single-week coffee requests will essentially always escalate or expand. Decide whether the 90-minute reserve is right, or whether coffee should offer a single slot. Not a bug — this is what his calendar says. |
+| **OB-1** | Superseded — notify volume is no longer a concern under `delegation_and_followups`. |
+
+---
+
 ## RUN 1 RESULTS — 2026-07-26 (sends CLOSED)
 
 Config applied: `LEXI_HUBSPOT_BCC_ENABLED=false` (D-2 decision), notify mode left `delegation_only` (D-1 decision: cold inbound intentionally silent). `.env` backup: `.env.bak.testwindow.20260726-183148`. Baseline marks: proposals>3379, holds>0, audit>15723.
