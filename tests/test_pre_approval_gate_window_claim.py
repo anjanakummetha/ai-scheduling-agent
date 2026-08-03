@@ -48,3 +48,36 @@ def test_out_of_window_slots_block_the_gate() -> None:
     assert not report.ok
     assert any("outside requested window" in check for check in report.checks)
     assert not report.window_verified
+
+
+def test_expanded_window_is_surfaced_not_silently_accepted() -> None:
+    """The engine walks the window forward when a week is too full.
+
+    That is often the useful answer, but it deviates from what the sender asked
+    for, so it has to reach Kory's card rather than pass as a clean match.
+    """
+    from app.scheduling.pre_approval_gate import verify_before_kory_approval
+
+    slots = [
+        {"start": "2026-08-18T08:30:00-06:00", "end": "2026-08-18T09:30:00-06:00"},
+        {"start": "2026-08-26T09:30:00-06:00", "end": "2026-08-26T10:30:00-06:00"},
+    ]
+    report = verify_before_kory_approval(
+        slots=slots,
+        calendar_context={"status": "available", "busy_events": []},
+        intent="coffee",
+        subject="Coffee",
+        body="Coffee the week of the 10th?",
+        window=WINDOW,
+        window_expanded=True,
+        original_window_label="week of August 10",
+        expanded_window_label="week of August 17",
+    )
+    # Still offerable — Kory has ~1 coffee slot a week, so blocking would make
+    # coffee scheduling unusable. But the deviation must be stated.
+    assert report.ok
+    assert not report.window_verified
+    assert any("no availability for week of August 10" in w for w in report.warnings)
+    assert "week of August 17" in " ".join(report.warnings)
+    assert "match requested window" not in report.summary()
+    assert "week of August 10" in report.rules_status_line()

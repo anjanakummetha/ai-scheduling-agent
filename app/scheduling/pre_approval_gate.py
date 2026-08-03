@@ -79,6 +79,8 @@ def verify_before_kory_approval(
     meeting_format: str | None = None,
     window_expanded: bool = False,
     window: Any = None,
+    original_window_label: str = "",
+    expanded_window_label: str = "",
 ) -> PreApprovalReport:
     """Fail closed unless calendar is readable and slots pass conflict + Kory rules."""
     busy = list(calendar_context.get("busy_events") or [])
@@ -139,7 +141,21 @@ def verify_before_kory_approval(
     # rather than carried on the plan. Keying this off plan.window alone meant a
     # sender's stated timeframe was never enforced whenever the plan lacked one.
     effective_window = window or (plan.window if plan else None)
-    if effective_window and not window_expanded:
+    if window_expanded:
+        # The engine walked the window forward (+1w, +2w, +3w, then open horizon)
+        # because the requested one had too few slots. That is often the useful
+        # answer, but it is a deviation from what the sender asked for, so it
+        # must reach Kory's card instead of passing as a clean match.
+        requested = original_window_label or (effective_window.label if effective_window else "")
+        offering = expanded_window_label or ""
+        report.window_verified = False
+        if requested:
+            report.window_label = requested
+            report.warnings.append(
+                f"no availability for {requested}"
+                + (f" — offering {offering} instead" if offering else " — offering the next open times")
+            )
+    elif effective_window:
         report.window_label = effective_window.label
         outside = [
             index

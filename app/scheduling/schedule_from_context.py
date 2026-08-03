@@ -254,6 +254,8 @@ def schedule_from_context(
         calendar_context=calendar_context,
         plan=plan,
         window=effective_window,
+        original_window_label=str(engine.diagnostics.get("original_window") or ""),
+        expanded_window_label=str(engine.diagnostics.get("expanded_window") or ""),
         intent=intent,
         subject=subj,
         body=scheduling_body,
