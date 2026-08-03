@@ -21,7 +21,12 @@ _TRAVEL_SUBJECT_KEYS = (
     "in chicago",
     "in town",
     "travel",
-    "check-in",
+    # Hotel/flight check-in only. A bare "check-in" matched Kory's recurring
+    # internal meetings — "IFG + Sujash | Check-in (Mon+Wed+Fri)" alone accounted
+    # for 26 events — which blanketed whole weeks as travel and pushed requested
+    # windows out by weeks. See the LT-B1 defect.
+    "hotel check-in",
+    "flight check-in",
 )
 
 
