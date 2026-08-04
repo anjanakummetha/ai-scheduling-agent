@@ -492,6 +492,12 @@ The real defects were in the reporting chain, both fixed + deployed:
 - **`77c88c7`** — `_build_schedule` computed the gate's expansion warning and never persisted it: gate warnings now become `ScheduleResult.scheduling_note` (fallback constructed from diagnostics), which `_update_proposal_for_approval` persists and both renderers display.
 - Also **`a7d7829`** (from T0-2): 30s SQLite busy timeout, `hold_placement_failed` audit row, honest post-send failure messages.
 
+**C-2 — ✅ PASS after three fixes** (proposal 6455, "early morning this week or next — even 7 AM works"). Offered slots obeyed every hard rule (all mornings, nothing pre-8:00 Mon/Wed/Fri), but the diagnostic convicted three parsers (fixed in `b447e31`, verified live post-deploy):
+- **"this week or next" collapsed to this week** — new branch ahead of the bare phrase spans both weeks (verified: `Aug 5–16`).
+- **"early morning" hit the generic mornings branch first** (contains the word "morning") → 8:00 floor; a genuinely free Tue 7:00 was rejected "outside time-of-day window". Early-morning now matches first (7:00), and explicit "even N AM" mentions lower any morning window's start (floor 7:00 per V-1, never raises).
+- **Delegation drafts persist via `hermes_orchestrator`, not `_build_schedule`** — so the 77c88c7 note fix never reached them (6455's note was empty). Note logic now lives once on `ScheduleFromContextResult.scheduling_note()`; both paths persist it; a clean fresh draft clears a stale note.
+Cosmetic (logged, not fixed): shifting the compound window labels the expansion "week of August 12" — odd phrasing, correct dates. SSH allowlist added this session — box-side commands no longer relay through Anjana.
+
 **New open ruling for Kory (generalizes OB-4):** when the requested window holds exactly **one** valid slot, offer it plus disclosed following-week alternatives, or keep the current all-or-nothing expansion? Also noted: the sender-facing draft did not acknowledge the window shift ("he's traveling most of next week…") — composer courtesy — worst case Kory edits the draft; revisit with the ruling.
 
 ---
