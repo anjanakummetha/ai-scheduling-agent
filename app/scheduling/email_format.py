@@ -575,6 +575,16 @@ def finalize_outbound_email_body(body: str, *, max_chars: int | None = None) -> 
         closing = f"{sign_off},\nKory"
     else:
         main = _strip_lexi_closing(text).rstrip()
+        # A draft that already ends with a bare "Kory" (or "Best,/Thanks,\nKory")
+        # must lose that line, or appending the canonical block doubles the
+        # sign-off: "...Kory\n\nLet's Win,\nKory" (live L-1).
+        main = re.sub(
+            r"\n\s*(?:(?:Best|Thanks|Thank you|Warmly|Regards|Cheers)[,!]?\s*\n\s*)?"
+            r"[-–—]*\s*Kory(?:\s+Mitchell)?\s*$",
+            "",
+            main,
+            flags=re.IGNORECASE,
+        ).rstrip()
         closing = f"{sign_off},\nKory"
 
     main = _ensure_paragraph_spacing(main)
