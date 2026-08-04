@@ -483,6 +483,17 @@ Deployed `fa49455` (Teams line-break normalization + text-only), flipped `LEXI_T
 
 Also fixed two calendar-fragile tests that failed with no code change as MT crossed midnight (hardcoded roll-forward year; unanswered-scheduling seeds accumulating in the shared local DB past the endpoint cap). Suite: **464 pass**, stable across consecutive runs.
 
+### RUN 5 — Group C (in progress), 2026-08-04
+
+**C-1 — ✅ PASS after two display-chain fixes** (proposal 6449, "30-min virtual intro next week" → delegated). Offered Aug 17/19/21 for a "next week" (Aug 10–14) ask — verified **correct** with `scripts/diagnose_slot_search.py` (new, read-only): the requested week yields exactly **one** valid slot (Mon Aug 10 10:00). Tuesday is a calendar-marked travel day ("Kory in Chicago") so the V-3 travel ruling holds it for Kory; Wed–Fri are travel + fully booked. 1 < MIN_SLOT_OPTIONS → ladder correctly expanded, diagnostics record `original_window: next week → expanded: week of August 17`.
+
+The real defects were in the reporting chain, both fixed + deployed:
+- **`0a3bfe9`** — text-only messages dropped the card's `scheduling_note`/id/commands: added ⚠️ warning line, `#id` header, `approve/reject #N` footer; pending/new-mail lists show ids; card-era copy removed.
+- **`77c88c7`** — `_build_schedule` computed the gate's expansion warning and never persisted it: gate warnings now become `ScheduleResult.scheduling_note` (fallback constructed from diagnostics), which `_update_proposal_for_approval` persists and both renderers display.
+- Also **`a7d7829`** (from T0-2): 30s SQLite busy timeout, `hold_placement_failed` audit row, honest post-send failure messages.
+
+**New open ruling for Kory (generalizes OB-4):** when the requested window holds exactly **one** valid slot, offer it plus disclosed following-week alternatives, or keep the current all-or-nothing expansion? Also noted: the sender-facing draft did not acknowledge the window shift ("he's traveling most of next week…") — composer courtesy — worst case Kory edits the draft; revisit with the ruling.
+
 ---
 
 ## RUN 1 RESULTS — 2026-07-26 (sends CLOSED)
