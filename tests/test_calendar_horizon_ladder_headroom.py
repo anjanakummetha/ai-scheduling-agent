@@ -44,3 +44,16 @@ def test_horizon_is_still_bounded() -> None:
 
     for body in ("Coffee the week of the 17th?", "Coffee next week?", "Coffee in September?"):
         assert _days(body) <= settings.lexi_calendar_search_days_max
+
+
+def test_cache_key_ignores_email_text():
+    """Live latency finding: keying the calendar cache by subject/body hash gave
+    a near-zero hit rate — every email re-fetched identical busy data (~70
+    Composio calls, 40-90s). The busy picture depends only on the horizon."""
+    from app.scheduling.calendar_context import _bucket_horizon, _context_cache_key
+
+    assert _context_cache_key(days=45) == _context_cache_key(days=45)
+    assert _bucket_horizon(31) == 45
+    assert _bucket_horizon(60) == 90
+    assert _bucket_horizon(120) == 120
+    assert _bucket_horizon(200) == 200

@@ -32,9 +32,25 @@ def clear_scheduling_calendar_context_cache() -> None:
     _context_cache.clear()
 
 
-def _context_cache_key(*, days: int, subject: str, body: str) -> str:
+# The busy picture depends ONLY on the horizon — the email text merely decides
+# how many days to fetch. Keying the cache by subject/body hash gave it a
+# near-zero hit rate: every distinct email re-fetched identical calendar data
+# with ~70 sequential Composio calls (40-90s per scheduling run, live-measured).
+# Horizons are bucketed so different asks share one fetch; fetching more days
+# than asked is harmless — the engine filters by window.
+_HORIZON_BUCKETS = (45, 90, 120)
+
+
+def _bucket_horizon(days: int) -> int:
+    for bucket in _HORIZON_BUCKETS:
+        if days <= bucket:
+            return bucket
+    return days
+
+
+def _context_cache_key(*, days: int) -> str:
     hour = datetime.now(timezone.utc).strftime("%Y%m%d%H")
-    return f"{days}:{hour}:{hash((subject.strip(), body.strip()))}"
+    return f"{days}:{hour}"
 
 
 def load_scheduling_calendar_context(
@@ -44,12 +60,14 @@ def load_scheduling_calendar_context(
     horizon_days: int | None = None,
 ) -> dict[str, Any]:
     """Full busy picture for auto-scheduler and availability tools."""
-    days = resolve_calendar_horizon_days(
-        subject=subject,
-        body=body,
-        explicit_days=horizon_days,
+    days = _bucket_horizon(
+        resolve_calendar_horizon_days(
+            subject=subject,
+            body=body,
+            explicit_days=horizon_days,
+        )
     )
-    cache_key = _context_cache_key(days=days, subject=subject, body=body)
+    cache_key = _context_cache_key(days=days)
     now = time.monotonic()
     cached = _context_cache.get(cache_key)
     if cached and now - cached[0] < _CONTEXT_CACHE_TTL_SEC:
