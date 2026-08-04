@@ -403,21 +403,7 @@ def _build_schedule(
     # offering week of August 17 instead") were computed here and then dropped:
     # nothing copied them onto the result, so the persisted proposal carried no
     # scheduling_note and Kory approved window expansions he was never shown.
-    scheduling_note = ""
-    if result.gate is not None and result.gate.warnings:
-        scheduling_note = "; ".join(result.gate.warnings)
-    elif window_expanded:
-        requested = str(
-            result.diagnostics.get("original_window")
-            or (result.plan.window.label if result.plan and result.plan.window else "")
-        ).strip()
-        offering = str(result.diagnostics.get("expanded_window") or "").strip()
-        if requested:
-            scheduling_note = f"no availability for {requested}" + (
-                f" — offering {offering} instead" if offering else " — offering the next open times"
-            )
-        else:
-            scheduling_note = "Requested window had no availability — offering the next open times."
+    scheduling_note = result.scheduling_note()
     return ScheduleResult(
         slots=slots,
         drafted_reply=draft,

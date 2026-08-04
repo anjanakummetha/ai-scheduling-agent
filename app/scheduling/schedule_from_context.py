@@ -74,6 +74,28 @@ class ScheduleFromContextResult:
             "busy_event_count": len(self.calendar_context.get("busy_events") or []),
         }
 
+    def scheduling_note(self) -> str:
+        """The caveat Kory must see before approving (e.g. window expansion).
+
+        Single source of truth — every path that persists a proposal draft must
+        store this, or the gate's warning is computed and then lost (the C-1/C-2
+        live defect: offers landed outside the requested window with no note).
+        """
+        if self.gate is not None and self.gate.warnings:
+            return "; ".join(self.gate.warnings)
+        if bool(self.diagnostics.get("window_expanded")):
+            requested = str(
+                self.diagnostics.get("original_window")
+                or (self.plan.window.label if self.plan and self.plan.window else "")
+            ).strip()
+            offering = str(self.diagnostics.get("expanded_window") or "").strip()
+            if requested:
+                return f"no availability for {requested}" + (
+                    f" — offering {offering} instead" if offering else " — offering the next open times"
+                )
+            return "Requested window had no availability — offering the next open times."
+        return ""
+
 
 def merge_scheduling_body(body: str, kory_scheduling_guidance: str = "") -> str:
     base = (body or "").strip()

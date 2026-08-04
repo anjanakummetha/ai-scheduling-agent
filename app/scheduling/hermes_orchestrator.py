@@ -92,6 +92,7 @@ def orchestrate_scheduling_from_email(
             "draft_source": draft_source,
             "recipient_timezone": result.recipient_timezone,
             "timezone_uncertain": result.timezone_uncertain,
+            "scheduling_note": result.scheduling_note(),
             "kory_message": "Draft is ready — review the times on the card.",
         }
     )
@@ -138,6 +139,7 @@ def orchestrate_proposal_scheduling(
             slots=list(outcome.get("slots") or []),
             voice_mode=voice_mode,
             recipient_timezone=str(outcome.get("recipient_timezone") or "") or None,
+            scheduling_note=str(outcome.get("scheduling_note") or ""),
         )
         outcome["status"] = PENDING_APPROVAL
         return outcome
@@ -180,6 +182,7 @@ def _persist_proposal_draft(
     slots: list[dict[str, str]],
     voice_mode: str,
     recipient_timezone: str | None,
+    scheduling_note: str = "",
 ) -> None:
     with get_lexi_connection() as conn:
         conn.execute(
@@ -187,6 +190,7 @@ def _persist_proposal_draft(
             UPDATE proposals
             SET status = ?, drafted_reply = ?, proposed_slots = ?,
                 voice_mode = ?, recipient_timezone = COALESCE(?, recipient_timezone),
+                scheduling_note = ?,
                 updated_at = datetime('now')
             WHERE id = ?
             """,
@@ -196,6 +200,8 @@ def _persist_proposal_draft(
                 json.dumps(slots, default=str),
                 voice_mode,
                 recipient_timezone,
+                # A fresh draft carries its fresh caveat — or clears a stale one.
+                scheduling_note.strip() or None,
                 proposal_id,
             ),
         )

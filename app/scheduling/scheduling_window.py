@@ -220,6 +220,20 @@ def infer_scheduling_window(
             label="before travel",
         )
 
+    # "this week or next" must come before the bare "this week" branch, or the
+    # compound phrase collapses to this week alone (live C-2: "this week or
+    # next" became Aug 5-9 and the ladder walked clean out of both weeks).
+    if re.search(r"\bthis\s+week\s+or\s+(?:the\s+)?next(?:\s+week)?\b", combined):
+        start, end = _week_bounds(today)
+        if today > start:
+            start = today + timedelta(days=1)  # skip today for scheduling
+        return SchedulingWindow(
+            start=start,
+            end=end + timedelta(days=7),
+            source="body",
+            label="this week or next",
+        )
+
     if re.search(r"\bthis\s+week\b", combined):
         start, end = _week_bounds(today)
         if today > start:
@@ -306,6 +320,28 @@ def _parse_clock_token(hour: int, minute: int, ampm: str | None) -> tuple[int, i
     return h, minute
 
 
+def _lower_start_for_explicit_am(window: TimeOfDayWindow, combined: str) -> TimeOfDayWindow:
+    """Widen a morning window downward when the sender names an earlier time.
+
+    "Early morning — even 7 AM works" must make 7:00 offerable. Only ever
+    lowers the start (an explicit 10 AM mention never shrinks the window), and
+    floors at 7:00 — Kory's earliest for outside meetings (ruling V-1).
+    """
+    from dataclasses import replace
+
+    earliest = window.earliest_minutes()
+    for match in re.finditer(r"\b(\d{1,2})(?::(\d{2}))?\s*a\.?m\.?\b", combined):
+        hour, minute = int(match.group(1)), int(match.group(2) or 0)
+        if not 1 <= hour <= 11:
+            continue
+        total = max(hour * 60 + minute, 7 * 60)
+        if total < earliest:
+            earliest = total
+    if earliest == window.earliest_minutes():
+        return window
+    return replace(window, start_hour=earliest // 60, start_minute=earliest % 60)
+
+
 def infer_time_of_day_window(
     *,
     subject: str = "",
@@ -331,24 +367,34 @@ def infer_time_of_day_window(
                 label=match.group(0).strip(),
             )
 
+    # "early morning" contains the word "morning", so this branch must run
+    # before the generic mornings branch — the old order returned an 8:00 floor
+    # for "early morning, even 7 AM works" and a genuinely free 7:00 slot was
+    # rejected as "outside time-of-day window" (live C-2).
+    if re.search(r"\b(early\s+morning|early\s+am)\b", combined):
+        return _lower_start_for_explicit_am(
+            TimeOfDayWindow(
+                start_hour=7,
+                start_minute=0,
+                end_hour=11,
+                end_minute=0,
+                label="early morning",
+            ),
+            combined,
+        )
+
     if re.search(r"\b(mornings?|morning\s+works?)\b", combined) and not re.search(
         r"\b(afternoon|evening|after\s+\d|pm)\b", combined
     ):
-        return TimeOfDayWindow(
-            start_hour=8,
-            start_minute=0,
-            end_hour=12,
-            end_minute=0,
-            label="mornings",
-        )
-
-    if re.search(r"\b(early\s+morning|early\s+am)\b", combined):
-        return TimeOfDayWindow(
-            start_hour=7,
-            start_minute=0,
-            end_hour=11,
-            end_minute=0,
-            label="early morning",
+        return _lower_start_for_explicit_am(
+            TimeOfDayWindow(
+                start_hour=8,
+                start_minute=0,
+                end_hour=12,
+                end_minute=0,
+                label="mornings",
+            ),
+            combined,
         )
 
     if re.search(r"\bafternoons?\b", combined) and not re.search(r"\b(morning|evening)\b", combined):
