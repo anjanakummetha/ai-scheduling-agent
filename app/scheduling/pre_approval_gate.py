@@ -104,9 +104,13 @@ def verify_before_kory_approval(
     # keep them out of user-facing warnings (still available on calendar_context).
     _ = list(calendar_context.get("calendars_unavailable") or [])
 
-    if len(slots) < MIN_SLOT_OPTIONS:
+    # A Kory-directed search ("lunch approved — offer that week") may honestly
+    # yield one slot; blocking it here re-escalated the question he had just
+    # answered (live I-2, third layer of the same 2-slot rule).
+    required = 1 if (plan is not None and getattr(plan, "kory_guidance", "").strip()) else MIN_SLOT_OPTIONS
+    if len(slots) < required:
         report.ok = False
-        report.checks.append(f"need at least {MIN_SLOT_OPTIONS} slots (got {len(slots)})")
+        report.checks.append(f"need at least {required} slots (got {len(slots)})")
         return report
 
     fmt = meeting_format or infer_meeting_format(

@@ -371,3 +371,34 @@ class TestLunchMenuAndGuidedMinimum:
                 intent="lunch", subject="s", body="b", plan=plan,
             )
         assert fv.call_count > 1, "without guidance the ladder must still search wider"
+
+
+class TestGateAcceptsGuidedSingleSlot:
+    def test_single_slot_passes_with_guidance(self):
+        from app.scheduling.pre_approval_gate import verify_before_kory_approval
+        from app.scheduling.scheduling_plan import SchedulingPlan
+
+        plan = SchedulingPlan(kory_guidance="Lunch approved for this one.")
+        report = verify_before_kory_approval(
+            slots=[{"start": "2026-08-21T11:30:00-06:00", "end": "2026-08-21T12:30:00-06:00"}],
+            calendar_context={"status": "available", "busy_events": []},
+            plan=plan,
+            intent="lunch_request",
+            subject="lunch",
+            body="lunch sometime? Kory approved.",
+        )
+        assert not any("need at least" in c for c in report.checks)
+
+    def test_single_slot_still_blocked_without_guidance(self):
+        from app.scheduling.pre_approval_gate import verify_before_kory_approval
+
+        report = verify_before_kory_approval(
+            slots=[{"start": "2026-08-21T11:30:00-06:00", "end": "2026-08-21T12:30:00-06:00"}],
+            calendar_context={"status": "available", "busy_events": []},
+            plan=None,
+            intent="referral_or_intro",
+            subject="s",
+            body="b",
+        )
+        assert report.ok is False
+        assert any("need at least 2" in c for c in report.checks)
