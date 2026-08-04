@@ -76,18 +76,25 @@ def format_draft_ready_text(
     draft: str,
     slots: list | None = None,
     voice_mode: str = "kory",
+    proposal_id: int | None = None,
+    scheduling_note: str = "",
 ) -> str:
     """Clean draft preview for Teams after Kory says yes."""
     from app.scheduling.email_format import format_slot_for_email, infer_recipient_timezone
 
     title = display_subject(subject)
     body = normalize_draft_for_display(draft, max_chars=None, voice_mode=voice_mode)
+    header = f"**{title}**" if proposal_id is None else f"**#{proposal_id} — {title}**"
     lines = [
-        f"**{title}**",
+        header,
         f"From {display_sender(sender)}",
-        "",
-        body,
     ]
+    note = (scheduling_note or "").strip()
+    if note:
+        # The gate's caveat (e.g. "no availability in the requested week —
+        # offering the following week"). Kory must see it before approving.
+        lines.append(f"⚠️ {note}")
+    lines.extend(["", body])
     if slots:
         recipient_tz = infer_recipient_timezone(sender)
         lines.append("")
@@ -96,10 +103,12 @@ def format_draft_ready_text(
             lines.append(
                 f"{index}. {format_slot_for_email(slot, recipient_tz=recipient_tz)}"
             )
+    ref = f"#{proposal_id}" if proposal_id is not None else "#N"
     lines.extend(
         [
             "",
-            "_Not sent._ Edit in the Teams card or chat, then tap **Send** when ready.",
+            f"_Not sent._ Reply **approve {ref}** to send, **reject {ref} — reason** "
+            "to discard, or tell me what to change in the draft.",
         ]
     )
     return "\n".join(lines)

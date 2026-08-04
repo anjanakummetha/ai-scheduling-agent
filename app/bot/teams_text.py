@@ -94,13 +94,13 @@ def format_pending_list(items: list[LexiQueueItem]) -> str:
     lines = ["**Drafts ready**\n"]
     for item in items[:15]:
         lines.append(
-            f"• **{display_subject(item.subject)}** — from {display_sender(item.sender)}"
+            f"• **#{item.proposal_id} — {display_subject(item.subject)}** — "
+            f"from {display_sender(item.sender)}"
         )
     if len(items) > 15:
         lines.append(f"_…and {len(items) - 15} more._")
     lines.append(
-        "\nUse the card buttons, or say e.g. "
-        "_Show draft for Dan Smith — Project Paint_."
+        "\nSay **show draft #N**, **approve #N**, or **reject #N — reason**."
     )
     return "\n".join(lines)
 
@@ -138,11 +138,13 @@ def format_inbound_reply_list(items: list[dict]) -> str:
 
     lines = ["**New mail**\n"]
     for item in items[:15]:
+        pid = item.get("proposal_id")
+        label = f"#{pid} — " if pid else ""
         lines.append(
-            f"• **{display_subject(item.get('subject'))}** — "
+            f"• **{label}{display_subject(item.get('subject'))}** — "
             f"from {display_sender(item.get('sender'))}"
         )
-    lines.append("\nUse the card buttons or ask me to draft a reply in chat.")
+    lines.append("\nSay **draft #N** to draft a reply, or **draft #N no** to skip.")
     return "\n".join(lines)
 
 
@@ -156,9 +158,11 @@ def _format_approval_text(item: LexiQueueItem, *, include_draft: bool) -> str:
             draft=item.drafted_reply or "",
             slots=item.proposed_slots or None,
             voice_mode=str(item.voice_mode or "kory"),
+            proposal_id=item.proposal_id,
+            scheduling_note=str(getattr(item, "scheduling_note", "") or ""),
         )
     return (
-        f"**{display_subject(item.subject)}**\n"
+        f"**#{item.proposal_id} — {display_subject(item.subject)}**\n"
         f"From {display_sender(item.sender)}\n\n"
         "_Draft in progress — ask me to show it when ready._"
     )
@@ -247,11 +251,12 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
                 "option": 1,
             }
         if len(pending) > 1:
+            ids = ", ".join(f"#{p.proposal_id}" for p in pending[:10])
             return {
                 "action": "unresolved",
                 "message": (
-                    "More than one draft is waiting — use the **Send** button on the card, "
-                    "or say e.g. _Send reply to Dan Smith — Project Paint_."
+                    f"More than one draft is waiting ({ids}) — say **approve #N** "
+                    "for the one you mean, or **pending** to review them."
                 ),
             }
 

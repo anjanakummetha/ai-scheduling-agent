@@ -36,6 +36,86 @@ class TestTeamsMarkdownBreaks:
         )
 
 
+class TestApprovalTextCarriesGateContext:
+    """Cards showed the gate's scheduling_note in Attention color; the text-only
+    path must carry the same caveat, the proposal id, and the text commands —
+    or Kory approves a window expansion he was never told about."""
+
+    def test_draft_text_includes_id_note_and_commands(self):
+        from app.bot.teams_format import format_draft_ready_text
+
+        text = format_draft_ready_text(
+            subject="[TEST] Intro call — LT-C1",
+            sender="anjana@example.com",
+            draft="Hi Anjana,\n\nHere are a few times.\n\nThank you,\nLexi Knightly",
+            slots=None,
+            voice_mode="lexi",
+            proposal_id=6450,
+            scheduling_note=(
+                "No availability for week of August 10 — offering week of "
+                "August 17 instead."
+            ),
+        )
+        assert "#6450" in text
+        assert "⚠️ No availability for week of August 10" in text
+        assert "approve #6450" in text
+        assert "reject #6450" in text
+        assert "tap **Send**" not in text
+        assert "Teams card" not in text
+        assert "card buttons" not in text.lower()
+
+    def test_note_omitted_when_empty(self):
+        from app.bot.teams_format import format_draft_ready_text
+
+        text = format_draft_ready_text(
+            subject="Intro",
+            sender="a@b.com",
+            draft="Hi",
+            proposal_id=7,
+            scheduling_note="",
+        )
+        assert "⚠️" not in text
+        assert "approve #7" in text
+
+    def test_queue_item_note_reaches_notification(self):
+        from app.agents.comms_agent import LexiQueueItem
+        from app.bot.teams_text import format_approval_notification
+
+        item = LexiQueueItem(
+            proposal_id=6450,
+            thread_id="t1",
+            subject="[TEST] Intro call — LT-C1",
+            sender="anjana@example.com",
+            raw_body="",
+            intent_classification="referral_or_intro",
+            priority_tier="medium",
+            proposed_slots=[],
+            drafted_reply="Hi Anjana,\n\nTimes below.\n\nThank you,\nLexi Knightly",
+            confidence_score=0.9,
+            justification=None,
+            voice_mode="lexi",
+            holds=[],
+            approval_card={},
+            scheduling_note="Offering week of August 17 instead.",
+        )
+        text = format_approval_notification(item)
+        assert "#6450" in text
+        assert "⚠️ Offering week of August 17 instead." in text
+
+    def test_pending_list_shows_ids_and_text_commands(self):
+        from app.bot.teams_text import format_pending_list
+
+        class _Item:
+            proposal_id = 6450
+            subject = "Intro call"
+            sender = "anjana@example.com"
+
+        text = format_pending_list([_Item()])
+        assert "#6450" in text
+        assert "approve #N" in text
+        assert "card buttons" not in text.lower()
+
+
 class TestMcpResultNormalization:
     def test_ok_normalizes_message_fields(self):
         import hermes_mcp_server as mcp_mod

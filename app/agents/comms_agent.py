@@ -47,6 +47,10 @@ class LexiQueueItem:
     voice_mode: str | None
     holds: list[dict[str, Any]]
     approval_card: dict[str, Any]
+    # Gate warnings (e.g. "no availability in the requested week — offering the
+    # following week"). The card renders these in Attention color; the text-only
+    # path must carry them too or Kory approves without seeing the caveat.
+    scheduling_note: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -290,6 +294,7 @@ def get_lexi_pending_queue() -> list[LexiQueueItem]:
                 p.confidence_score,
                 p.justification,
                 p.voice_mode,
+                p.scheduling_note,
                 COALESCE(p.recipient_timezone, e.recipient_timezone) AS recipient_timezone,
                 e.subject,
                 e.sender,
@@ -346,6 +351,7 @@ def get_lexi_pending_queue() -> list[LexiQueueItem]:
                     voice_mode=row["voice_mode"],
                     holds=holds,
                     approval_card=approval_card,
+                    scheduling_note=row["scheduling_note"],
                 )
             )
         return items

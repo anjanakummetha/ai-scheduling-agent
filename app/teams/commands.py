@@ -391,6 +391,7 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
                     draft=draft,
                     slots=_parse_slots(bundle.get("proposed_slots")),
                     voice_mode=str(bundle.get("voice_mode") or "kory"),
+                    proposal_id=proposal_id,
                 )
             )
         else:
@@ -512,7 +513,6 @@ def _show_draft_message(proposal_id: int, *, prefix: str = "") -> dict[str, Any]
         if prefix:
             lines.append(prefix)
         lines.append(format_approval_notification(item))
-        lines.append("\n_Not sent._ Edit in chat or approve when ready.")
         return {
             "ok": True,
             "handled": True,
@@ -533,7 +533,8 @@ def _show_draft_message(proposal_id: int, *, prefix: str = "") -> dict[str, Any]
                 "handled": True,
                 "message": (
                     f"**{label}** is still waiting for your draft decision.\n"
-                    "Use the card buttons or ask me to draft a reply in chat."
+                    f"Say **draft #{proposal_id}** to draft a reply, or "
+                    f"**draft #{proposal_id} no** to skip."
                 ),
                 "proposal_id": proposal_id,
                 "status": "awaiting_reply_prompt",
