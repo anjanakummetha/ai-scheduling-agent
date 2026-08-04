@@ -71,7 +71,7 @@ Serial, unique `[TEST] … — LT-x` subjects, ~1–2 min between sends, as befo
 | **P3-B** `LT-H4`: ask → offer → counter a **busy** time → then "none work — following week?" → then "maybe later in the week?" → one reply from a second address | H-4 (asks Kory, never auto-books) · H-5 re-offer + hold release · H-6 vague reply · H-10 thread-matched, no dup proposal |
 | **P3-C** `LT-H3`: ask → offer → counter a **free** time → bare `send` (exactly one pending at that moment) → invite → accept, then **decline** the Outlook invite | H-3 · D-4 · H-8 decline surfaced (or H-9 if she stays silent instead — pick one, H-8 preferred) |
 | **P3-D**: reuse any staged leftover → `reject #N — not now` | D-3 |
-| **No-send extras** | E-3/E-4 by SQL-backdating P3-B's released holds · **E-6** by manually booking over P3-C's accepted slot before approving the invite (safety-critical — keep) · M-1 backdated nudge · M-2 overnight briefing · M-3/M-4 log + budget sweep at the end |
+| **No-send extras** | E-3/E-4 by SQL-backdating P3-B's released holds · **E-6** by manually booking over P3-C's accepted slot before approving the invite (safety-critical — keep) · **M-1 REDEFINED (2026-08-04, Anjana's simplification, `f2ff154`): the 24h Teams nudge is flag-gated OFF (`LEXI_KORY_24H_TEAMS_NUDGE`); aged items now appear as a "⏳ Waiting on you — Lexi" section in the 4:45 AM briefing email (ids + ages + Teams commands). M-1 now = verify that section appears in the next morning's briefing (fold into M-2)** · M-2 overnight briefing · M-3/M-4 log + budget sweep at the end |
 
 ### R-5. Blocker 2 (plain Reply invisible) — a decision, not a test
 
