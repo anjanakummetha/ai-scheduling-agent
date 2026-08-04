@@ -45,7 +45,8 @@ def prepare_scheduling_offer_for_approval(
     if existing_draft and existing_slots:
         try:
             parsed = json.loads(existing_slots) if isinstance(existing_slots, str) else existing_slots
-            if isinstance(parsed, list) and len(parsed) >= MIN_SLOT_OPTIONS:
+            required = 1 if _proposal_guidance(proposal_record) else MIN_SLOT_OPTIONS
+            if isinstance(parsed, list) and len(parsed) >= required:
                 return proposal_record, True
         except (TypeError, json.JSONDecodeError):
             pass
@@ -60,6 +61,25 @@ def prepare_scheduling_offer_for_approval(
     return updated, True
 
 
+def _proposal_guidance(proposal_record: dict[str, Any]) -> str:
+    """Kory's per-proposal guidance — from the record, or the DB when the
+    caller's record shape omits the column (several call sites do)."""
+    guidance = str(proposal_record.get("kory_scheduling_guidance") or "").strip()
+    if guidance or not proposal_record.get("id"):
+        return guidance
+    try:
+        from app.storage.lexi_db import get_lexi_connection
+
+        with get_lexi_connection() as conn:
+            row = conn.execute(
+                "SELECT kory_scheduling_guidance FROM proposals WHERE id = ?",
+                (int(proposal_record["id"]),),
+            ).fetchone()
+        return str(row["kory_scheduling_guidance"] or "").strip() if row else ""
+    except Exception:  # noqa: BLE001 — guidance lookup must never break rendering
+        return ""
+
+
 def refresh_proposal_scheduling_offer(
     proposal_record: dict[str, Any],
     email_record: dict[str, Any],
@@ -72,6 +92,15 @@ def refresh_proposal_scheduling_offer(
     intent = str(proposal_record.get("intent_classification") or "")
     voice_mode = str(proposal_record.get("voice_mode") or "kory")
     thread_id = str(proposal_record.get("thread_id") or "")
+    guidance = _proposal_guidance(proposal_record)
+
+    if guidance:
+        # Kory's directive must shape the re-run, or this card-time refresh
+        # re-schedules from the original email alone and undoes the exception
+        # the whole retry chain just honored (live I-2, seventh copy).
+        from app.scheduling.schedule_from_context import merge_scheduling_body
+
+        body = merge_scheduling_body(body, guidance)
 
     plan = build_scheduling_plan(
         subject=subject,
@@ -79,6 +108,7 @@ def refresh_proposal_scheduling_offer(
         intent=intent,
         use_llm=bool(settings.llm_api_key),
     )
+    plan.kory_guidance = guidance
     if plan.task_type != "offer_times":
         return proposal_record, True
 
@@ -102,7 +132,7 @@ def refresh_proposal_scheduling_offer(
         body=body,
         plan=plan,
     )
-    if len(engine.slots) < MIN_SLOT_OPTIONS:
+    if len(engine.slots) < (1 if guidance else MIN_SLOT_OPTIONS):
         logger.warning(
             "offer refresh found insufficient slots for proposal %s: %s",
             proposal_record.get("id"),
