@@ -165,13 +165,21 @@ def _advance_proposal(conn: sqlite3.Connection, proposal: PendingProposal) -> bo
             subject=proposal.subject or "",
             body=proposal.scheduling_body(),
         )
+        from app.scheduling.preferences import load_scheduling_preferences
+
+        guidance = (proposal.kory_scheduling_guidance or "").strip()
+        # Guidance-aware preferences, or this re-validation strips the very
+        # slots Kory's exception allowed (the engine already honored it and
+        # this second pass silently undid it — live I-2, fourth layer).
         schedule.slots, rule_validation = filter_slots_by_rules(
             schedule.slots,
             intent=type_key,
             meeting_format=meeting_format,
             busy_events=calendar_context.get("busy_events"),
+            preferences=load_scheduling_preferences(guidance=guidance),
         )
-        if len(schedule.slots) < MIN_SLOT_OPTIONS:
+        required_slots = 1 if guidance else MIN_SLOT_OPTIONS
+        if len(schedule.slots) < required_slots:
             raise ValueError(
                 f"Insufficient valid slots ({len(schedule.slots)}); "
                 f"rules: {rule_validation.violations}"
