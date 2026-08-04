@@ -66,10 +66,30 @@ class ExecuteLexiApprovalInput(BaseModel):
     )
 
 
+def _chat_text_breaks(obj: Any) -> Any:
+    """Teams collapses lone newlines in markdown, so multi-line messages reach
+    Kory as one run-on line. Normalize every human-facing text field before it
+    leaves a tool — Hermes relays these strings near-verbatim."""
+    from app.bot.teams_format import teams_markdown_breaks
+
+    if isinstance(obj, dict):
+        return {
+            key: (
+                teams_markdown_breaks(value)
+                if key in {"message", "kory_message"} and isinstance(value, str)
+                else _chat_text_breaks(value)
+            )
+            for key, value in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_chat_text_breaks(item) for item in obj]
+    return obj
+
+
 def _ok(data: dict[str, Any]) -> str:
     # Every result carries the real date: the model was resolving "August 10"
     # to 2025 and offering to "correct" a correctly-stored 2026 date.
-    return json.dumps({"ok": True, "today": _today_mt(), **data}, default=str)
+    return json.dumps(_chat_text_breaks({"ok": True, "today": _today_mt(), **data}), default=str)
 
 
 def _today_mt() -> str:
@@ -80,7 +100,7 @@ def _today_mt() -> str:
 
 
 def _error(message: str, *, code: str = "tool_error") -> str:
-    return json.dumps({"ok": False, "error_code": code, "message": message})
+    return json.dumps(_chat_text_breaks({"ok": False, "error_code": code, "message": message}))
 
 
 def _wrap(action: str, fn, **kwargs: Any) -> str:
@@ -848,7 +868,7 @@ def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     from app.teams.commands import handle_teams_command
 
     result = handle_teams_command(text, authorized_by=authorized_by.strip() or "kory")
-    return json.dumps({"ok": result.get("ok", False), **result}, default=str)
+    return json.dumps(_chat_text_breaks({"ok": result.get("ok", False), **result}), default=str)
 
 
 @mcp.tool()
@@ -866,7 +886,7 @@ def lexi_handle_teams_card_submit(payload_json: str, authorized_by: str = "kory"
     if not isinstance(payload, dict):
         return _error("payload_json must be a JSON object.", code="validation_error")
     result = handle_teams_card_submit(payload, authorized_by=authorized_by.strip() or "kory")
-    return json.dumps({"ok": result.get("ok", False), **result}, default=str)
+    return json.dumps(_chat_text_breaks({"ok": result.get("ok", False), **result}), default=str)
 
 
 @mcp.tool()

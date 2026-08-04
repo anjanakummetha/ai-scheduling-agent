@@ -235,6 +235,9 @@ def load_proposal_approval_payload(
 
 async def push_approval_text_to_teams(text: str, *, proposal_id: int | str = "") -> None:
     """Proactively post a text approval summary to the configured Teams conversation."""
+    from app.bot.teams_format import teams_markdown_breaks
+
+    text = teams_markdown_breaks(text)
     if not _teams_credentials_configured():
         logger.info(
             "Teams text notify skipped for proposal %s — message Lexi bot once or set TEAMS_CONVERSATION_ID.",

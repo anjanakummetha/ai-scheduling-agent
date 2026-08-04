@@ -11,6 +11,16 @@ from app.scheduling.email_format import normalize_draft_for_display
 
 MT = ZoneInfo(settings.scheduling_timezone)
 
+_LONE_NEWLINE_RE = re.compile(r"(?<!\n)\n(?!\n)")
+
+
+def teams_markdown_breaks(text: str) -> str:
+    """Teams renders message text as markdown, where a single newline collapses
+    into a space — multi-line messages arrive as one run-on paragraph. Double
+    every lone newline so each line actually breaks; existing blank lines are
+    left alone."""
+    return _LONE_NEWLINE_RE.sub("\n\n", text or "")
+
 
 def display_subject(subject: str | None, *, max_len: int = 72) -> str:
     """Clean subject for Teams display (no Re:/Fw:, trimmed)."""
