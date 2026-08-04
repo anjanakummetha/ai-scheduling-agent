@@ -299,3 +299,75 @@ class TestGuidanceOverridesPolicy:
         )
         assert _shift_plan_window(plan, week_offset=1).kory_guidance == "Lunch approved."
         assert _plan_without_window(plan).kory_guidance == "Lunch approved."
+
+
+class TestLunchMenuAndGuidedMinimum:
+    """Live C-3/I-2: approved lunches were unschedulable because the candidate
+    menu skips noon, and the 2-slot minimum re-escalated a search Kory had
+    already directed."""
+
+    def test_lunch_intent_gets_noon_candidates(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from app.scheduling import slot_engine as se
+
+        day = datetime(2026, 8, 21, tzinfo=ZoneInfo("America/Denver"))
+        starts = se._candidate_start_times(
+            day, "lunch", "in_person", east_coast=False, urgent=False
+        )
+        times = {s.strftime("%H:%M") for s in starts}
+        assert "12:00" in times and "12:30" in times
+
+    def test_guided_search_accepts_single_slot(self):
+        from unittest.mock import patch
+
+        from app.scheduling import slot_engine as se
+        from app.scheduling.scheduling_plan import SchedulingPlan
+        from app.scheduling.scheduling_window import SchedulingWindow
+        from datetime import date
+
+        plan = SchedulingPlan(
+            window=SchedulingWindow(
+                start=date(2026, 8, 17), end=date(2026, 8, 21), source="llm", label="guided"
+            ),
+            kory_guidance="Lunch approved for this one.",
+        )
+        one_slot = se.SlotProposal(
+            intent="lunch",
+            meeting_format="in_person",
+            slots=[{"start": "2026-08-21T12:00:00-06:00", "end": "2026-08-21T13:00:00-06:00"}],
+        )
+        with patch.object(se, "find_valid_slots", return_value=one_slot) as fv:
+            result = se.propose_meeting_slots(
+                {"status": "available", "busy_events": []},
+                intent="lunch",
+                subject="s",
+                body="b",
+                plan=plan,
+            )
+        assert fv.call_count == 1, "must NOT walk the ladder past Kory's directed week"
+        assert len(result.slots) == 1
+        assert result.diagnostics["status"] == "ok"
+
+    def test_undirected_search_still_requires_two(self):
+        from unittest.mock import patch
+
+        from app.scheduling import slot_engine as se
+        from app.scheduling.scheduling_plan import SchedulingPlan
+        from app.scheduling.scheduling_window import SchedulingWindow
+        from datetime import date
+
+        plan = SchedulingPlan(
+            window=SchedulingWindow(
+                start=date(2026, 8, 17), end=date(2026, 8, 21), source="body", label="w"
+            ),
+        )
+        one_slot = se.SlotProposal(intent="lunch", meeting_format="in_person",
+            slots=[{"start": "2026-08-21T12:00:00-06:00", "end": "2026-08-21T13:00:00-06:00"}])
+        with patch.object(se, "find_valid_slots", return_value=one_slot) as fv:
+            se.propose_meeting_slots(
+                {"status": "available", "busy_events": []},
+                intent="lunch", subject="s", body="b", plan=plan,
+            )
+        assert fv.call_count > 1, "without guidance the ladder must still search wider"

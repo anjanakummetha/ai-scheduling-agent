@@ -129,6 +129,12 @@ def _candidate_start_times(
         times = ["07:00", "08:00", "09:00", "10:00", "11:00", "14:00", "15:00"]
         if weekday in kory_rules.EARLY_START_DAYS and (east_coast or urgent):
             times = ["06:00", "07:00"] + times
+    elif intent == "lunch":
+        # The generic menu deliberately skips noon (Kory works through lunch),
+        # which made an APPROVED lunch unschedulable: 11:00 is usually booked
+        # and 13:00 falls outside the lunch window, so a genuinely free Friday
+        # noon was never even tried (live C-3/I-2).
+        times = ["11:30", "12:00", "12:30", "13:00"]
     elif intent in {"new_client"}:
         times = ["09:00", "10:00", "11:00", "14:00", "15:00", "16:00"]
     else:
@@ -440,6 +446,12 @@ def propose_meeting_slots(
     from app.scheduling.scheduling_plan import SchedulingPlan
     from app.scheduling.window_fallback import _plan_without_window, _shift_plan_window
 
+    # When Kory has already directed the search ("lunch approved — offer that
+    # week"), a single valid slot is an obedient answer; walking the ladder to
+    # a week he did not ask for is not. Without guidance the 2-option offer
+    # pattern stands.
+    required = 1 if (plan is not None and plan.kory_guidance.strip()) else MIN_SLOT_OPTIONS
+
     result = find_valid_slots(
         calendar_context,
         intent=intent,
@@ -449,7 +461,7 @@ def propose_meeting_slots(
         urgent=urgent,
         plan=plan,
     )
-    if len(result.slots) >= MIN_SLOT_OPTIONS:
+    if len(result.slots) >= required:
         result.diagnostics["status"] = "ok"
         return result
 
@@ -476,7 +488,7 @@ def propose_meeting_slots(
             urgent=urgent,
             plan=alt_plan,
         )
-        if len(alt.slots) >= MIN_SLOT_OPTIONS:
+        if len(alt.slots) >= required:
             alt.diagnostics["status"] = "ok"
             alt.diagnostics["window_expanded"] = True
             if original_label:

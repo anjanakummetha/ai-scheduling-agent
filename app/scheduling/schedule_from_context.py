@@ -227,7 +227,10 @@ def schedule_from_context(
     )
     meeting_fmt = engine.meeting_format or meeting_format or ""
 
-    if len(engine.slots) < MIN_SLOTS:
+    # Kory-directed searches may return a single slot (see propose_meeting_slots);
+    # escalating "not enough options" back at him after he already chose is circular.
+    required_slots = 1 if (plan is not None and plan.kory_guidance.strip()) else MIN_SLOTS
+    if len(engine.slots) < required_slots:
         label = plan.window.label if plan and plan.window else None
         failure = build_failure_kory_message(
             intent=str(intent or ""),
