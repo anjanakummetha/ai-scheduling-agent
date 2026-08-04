@@ -402,3 +402,20 @@ class TestGateAcceptsGuidedSingleSlot:
         )
         assert report.ok is False
         assert any("need at least 2" in c for c in report.checks)
+
+
+def test_gate_rule_check_honors_guidance_end_to_end():
+    """The gate's own validator pass was the sixth copy of the lunch rule."""
+    from app.scheduling.pre_approval_gate import verify_before_kory_approval
+    from app.scheduling.scheduling_plan import SchedulingPlan
+
+    plan = SchedulingPlan(kory_guidance="Lunch approved for this one.")
+    report = verify_before_kory_approval(
+        slots=[{"start": "2026-08-21T12:00:00-06:00", "end": "2026-08-21T13:00:00-06:00"}],
+        calendar_context={"status": "available", "busy_events": []},
+        plan=plan,
+        intent="lunch_request",
+        subject="lunch",
+        body="lunch sometime?",
+    )
+    assert not any("exception-only" in c for c in report.checks), report.checks

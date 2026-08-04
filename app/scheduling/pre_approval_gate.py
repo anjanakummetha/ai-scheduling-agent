@@ -68,6 +68,13 @@ class PreApprovalReport:
         return "Rules: not verified"
 
 
+def _gate_preferences(plan: SchedulingPlan | None):
+    from app.scheduling.preferences import load_scheduling_preferences
+
+    guidance = getattr(plan, "kory_guidance", "") if plan is not None else ""
+    return load_scheduling_preferences(guidance=guidance)
+
+
 def verify_before_kory_approval(
     *,
     slots: list[dict[str, str]],
@@ -182,6 +189,10 @@ def verify_before_kory_approval(
             urgent=bool(plan.urgency if plan else False),
             busy_events=busy,
             batch_slots=[slot],
+            # Guidance-aware, or this re-check blocks the exception Kory
+            # granted after the engine already honored it (live I-2 — this
+            # was the sixth independent copy of the lunch rule).
+            preferences=_gate_preferences(plan),
         )
         if not check.valid:
             rule_check.valid = False
