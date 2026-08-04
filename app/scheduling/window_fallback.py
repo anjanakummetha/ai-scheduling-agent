@@ -59,6 +59,7 @@ def _plan_without_window(plan: SchedulingPlan | None) -> SchedulingPlan | None:
         draft_context=plan.draft_context,
         source="open_horizon",
         raw=dict(plan.raw),
+        time_window=plan.time_window,
     )
 
 
@@ -88,6 +89,7 @@ def _shift_plan_window(plan: SchedulingPlan, *, week_offset: int) -> SchedulingP
         draft_context=plan.draft_context,
         source="window_fallback",
         raw=dict(plan.raw),
+        time_window=plan.time_window,
     )
 
 

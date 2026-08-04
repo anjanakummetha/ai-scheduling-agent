@@ -239,7 +239,13 @@ def find_valid_slots(
         # window on purpose to search wider, and re-inferring it here rebuilt the
         # exact constraint the ladder was trying to escape.
         window = infer_scheduling_window(subject=subject, body=body, now=now_mt)
-    time_window = None if skip_time_of_day else infer_time_of_day_window(subject=subject, body=body)
+    if skip_time_of_day:
+        time_window = None
+    elif plan is not None and plan.time_window is not None:
+        # LLM-extracted, code-clamped preference wins over the regex re-parse.
+        time_window = plan.time_window
+    else:
+        time_window = infer_time_of_day_window(subject=subject, body=body)
     allowed_weekdays = infer_allowed_weekdays(subject=subject, body=body)
     east_coast = bool(
         re.search(r"\b(east coast|eastern|nyc|new york|boston|et)\b", f"{subject}\n{body}", re.I)

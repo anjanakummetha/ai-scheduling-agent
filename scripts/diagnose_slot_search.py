@@ -36,14 +36,22 @@ def main() -> None:
         default="",
         help="comma-separated YYYY-MM-DD to trace (default: every day of the inferred window)",
     )
+    ap.add_argument(
+        "--llm",
+        action="store_true",
+        help="run the LLM plan interpreter (the production path) instead of rules-only",
+    )
     args = ap.parse_args()
 
     ctx = load_scheduling_calendar_context(subject=args.subject, body=args.body)
     print(f"calendar status: {ctx.get('status')} | horizon_days: {ctx.get('horizon_days')}")
 
     plan = build_scheduling_plan(
-        subject=args.subject, body=args.body, intent=args.intent, use_llm=False
+        subject=args.subject, body=args.body, intent=args.intent, use_llm=args.llm
     )
+    print(f"plan source: {plan.source}")
+    if plan.raw:
+        print(f"llm raw: {json.dumps(plan.raw, default=str)}")
     now_mt = datetime.now(tz=se.MT)
     window = (plan.window if plan and plan.window else None) or infer_scheduling_window(
         subject=args.subject, body=args.body, now=now_mt
@@ -61,8 +69,12 @@ def main() -> None:
         f"intent_key: {intent_key} | format: {fmt} | offer: {spec.duration_minutes}m "
         f"| reserve: {spec.calendar_block_minutes}m | type: {spec.type_key}"
     )
-    time_window = se.infer_time_of_day_window(subject=args.subject, body=args.body)
-    print(f"time-of-day window: {time_window}")
+    if plan.time_window is not None:
+        time_window = plan.time_window
+        print(f"time-of-day window (from LLM plan): {time_window}")
+    else:
+        time_window = se.infer_time_of_day_window(subject=args.subject, body=args.body)
+        print(f"time-of-day window: {time_window}")
     earliest = now_mt + timedelta(hours=2)
     print(f"earliest allowed start: {earliest.isoformat()}")
 

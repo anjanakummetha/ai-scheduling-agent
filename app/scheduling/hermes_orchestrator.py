@@ -38,7 +38,12 @@ def orchestrate_scheduling_from_email(
         sender_email=sender_email,
         kory_scheduling_guidance=kory_scheduling_guidance,
         stored_recipient_timezone=stored_recipient_timezone,
-        use_llm_plan=False,
+        # None = settings-driven: the LLM plan interpreter runs when an API key
+        # exists. This was pinned False, which left every live proposal parsing
+        # requests with regex alone — the direct cause of the C-1/C-2 window
+        # misses. The regex parser still runs first and remains the fallback
+        # whenever the LLM call fails or returns nothing usable.
+        use_llm_plan=None,
         calendar_context=calendar_context,
     )
 
