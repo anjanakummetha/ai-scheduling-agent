@@ -69,9 +69,16 @@ def load_scheduling_calendar_context(
     )
     cache_key = _context_cache_key(days=days)
     now = time.monotonic()
-    cached = _context_cache.get(cache_key)
-    if cached and now - cached[0] < _CONTEXT_CACHE_TTL_SEC:
-        return cached[1]
+    # A cached LARGER horizon is a superset of this request — serve it rather
+    # than fetching a smaller window from scratch (the engine filters by
+    # window, so extra days are harmless).
+    hour = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+    for cached_days in sorted({*_HORIZON_BUCKETS, days}):
+        if cached_days < days:
+            continue
+        cached = _context_cache.get(f"{cached_days}:{hour}")
+        if cached and now - cached[0] < _CONTEXT_CACHE_TTL_SEC:
+            return cached[1]
 
     context = _load_scheduling_calendar_context_uncached(
         subject=subject,
