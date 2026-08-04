@@ -162,9 +162,31 @@ def build_scheduling_context_packet(proposal_id: int) -> dict[str, Any]:
         "offered_times_block": slot_block,
         "scheduling_rules_summary": _rules_summary_for_type(meeting.type_key),
         "soft_blocks_summary": _soft_blocks_summary(),
+        "policy_block_reason": _policy_block_reason(meeting.type_key),
         "kory_scheduling_guidance": str(bundle.get("kory_scheduling_guidance") or "").strip(),
         "status": str(bundle.get("status") or ""),
     }
+
+
+def _policy_block_reason(meeting_type_key: str) -> str:
+    """The rule (not the calendar) that blocks this request, stated plainly.
+
+    Live C-3 defect: a lunch ask escalated as 'no lunch slots came back — zero
+    candidates' and the composer improvised calendar fixes (wider weeks, moving
+    Kory's blocks) for a block that Kory's own standing rule causes. When the
+    cause is policy, the composer must say so — no calendar change can fix it.
+    """
+    from app.scheduling.preferences import load_scheduling_preferences
+
+    prefs = load_scheduling_preferences()
+    if meeting_type_key == "lunch" and not prefs.lunch_allowed:
+        return (
+            "Kory's standing rule: lunch meetings are exception-only, so the "
+            "scheduler offers no lunch slots regardless of calendar availability. "
+            "The options are: Kory approves a lunch exception for this request, "
+            "or Lexi offers a non-lunch time instead."
+        )
+    return ""
 
 
 def compose_offer_email_with_hermes(
@@ -419,15 +441,21 @@ def _hermes_kory_guidance_compose(packet: dict[str, Any]) -> str:
         "You are Hermes, Kory's scheduling assistant writing a SHORT message TO KORY in Teams "
         "(not an email to the prospect).\n"
         "The calendar search found NO valid times to offer yet.\n"
-        "Use scheduler_failure, meeting_type_label, scheduling_rules_summary, soft_blocks_summary, "
-        "and thread_context to explain WHY and offer 2-3 specific next steps.\n"
+        "If policy_block_reason is non-empty, that IS the reason — lead with it, and do NOT "
+        "attribute the block to a busy calendar, suggest wider-week searches, or suggest moving "
+        "meetings: no calendar change can fix a policy block. Offer exactly the choices the "
+        "policy states (e.g. approve an exception, or offer a non-lunch time).\n"
+        "Otherwise use scheduler_failure, meeting_type_label, scheduling_rules_summary, "
+        "soft_blocks_summary, and thread_context to explain WHY and offer 2-3 specific next steps.\n"
         "Do NOT use the same generic line every time. Be specific (e.g. coffee mornings packed, "
         "WOB block conflict, try week after).\n"
         "Do NOT draft an email to the prospect. Do NOT invent times.\n"
         "NEVER propose changing the meeting type to get an easier slot — do not suggest turning "
         "a coffee into a call or a video meeting. Kory asks for coffee with people he already "
-        "knows and it needs to be booked as coffee. Suggest a different time, a different week, "
-        "or moving one of Kory's own blocks instead.\n"
+        "knows and it needs to be booked as coffee. Suggest a different time or a different week. "
+        "Only suggest moving one of Kory's own meetings as a last resort, phrased as a question, "
+        "and never for anything marked DO NOT MOVE, his training sessions, or his executive "
+        "coach.\n"
         "You are writing directly to Kory — issues route to Kory only. NEVER mention Heidi or "
         "any other assistant/colleague, and never claim anyone has been flagged, notified, or "
         "escalated.\n"

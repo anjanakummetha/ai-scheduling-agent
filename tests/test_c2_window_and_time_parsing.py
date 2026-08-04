@@ -160,3 +160,31 @@ class TestSchedulingNoteOnDelegationPath:
         with _conn() as check:
             row = check.execute("SELECT scheduling_note FROM proposals WHERE id=1").fetchone()
         assert row["scheduling_note"] is None
+
+
+class TestPolicyBlockReason:
+    """Live C-3 defect: a lunch escalation blamed the calendar and offered to
+    move Kory's meetings, when his own exception-only rule was the cause."""
+
+    def test_lunch_blocked_by_default_rule(self):
+        from app.scheduling.hermes_compose import _policy_block_reason
+
+        reason = _policy_block_reason("lunch")
+        assert "exception-only" in reason
+        assert "regardless of calendar availability" in reason
+
+    def test_non_lunch_types_have_no_policy_reason(self):
+        from app.scheduling.hermes_compose import _policy_block_reason
+
+        assert _policy_block_reason("referral_or_intro") == ""
+        assert _policy_block_reason("coffee") == ""
+
+    def test_lunch_allowed_by_memory_clears_reason(self, monkeypatch):
+        from app.scheduling import hermes_compose
+        from app.scheduling.preferences import SchedulingPreferences
+
+        monkeypatch.setattr(
+            "app.scheduling.preferences.load_scheduling_preferences",
+            lambda: SchedulingPreferences(lunch_allowed=True),
+        )
+        assert hermes_compose._policy_block_reason("lunch") == ""
