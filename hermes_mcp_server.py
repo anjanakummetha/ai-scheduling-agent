@@ -866,10 +866,15 @@ def lexi_register_teams_conversation(
 
 @mcp.tool()
 def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
-    """Execute Lexi Teams commands from Hermes chat (approve, reject, draft, pending).
-
-    Call when Kory sends card button text or short commands, e.g.
-    'Send reply to Dan Smith — Project Paint', 'Draft reply to …', 'pending', 'inbound'.
+    """MANDATORY router for Lexi commands. If Kory's message starts with (or is)
+    approve / reject / discard / send / draft / show draft / pending / inbound /
+    today / unanswered / help — with or without #N and a reason — call this tool
+    FIRST with the message text verbatim. NEVER answer these from your own memory
+    or a calendar read: the queue and proposal state live in Lexi's database and
+    this tool is the only authority. If the result has handled=true, relay its
+    message; only if handled=false may you respond conversationally.
+    Examples that MUST route here: 'reject #6487 — test complete',
+    'approve #6481', 'pending', 'show draft #6449', 'send'.
     """
     from app.teams.commands import handle_teams_command
 

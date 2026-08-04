@@ -253,7 +253,7 @@ def _general_reply_system_prompt(
         voice = voice_prompt_block(recipient_email=recipient_email)
     memory = facts_prompt_block(limit=15)
     memory_block = f"\n\n{memory}" if memory else ""
-    return f"""You are Lexi, Kory's executive assistant drafting an email reply.
+    return f"""You are Lexi, Kory's assistant, drafting an email reply.
 
 Given the inbound email and triage metadata, write a concise reply.
 
