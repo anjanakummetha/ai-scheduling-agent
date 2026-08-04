@@ -186,7 +186,16 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
             guidance = stored
         else:
             return {"ok": False, "error": "guidance cannot be empty."}
-    if bundle["status"] not in {NEEDS_SCHEDULING_GUIDANCE, AWAITING_REPLY_PROMPT, PENDING_APPROVAL}:
+    # "needs_kory" is what the escalation path actually writes
+    # (heidi_escalation._mark_needs_kory) — omitting it here meant the retry
+    # tool rejected every proposal the escalation flow produced, so Kory's
+    # guidance could never be applied end-to-end (live I-2 defect).
+    if bundle["status"] not in {
+        NEEDS_SCHEDULING_GUIDANCE,
+        AWAITING_REPLY_PROMPT,
+        PENDING_APPROVAL,
+        "needs_kory",
+    }:
         return {
             "ok": False,
             "error": (

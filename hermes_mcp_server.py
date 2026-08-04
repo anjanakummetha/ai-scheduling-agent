@@ -191,7 +191,13 @@ def lexi_escalate_to_heidi(proposal_id: str, reason: str = "") -> str:
 
 @mcp.tool()
 def lexi_retry_scheduling(proposal_id: str, guidance: str) -> str:
-    """Re-search times after Kory gives a different week/window. Reply to Kory with kory_message only — one or two plain sentences."""
+    """THE tool to run whenever Kory answers a scheduling escalation with guidance —
+    "retry scheduling", "lunch is fine / approved for this one", "offer next week
+    instead", "make an exception", "try Friday". Call it IMMEDIATELY with Kory's own
+    words as `guidance`; the deterministic engine re-searches the calendar honoring
+    them. Do NOT answer from your own calendar reading instead of calling this — the
+    engine is the authority on which slots are valid. Reply to Kory with kory_message
+    only — one or two plain sentences."""
     try:
         pid = int(proposal_id)
     except ValueError:

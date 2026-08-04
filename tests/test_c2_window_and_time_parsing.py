@@ -188,3 +188,37 @@ class TestPolicyBlockReason:
             lambda: SchedulingPreferences(lunch_allowed=True),
         )
         assert hermes_compose._policy_block_reason("lunch") == ""
+
+
+class TestRetryAcceptsEscalatedStatus:
+    """Live I-2 defect: escalation writes status=needs_kory, but the retry tool
+    only accepted needs_scheduling_guidance — Kory's guidance could never be
+    applied to the proposals the escalation flow produced."""
+
+    def test_needs_kory_passes_the_status_gate(self, monkeypatch):
+        from app.agents import inbound_reply as ir
+
+        monkeypatch.setattr(
+            ir, "_fetch_proposal_bundle", lambda pid: {"status": "needs_kory"}
+        )
+        calls = {}
+
+        def _no_db(*a, **k):
+            raise RuntimeError("stop-before-db")
+
+        monkeypatch.setattr(ir, "get_lexi_connection", _no_db)
+        try:
+            ir.retry_scheduling_with_guidance(1, "lunch approved")
+        except RuntimeError as exc:
+            calls["reached_db"] = str(exc) == "stop-before-db"
+        assert calls.get("reached_db"), "needs_kory must pass the status gate"
+
+    def test_unrelated_status_still_rejected(self, monkeypatch):
+        from app.agents import inbound_reply as ir
+
+        monkeypatch.setattr(
+            ir, "_fetch_proposal_bundle", lambda pid: {"status": "rejected"}
+        )
+        out = ir.retry_scheduling_with_guidance(1, "anything")
+        assert out["ok"] is False
+        assert "not awaiting" in out["error"]
