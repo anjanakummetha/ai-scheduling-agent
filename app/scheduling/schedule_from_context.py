@@ -171,7 +171,17 @@ def schedule_from_context(
         use_llm=llm_plan,
     )
     plan.kory_guidance = (kory_scheduling_guidance or "").strip()
+    # The travel shift is desired behavior (V-3: don't book travel weeks), but
+    # it must not be SILENT: it replaces the sender's window before the engine
+    # runs, so the gate honestly reports slots "in window" and no expansion
+    # warning ever fires (live C-4 — offers a week late with no caveat).
+    pre_shift_label = plan.window.label if plan.window else ""
     plan = maybe_shift_plan_window(plan, calendar_context.get("busy_events"))
+    travel_shifted = bool(
+        plan.window is not None
+        and plan.window.source == "travel_shift"
+        and plan.window.label != pre_shift_label
+    )
 
     if plan.task_type != "offer_times":
         return ScheduleFromContextResult(
@@ -266,8 +276,10 @@ def schedule_from_context(
     # be set just because slots landed outside the requested window: doing that
     # converted a violation into an accepted expansion, so a sender who asked for
     # one week silently got offers three weeks out and the gate still reported ok.
-    window_expanded = bool(engine.diagnostics.get("window_expanded")) or bool(
-        engine.diagnostics.get("morning_preference_relaxed")
+    window_expanded = (
+        bool(engine.diagnostics.get("window_expanded"))
+        or bool(engine.diagnostics.get("morning_preference_relaxed"))
+        or travel_shifted
     )
     # The engine infers its own window when the plan carries none, so read back
     # whichever one actually applied rather than trusting plan.window.
@@ -280,8 +292,14 @@ def schedule_from_context(
         calendar_context=calendar_context,
         plan=plan,
         window=effective_window,
-        original_window_label=str(engine.diagnostics.get("original_window") or ""),
-        expanded_window_label=str(engine.diagnostics.get("expanded_window") or ""),
+        original_window_label=str(
+            engine.diagnostics.get("original_window")
+            or (pre_shift_label if travel_shifted else "")
+        ),
+        expanded_window_label=str(
+            engine.diagnostics.get("expanded_window")
+            or (plan.window.label if travel_shifted and plan.window else "")
+        ),
         intent=intent,
         subject=subj,
         body=scheduling_body,

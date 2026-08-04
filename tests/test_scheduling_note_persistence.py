@@ -90,3 +90,74 @@ def test_clean_match_leaves_note_empty():
     result.diagnostics = {}
     schedule = _build(result)
     assert schedule.scheduling_note == ""
+
+
+def test_travel_shift_produces_a_note(monkeypatch):
+    """Live C-4: the travel shift replaced the sender's window BEFORE the
+    engine ran, so the gate honestly saw slots in-window and no expansion
+    warning ever fired — offers landed a week late with no caveat."""
+    from datetime import date
+
+    from app.scheduling import schedule_from_context as sfc
+    from app.scheduling.scheduling_plan import SchedulingPlan
+    from app.scheduling.scheduling_window import SchedulingWindow
+
+    asked = SchedulingWindow(
+        start=date(2026, 8, 11), end=date(2026, 8, 12), source="llm",
+        label="Tuesday afternoon or Wednesday next week",
+    )
+    shifted = SchedulingWindow(
+        start=date(2026, 8, 17), end=date(2026, 8, 23), source="travel_shift",
+        label="week of August 17 (after travel)",
+    )
+
+    monkeypatch.setattr(
+        sfc, "maybe_shift_plan_window",
+        lambda plan, busy: SchedulingPlan(
+            task_type=plan.task_type, window=shifted, source=plan.source,
+            duration_minutes=plan.duration_minutes,
+        ),
+    )
+
+    captured = {}
+    real_gate = sfc.verify_before_kory_approval
+
+    def spy_gate(**kwargs):
+        captured.update(
+            window_expanded=kwargs.get("window_expanded"),
+            original=kwargs.get("original_window_label"),
+            expanded=kwargs.get("expanded_window_label"),
+        )
+        return real_gate(**kwargs)
+
+    monkeypatch.setattr(sfc, "verify_before_kory_approval", spy_gate)
+
+    class _Engine:
+        slots = [
+            {"start": "2026-08-18T19:00:00+00:00", "end": "2026-08-18T19:30:00+00:00"},
+            {"start": "2026-08-19T19:00:00+00:00", "end": "2026-08-19T19:30:00+00:00"},
+        ]
+        meeting_format = "virtual"
+        diagnostics = {"scheduling_window": {"label": "week of August 17 (after travel)"}}
+
+    monkeypatch.setattr(sfc, "propose_meeting_slots", lambda *a, **k: _Engine())
+    monkeypatch.setattr(
+        sfc, "build_scheduling_plan",
+        lambda **k: SchedulingPlan(task_type="offer_times", window=asked),
+    )
+
+    result = sfc.schedule_from_context(
+        subject="[TEST] Catching up",
+        body="Tuesday afternoon or Wednesday next week?",
+        intent="referral_or_intro",
+        calendar_context={"status": "available", "busy_events": [], "horizon_days": 30},
+        use_llm_plan=False,
+        format_slots=False,
+        try_inbound_availability=False,
+    )
+    assert captured["window_expanded"] is True
+    assert "Tuesday afternoon or Wednesday next week" in captured["original"]
+    assert "after travel" in captured["expanded"]
+    note = result.scheduling_note()
+    assert "Tuesday afternoon or Wednesday next week" in note
+    assert "after travel" in note
