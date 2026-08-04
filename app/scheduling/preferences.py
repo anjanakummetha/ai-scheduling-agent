@@ -51,7 +51,13 @@ def _parse_bool(value: str) -> bool | None:
 
 
 _LUNCH_YES = re.compile(
-    r"\b(?:fine|ok(?:ay)?|good|happy|open|available|yes)\b[^.!?]{0,40}\blunch(?:es| meetings?)?\b",
+    # positive word before lunch ("fine with lunch") or after it ("lunch is
+    # fine", "lunch approved for this one") — the one-directional pattern
+    # missed Kory's actual approval phrasing live (I-2).
+    r"\b(?:fine|ok(?:ay)?|good|happy|open|available|yes|approved?|allow(?:ed)?)\b"
+    r"[^.!?]{0,40}\blunch(?:es| meetings?)?\b"
+    r"|\blunch(?:es| meetings?)?\b[^.!?]{0,40}"
+    r"\b(?:fine|ok(?:ay)?|good|works|approved?|allow(?:ed)?|yes|exception)\b",
     re.IGNORECASE,
 )
 _LUNCH_NO = re.compile(
@@ -84,8 +90,16 @@ def _apply_freeform_fact(prefs: SchedulingPreferences, value: str) -> None:
             setattr(prefs, attr, _parse_int(match.group(1), getattr(prefs, attr)))
 
 
-def load_scheduling_preferences() -> SchedulingPreferences:
-    """Load defaults merged with kory_memory scheduling facts."""
+def load_scheduling_preferences(guidance: str = "") -> SchedulingPreferences:
+    """Load defaults merged with kory_memory scheduling facts.
+
+    `guidance` is Kory's per-proposal instruction from a Teams escalation
+    ("Lunch approved for this one"). It is scanned with the same enforceable-
+    preference rules as memory facts and applied LAST, so a one-off exception
+    overrides the standing rule for this run only — live I-2 defect: the
+    guidance reached the draft prompt but never the validator, so approving a
+    lunch exception still produced zero lunch slots.
+    """
     prefs = SchedulingPreferences()
     facts = list_facts(limit=100)
     prefs.memory_facts = facts
@@ -118,5 +132,8 @@ def load_scheduling_preferences() -> SchedulingPreferences:
                 _apply_freeform_fact(prefs, value)
             else:
                 prefs.lunch_allowed = parsed
+
+    if guidance.strip():
+        _apply_freeform_fact(prefs, guidance)
 
     return prefs

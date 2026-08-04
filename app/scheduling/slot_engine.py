@@ -211,7 +211,9 @@ def find_valid_slots(
         if plan is not None
         else (urgent if urgent is not None else _is_urgent(subject, body))
     )
-    prefs = preferences or load_scheduling_preferences()
+    prefs = preferences or load_scheduling_preferences(
+        guidance=(plan.kory_guidance if plan else "")
+    )
     busy = list(calendar_context.get("busy_events") or [])
 
     if calendar_context.get("status") != "available":

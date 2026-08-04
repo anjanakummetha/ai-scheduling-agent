@@ -170,6 +170,7 @@ def schedule_from_context(
         intent=intent,
         use_llm=llm_plan,
     )
+    plan.kory_guidance = (kory_scheduling_guidance or "").strip()
     plan = maybe_shift_plan_window(plan, calendar_context.get("busy_events"))
 
     if plan.task_type != "offer_times":

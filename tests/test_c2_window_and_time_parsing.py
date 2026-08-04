@@ -185,7 +185,7 @@ class TestPolicyBlockReason:
 
         monkeypatch.setattr(
             "app.scheduling.preferences.load_scheduling_preferences",
-            lambda: SchedulingPreferences(lunch_allowed=True),
+            lambda guidance="": SchedulingPreferences(lunch_allowed=True),
         )
         assert hermes_compose._policy_block_reason("lunch") == ""
 
@@ -222,3 +222,80 @@ class TestRetryAcceptsEscalatedStatus:
         out = ir.retry_scheduling_with_guidance(1, "anything")
         assert out["ok"] is False
         assert "not awaiting" in out["error"]
+
+
+class TestGuidanceOverridesPolicy:
+    """Live I-2 defect chain: Kory approved a lunch exception in Teams and the
+    validator still stripped every lunch slot — guidance reached the draft
+    prompt but never the preferences the engine enforces."""
+
+    def test_lunch_approved_phrasing_matches(self):
+        from app.scheduling.preferences import _LUNCH_YES
+
+        for phrase in (
+            "Lunch approved for this one — offer free lunch times.",
+            "Lunch is fine for this one.",
+            "I'm fine with lunch here.",
+            "Make a lunch exception.",
+        ):
+            assert _LUNCH_YES.search(phrase), phrase
+
+    def test_negative_still_wins(self):
+        from app.scheduling.preferences import load_scheduling_preferences
+
+        prefs = load_scheduling_preferences(guidance="No lunch meetings please.")
+        assert prefs.lunch_allowed is False
+
+    def test_guidance_flips_lunch_for_this_run(self):
+        from app.scheduling.preferences import load_scheduling_preferences
+
+        assert load_scheduling_preferences().lunch_allowed is False
+        prefs = load_scheduling_preferences(
+            guidance="Lunch approved for this one — offer free lunch times the week of Aug 17-21."
+        )
+        assert prefs.lunch_allowed is True
+
+    def test_plan_guidance_reaches_engine_preferences(self):
+        from unittest.mock import patch
+
+        from app.scheduling import slot_engine as se
+        from app.scheduling.scheduling_plan import SchedulingPlan
+
+        captured = {}
+        real_loader = se.load_scheduling_preferences
+
+        def spy(guidance=""):
+            captured["guidance"] = guidance
+            return real_loader(guidance=guidance)
+
+        plan = SchedulingPlan(source="open_horizon", kory_guidance="Lunch approved for this one.")
+        with patch.object(se, "load_scheduling_preferences", side_effect=spy):
+            se.find_valid_slots(
+                {"status": "available", "busy_events": [], "horizon_days": 3},
+                intent="lunch_request",
+                subject="lunch",
+                body="lunch sometime?",
+                plan=plan,
+            )
+        assert captured["guidance"] == "Lunch approved for this one."
+
+    def test_policy_reason_clears_when_exception_granted(self):
+        from app.scheduling.hermes_compose import _policy_block_reason
+
+        assert _policy_block_reason("lunch") != ""
+        assert _policy_block_reason("lunch", guidance="Lunch approved for this one.") == ""
+
+    def test_fallback_plans_carry_guidance(self):
+        from app.scheduling.scheduling_plan import SchedulingPlan
+        from app.scheduling.scheduling_window import SchedulingWindow
+        from app.scheduling.window_fallback import _plan_without_window, _shift_plan_window
+        from datetime import date
+
+        plan = SchedulingPlan(
+            window=SchedulingWindow(
+                start=date(2026, 8, 17), end=date(2026, 8, 23), source="body", label="w"
+            ),
+            kory_guidance="Lunch approved.",
+        )
+        assert _shift_plan_window(plan, week_offset=1).kory_guidance == "Lunch approved."
+        assert _plan_without_window(plan).kory_guidance == "Lunch approved."

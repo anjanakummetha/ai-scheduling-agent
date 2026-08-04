@@ -162,13 +162,16 @@ def build_scheduling_context_packet(proposal_id: int) -> dict[str, Any]:
         "offered_times_block": slot_block,
         "scheduling_rules_summary": _rules_summary_for_type(meeting.type_key),
         "soft_blocks_summary": _soft_blocks_summary(),
-        "policy_block_reason": _policy_block_reason(meeting.type_key),
+        "policy_block_reason": _policy_block_reason(
+            meeting.type_key,
+            guidance=str(bundle.get("kory_scheduling_guidance") or ""),
+        ),
         "kory_scheduling_guidance": str(bundle.get("kory_scheduling_guidance") or "").strip(),
         "status": str(bundle.get("status") or ""),
     }
 
 
-def _policy_block_reason(meeting_type_key: str) -> str:
+def _policy_block_reason(meeting_type_key: str, *, guidance: str = "") -> str:
     """The rule (not the calendar) that blocks this request, stated plainly.
 
     Live C-3 defect: a lunch ask escalated as 'no lunch slots came back — zero
@@ -178,7 +181,7 @@ def _policy_block_reason(meeting_type_key: str) -> str:
     """
     from app.scheduling.preferences import load_scheduling_preferences
 
-    prefs = load_scheduling_preferences()
+    prefs = load_scheduling_preferences(guidance=guidance)
     if meeting_type_key == "lunch" and not prefs.lunch_allowed:
         return (
             "Kory's standing rule: lunch meetings are exception-only, so the "

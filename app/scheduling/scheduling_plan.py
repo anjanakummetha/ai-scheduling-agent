@@ -58,6 +58,9 @@ class SchedulingPlan:
     # Sender's stated time-of-day preference, LLM-extracted and code-clamped.
     # When set it overrides the regex infer_time_of_day_window in the engine.
     time_window: TimeOfDayWindow | None = None
+    # Kory's per-proposal Teams guidance ("Lunch approved for this one") —
+    # carried on the plan so the engine can apply one-off rule exceptions.
+    kory_guidance: str = ""
 
 
 def build_scheduling_plan(

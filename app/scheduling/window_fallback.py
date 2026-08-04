@@ -60,6 +60,7 @@ def _plan_without_window(plan: SchedulingPlan | None) -> SchedulingPlan | None:
         source="open_horizon",
         raw=dict(plan.raw),
         time_window=plan.time_window,
+        kory_guidance=plan.kory_guidance,
     )
 
 
@@ -90,6 +91,7 @@ def _shift_plan_window(plan: SchedulingPlan, *, week_offset: int) -> SchedulingP
         source="window_fallback",
         raw=dict(plan.raw),
         time_window=plan.time_window,
+        kory_guidance=plan.kory_guidance,
     )
 
 
