@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from app.integrations.asana_manager import normalize_due_on
+from app.integrations.asana_manager import MT, normalize_due_on
 
 
 def test_past_due_date_rolls_forward():
-    """Live bug: "August 3" was saved as 2025-08-03, a date already past."""
-    assert normalize_due_on("2025-08-03") == "2026-08-03"
+    """Live bug: "August 3" was saved a year back, a date already past.
+
+    Date-relative on purpose — a hardcoded year aged out the night MT crossed
+    into the next day and failed the suite with no code change."""
+    today = datetime.now(tz=MT).date()
+    stale = today - timedelta(days=400)
+
+    def bump(d: date, years: int) -> date:
+        try:
+            return d.replace(year=d.year + years)
+        except ValueError:  # Feb 29
+            return d.replace(year=d.year + years, day=28)
+
+    expected = bump(stale, 1)
+    if expected < today:
+        expected = bump(stale, 2)
+    assert normalize_due_on(stale.isoformat()) == expected.isoformat()
 
 
 def test_future_date_is_untouched():

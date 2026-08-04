@@ -127,6 +127,57 @@ class TestApproveConfirmationIsExecutionBacked:
         assert "outbound blocked by safety gate" in out["message"]
         assert "Sent reply" not in out["message"]
 
+    def test_exception_after_send_admits_the_send(self):
+        """A crash AFTER the send (e.g. a DB lock during hold placement) must
+        never be reported as 'could not execute' — that invites a re-approve
+        and a duplicate email."""
+        from app.teams import commands
+
+        with (
+            patch.object(commands, "find_pending_item", return_value=self._item()),
+            patch.object(
+                commands,
+                "_fetch_bundle",
+                return_value={"subject": "Intro call", "sender": "a@b.com"},
+            ),
+            patch.object(
+                commands,
+                "execute_lexi_approval",
+                side_effect=RuntimeError("database is locked"),
+            ),
+            patch.object(
+                commands, "_fetch_proposal_status", return_value="offer_sent"
+            ),
+        ):
+            out = commands.handle_teams_command("approve #42")
+        assert out["ok"] is False
+        assert "WAS sent" in out["message"]
+        assert "not" in out["message"].lower()
+        assert "Could not execute" not in out["message"]
+
+    def test_exception_before_send_reports_nothing_happened(self):
+        from app.teams import commands
+
+        with (
+            patch.object(commands, "find_pending_item", return_value=self._item()),
+            patch.object(
+                commands,
+                "_fetch_bundle",
+                return_value={"subject": "Intro call", "sender": "a@b.com"},
+            ),
+            patch.object(
+                commands,
+                "execute_lexi_approval",
+                side_effect=RuntimeError("database is locked"),
+            ),
+            patch.object(
+                commands, "_fetch_proposal_status", return_value="pending_approval"
+            ),
+        ):
+            out = commands.handle_teams_command("approve #42")
+        assert out["ok"] is False
+        assert "Could not execute" in out["message"]
+
     def test_successful_execution_reports_sent(self):
         from app.teams import commands
 

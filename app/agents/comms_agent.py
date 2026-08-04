@@ -501,6 +501,20 @@ def execute_lexi_approval(
                                 result.warnings = (result.warnings or []) + [
                                     f"Email sent — calendar holds need attention: {hold_error}"
                                 ]
+                                _insert_audit_log(
+                                    conn,
+                                    step_name="hold_placement_failed",
+                                    reference_id=str(proposal_id),
+                                    log_level="ERROR",
+                                    message=(
+                                        "Offer email sent but hold placement failed: "
+                                        f"{hold_error}"
+                                    ),
+                                    payload={
+                                        "proposal_id": proposal_id,
+                                        "hold_error": hold_error,
+                                    },
+                                )
                             result.holds_confirmed = hold_count
                             try:
                                 _dispatch_asana_reservation_reminder_if_needed(

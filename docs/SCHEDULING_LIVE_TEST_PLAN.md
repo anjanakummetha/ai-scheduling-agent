@@ -15,6 +15,74 @@
 
 ---
 
+## ★ REFINED REMAINING-RUN PLAN — 2026-08-03 (v2)
+
+**Supersedes the ordering and test-by-test sequencing below.** The group definitions and expected behaviours in Phases 1–3 stay authoritative — this section says *what to run, in what order, merged onto the fewest email threads*, so the run ends fully functional without redundant API cycles. Composio volume is a non-issue (2.1% of budget MTD); the real waste is orchestrator/LLM cycles per inbound and noise in Kory's real inbox/Teams — so tests are merged per thread.
+
+### R-0. Process removal: retire the Adaptive Card pipeline — go text-only
+
+The Teams approval surface exists **twice**: card buttons and typed text commands. The buttons have **never worked** (the Hermes gateway has no `Action.Submit` route — taps get a conversational reply; `handle_teams_card_submit` never runs), while the text path is complete and is already the **code default**:
+
+- **Flag:** `LEXI_TEAMS_TEXT_ONLY` defaults `true` (`app/config.py:263`); prod `.env` pins it `false`. The local test suite already runs text-only.
+- **Push side:** approvals, reply prompts and guidance all render as text when the flag is on (`push_approval_text_to_teams` / `format_approval_notification_from_records`, `app/bot/teams_publisher.py:368,452`).
+- **Command side:** `approve #N [option]` · `reject #N — reason` · `show draft #N` · `draft yes|no #N` · bare `send` (resolves when exactly one pending) — parsed at `app/bot/teams_text.py:167`, executed via `_run_approval` with `decision_source="hermes_teams_text"` (`app/teams/commands.py:178`).
+- **Edit side:** card inline-edit is not the only editor — natural-language edits go through the `lexi_update_proposal_draft` MCP tool (`hermes_mcp_server.py:226`).
+
+**Ruling: flip prod to `LEXI_TEAMS_TEXT_ONLY=true`, stop testing card-specific behaviour entirely.** Wherever a test below says "tap Approve / edit the card", read the text equivalent. Card code stays in place during the run (flag-off, inert); strip it after sign-off. This clears Phase-3 blocker 1 without touching the separate gateway repo.
+
+Other overlap eliminated / confirmed out:
+- **Group N stays deferred** — email-as-command duplicates Teams; only J-1/J-2/J-3 exist and stay.
+- **Dashboard `unanswered-scheduling` line stays deferred** — not needed for scheduling function; the dashboard/agent boundary rulings stand (do not re-propose).
+- **O-8** (dry-run honesty) → **n/a in prod** — needs `LEXI_DRY_RUN=true`; covered by the local suite; never flip prod flags for it.
+- **A-4** already ✅ (Group A). **E-5** optional → skip unless a test naturally spans Friday.
+- **G-1** is untestable from anjanakummetha@gmail.com (Run 2 proved the TZ is inferred from her own headers). Use a genuinely signal-free sender once if available; otherwise mark n/a — the default+disclosure logic is unit-tested.
+
+### R-1. Step T0 — text-only switch + one free live verification (gate for Group C)
+
+1. **Local:** full suite (it already runs with text-only defaulted); confirm/add a test that the Teams reply to `approve #N` is built from `_run_approval`'s actual result — no "sent" claim unless the execution returned ok (execution-backed confirmation).
+2. **Deploy once** (`scripts/deploy_lexi.sh`) with the `.env` flip in the same change; posture re-check (P0-1/P0-2).
+3. **Live, sends still CLOSED — zero risk:** on any staged proposal type `pending`, `show draft #N`, then `approve #N`. Expected: the outbound gate **refuses** cleanly (this **is S-1**) and the audit row shows `decision_source=hermes_teams_text` — which proves in one shot that Hermes routes typed lines to `lexi_handle_teams_command` instead of answering conversationally (the known model-doesn't-call-the-tool failure mode). `reject #N — testing` proves the reject wiring.
+
+### R-2. Phase 1 remainder — merged threads, sends CLOSED (~11 inbound emails total)
+
+Serial, unique `[TEST] … — LT-x` subjects, ~1–2 min between sends, as before.
+
+| Thread | Emails | Covers (IDs) |
+|---|---|---|
+| T1 `LT-C1` — 30-min virtual intro, next week | 1 | C-1 slot validity/spread · L-2 Lexi-voice on auto-draft + **OB-2** voice_mode check · S-2 audit spot-check |
+| T2 `LT-C2` — "early morning this week? or Monday early afternoon?" | 1 | C-2 trainer/Doug hard blocks |
+| T3 `LT-C3` — "lunch sometime?" | 1 + Teams guidance | C-3 lunch exception-only → **I-1** escalation quality (blocker named, 2–3 options, no Heidi) → **I-2** guidance retry honoured |
+| T4 `LT-C4` — "Tue afternoon or Wed next week?", then reply "how about sometime Thursday?" | 2 | C-4 window respect · C-5 no fabricated conflict · follow-up refresh regression (B-4 pattern) |
+| T5 `LT-C6` — "coffee near Cherry Creek?" | 1 | C-6 shaping (8:30/9:00 starts, 90-min, in-person) · **OB-4** single-slot-coffee data point |
+| T6 — Teams only | 0 | L-1 Kory-voice on request · **O-1/O-2/O-4/O-5/O-6/O-7** draft stack (O-3 already ✅ at draft level) |
+| T7/T8 `LT-G2`→fresh thread — NY signature, then no signature | 2 | G-2 Eastern-first · G-3 learned-TZ reuse. **Run these LAST in Phase 1**, then decide: delete the learned profile row (so Phase 3 offers aren't Eastern-labelled) or keep it deliberately — note which. |
+| T9 — Kory's Outlook → lexi@, ×3 | 3 | J-1 (then remove the fact before anything else runs) · J-2 · J-3 (verify **staged-only**, Asana writes off) · K-1/K-2 via Teams + one service restart. Expect silence per CG-2; verify by side effects; allow ~5 min (Sent-Items poll). |
+
+**Gate:** everything above green (or fixed + re-run) → Phase 2 flip.
+
+### R-3. Phase 2 — unchanged (flip `LEXI_KORY_OUTBOUND_BLOCKED=false`, restart, re-verify posture)
+
+### R-4. Phase 3 — minimal real-send E2E (~4 new asks; every Anjana reply is **Reply All** — see R-5)
+
+| Chain | Covers |
+|---|---|
+| **P3-A** `LT-D1`: fresh ask → edit the draft **by text** ("add a P.S. …" → `lexi_update_proposal_draft`) → `approve #N` | D-1 edited text arrives · D-2 send+hold atomicity + re-approve idempotency · D-5 CC/headers (Show original) · **O-3 real-inbox render** (Gmail web + mobile; forward to an Outlook mailbox for the third client) · E-1/E-9/E-10 hold inspection (tentative, work Calendar, human title) |
+| **P3-A cont.:** Anjana accepts "Tue 9 works" → invite → approve → then "can we move it to Thursday?" → then "I need to cancel" | H-1 · H-2 Teams link on the invite · E-2 other holds removed · H-7 context retention · E-7 reschedule (one event, not two) · E-8 cancel (no orphan holds) |
+| **P3-B** `LT-H4`: ask → offer → counter a **busy** time → then "none work — following week?" → then "maybe later in the week?" → one reply from a second address | H-4 (asks Kory, never auto-books) · H-5 re-offer + hold release · H-6 vague reply · H-10 thread-matched, no dup proposal |
+| **P3-C** `LT-H3`: ask → offer → counter a **free** time → bare `send` (exactly one pending at that moment) → invite → accept, then **decline** the Outlook invite | H-3 · D-4 · H-8 decline surfaced (or H-9 if she stays silent instead — pick one, H-8 preferred) |
+| **P3-D**: reuse any staged leftover → `reject #N — not now` | D-3 |
+| **No-send extras** | E-3/E-4 by SQL-backdating P3-B's released holds · **E-6** by manually booking over P3-C's accepted slot before approving the invite (safety-critical — keep) · M-1 backdated nudge · M-2 overnight briefing · M-3/M-4 log + budget sweep at the end |
+
+### R-5. Blocker 2 (plain Reply invisible) — a decision, not a test
+
+Outbound goes out from lexi@, a guest's plain **Reply** lands only in Lexi's mailbox, and nothing ingests it (`LEXI_POLL_LEXI_MAILBOX=false` deliberately — `17e9043`). The whole run proceeds with Anjana using **Reply All**. Before sign-off Kory chooses: **(a)** accept the limitation (Lexi's outbound can nudge "reply-all so I see it"), or **(b)** build Lexi-mailbox ingress properly — connection-scoped Graph ids end-to-end, *not* a naive re-enable of the poll. Sign-off does not require (b); the choice goes in the sign-off note.
+
+### R-6. Phase 4 — unchanged, plus the open rulings
+
+Env reverts at sign-off: `LEXI_ASANA_LIVE_WRITES_ENABLED=true`, `LEXI_HUBSPOT_BCC_ENABLED=true`, `LEXI_ORCHESTRATOR_BACKUP_POLL_MINUTES=30`; notify mode stays `delegation_and_followups` (Teams is for decisions only). Cleanup checklist as written. Rulings to collect from Kory during/after the run: ladder distance cap (+2w recommended) · OB-3 priority-contacts config (populate or remove) · subject-vs-body weighting for meeting *format* · OB-4 single-slot coffee offers · R-5 choice · stale-conclusions spot-checks (blocker 3) folded into every Teams interaction — verify answers against DB/log, per the standing rule.
+
+---
+
 ## 0. Decision points — resolve BEFORE testing
 
 These are product/config decisions the tests depend on. Confirm with Kory (or decide) first:
@@ -402,6 +470,18 @@ Anjana's cold email was silent; the card appeared only once Kory's CC reply dele
 | **DEF-8** | **The mashed name survived DEF-4.** The B-3 escalation reached Kory titled `[TEST] Coffee or a call — LT-B3 (Anjanakummetha)`. `_name_from_email` was fixed, but Teams card titles render through `teams_format.display_sender`, which derived from the local part and never consulted the profile store. Root cause is duplication: **four** independent "name from email" implementations (`teams_format`, `teams_labels`, `briefings`, `introducer`, plus `calendar_title` and `email_format`), so fixing one fixed one. Collapsed onto a single `display_name_for_email` in the profile store; `teams_labels` already delegated to `teams_format`, so it came along. **`calendar_title` and `email_format` still hold their own copies — that is E-9's likely cause, to confirm in Group E.** |
 | **OB-4** | **Kory's coffee availability cannot support the offer pattern.** Week of the 10th: travelling Aug 11–15, and Monday's three gaps (09:30–10:30, 12:30–13:15, 15:30–16:00) all fail a 60-min block + **90-min reserve**; he already has an 08:30 coffee. Week of the 17th: **1** slot. Week of the 24th: **1**. With `MIN_SLOT_OPTIONS=2`, single-week coffee requests will essentially always escalate or expand. Decide whether the 90-minute reserve is right, or whether coffee should offer a single slot. Not a bug — this is what his calendar says. |
 | **OB-1** | Superseded — notify volume is no longer a concern under `delegation_and_followups`. |
+
+---
+
+## RUN 5 — T0 text-only switch, 2026-08-04 (early AM UTC)
+
+Deployed `fa49455` (Teams line-break normalization + text-only), flipped `LEXI_TEAMS_TEXT_ONLY=true`. Typed-command routing **verified live**: `pending` returned a properly formatted queue (formatting fix confirmed in the real chat), and `approve #6235` executed through `_run_approval` — not a conversational dodge.
+
+**Finding T0-1 (supersedes S-1's premise): `approve` on a Lexi-channel proposal SENDS even while `LEXI_KORY_OUTBOUND_BLOCKED=true`.** The flag only gates the *Kory mailbox* channel (`approval_gate.assert_outbound_send_authorized` — the `lexi` branch checks approval, not the flag; `composio_client._kory_outbound_email_blocked` requires `role="write"`). An explicit `approve` **is** the real gate, and it held: exactly one email, correct content, Lexi voice, sent from Lexi's connection (`ca_4BTJ6d0O8sSZ`). **Consequence: during "closed" phases, typed `approve` on a lexi-channel proposal is a live send. S-1 as written is invalid; the enforced protections are `REQUIRE_KORY_APPROVAL` + the Kory-channel block.** Proposal 6235 → `offer_sent` (05:49:10Z); thread kept alive as the standing H-1 acceptance thread. 6243 rejected as stale.
+
+**Finding T0-2: send survived a `database is locked` race; holds did not.** The approve (MCP process) raced webhook ingestion (worker process). The send committed (`offer_email_sent` audit row — status-before-holds atomicity worked, no double-send exposure), then hold placement died before any `OUTLOOK_CREATE_*` call: **0 holds in DB and on the calendar, no failure audit row, no ERROR log line**, and the Teams reply said only "Hit a brief database lock — want me to try again?" without disclosing the email had already gone out. Fixes shipped: 30s SQLite busy timeout on every connection (`lexi_db.py`), `hold_placement_failed` ERROR audit row, and `_run_approval` now re-reads the proposal status on exception — if the send already happened it says so and warns against re-approving. 6235's missing holds: accepted for now (slots are Aug 17–19); place/repair after Phase 2 opens sends, or let H-1's confirm-time conflict re-check (E-6 logic) cover it.
+
+Also fixed two calendar-fragile tests that failed with no code change as MT crossed midnight (hardcoded roll-forward year; unanswered-scheduling seeds accumulating in the shared local DB past the endpoint cap). Suite: **464 pass**, stable across consecutive runs.
 
 ---
 

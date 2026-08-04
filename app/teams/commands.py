@@ -462,6 +462,19 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
     return {"ok": False, "handled": False, "message": f"Unknown action: {action}"}
 
 
+def _fetch_proposal_status(proposal_id: int) -> str:
+    from app.storage.lexi_db import get_lexi_connection
+
+    try:
+        with get_lexi_connection() as conn:
+            row = conn.execute(
+                "SELECT status FROM proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+        return str(row["status"]) if row else ""
+    except Exception:  # noqa: BLE001 — status probe must never mask the original error
+        return ""
+
+
 def _fetch_bundle(proposal_id: int) -> dict[str, Any] | None:
     from app.storage.lexi_db import get_lexi_connection
 
@@ -551,6 +564,27 @@ def _run_approval(
             decision_source=decision_source,
         )
     except Exception as exc:
+        # The failure may have landed AFTER the external side effect (the send
+        # is not transactional). Report from the proposal's actual status, or a
+        # "could not execute" here reads as "nothing happened" and invites a
+        # re-approve that double-sends.
+        status_now = _fetch_proposal_status(proposal_id)
+        if decision == "approved" and status_now in {"offer_sent", "executed"}:
+            label = email_thread_label(
+                subject=bundle.get("subject") if bundle else None,
+                sender=bundle.get("sender") if bundle else None,
+            )
+            return {
+                "ok": False,
+                "handled": True,
+                "message": (
+                    f"The email for **{label}** WAS sent, but a follow-up step "
+                    f"failed ({exc}). Do **not** approve again — the send already "
+                    "happened. Calendar holds may be missing; flagging for repair."
+                ),
+                "proposal_id": proposal_id,
+                "status": status_now,
+            }
         return {
             "ok": False,
             "handled": True,

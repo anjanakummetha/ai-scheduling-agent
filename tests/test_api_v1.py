@@ -108,6 +108,11 @@ def seed_aged_scheduling():
 
     made = []
     with get_lexi_connection() as conn:
+        # Purge leftovers from earlier runs — the suite shares the local DB, so
+        # these 50h-old seeds accumulate until they push the current run's row
+        # past the endpoint's result cap and the test fails with no code change.
+        conn.execute("DELETE FROM proposals WHERE thread_id LIKE 'unans-%'")
+        conn.execute("DELETE FROM email_threads WHERE thread_id LIKE 'unans-%'")
         for label, age, status in (
             ("stale", "-50 hours", "awaiting_reply_prompt"),
             ("fresh", "-2 hours", "awaiting_reply_prompt"),
@@ -125,7 +130,11 @@ def seed_aged_scheduling():
             )
             made.append((label, cur.lastrowid))
         conn.commit()
-    return dict(made)
+    yield dict(made)
+    with get_lexi_connection() as conn:
+        conn.execute("DELETE FROM proposals WHERE thread_id LIKE 'unans-%'")
+        conn.execute("DELETE FROM email_threads WHERE thread_id LIKE 'unans-%'")
+        conn.commit()
 
 
 def test_unanswered_scheduling_requires_a_token(client) -> None:
