@@ -208,6 +208,15 @@ def _handle_generic_lexi_followup(
     if not is_delegation and status not in {"offer_sent", "pending_invite", "pending_reoffer"}:
         return None
 
+    if status == "pending_approval":
+        # The offer has NOT gone out yet and the sender just changed the ask
+        # ("how about Thursday instead?"). A ping alone leaves the stale draft
+        # one approve-tap from sending an answer that ignores their reply
+        # (live C-5) — regenerate the offer with the follow-up folded in.
+        refreshed = _reschedule_unsent_offer(proposal, followup_body=body)
+        if refreshed is not None:
+            return refreshed
+
     sender = str(proposal.get("sender") or "them")
     subject = str(proposal.get("subject") or "(no subject)")
     preview = body.strip().split("\n")[0][:120]
@@ -224,6 +233,74 @@ def _handle_generic_lexi_followup(
         "status": status,
         "message": summary,
     }
+
+
+def _reschedule_unsent_offer(
+    proposal: dict[str, Any],
+    *,
+    followup_body: str,
+) -> dict[str, Any] | None:
+    """Fold the sender's follow-up into the thread and regenerate the draft.
+
+    Sender text is appended to the scheduling context — it is deliberately NOT
+    routed through kory_scheduling_guidance, which is trusted input that can
+    unlock policy exceptions (a sender saying "lunch works!" must never flip
+    the lunch rule).
+    """
+    proposal_id = int(proposal["proposal_id"])
+    addition = (followup_body or "").strip()
+    if not addition:
+        return None
+
+    from app.storage.lexi_db import get_lexi_connection
+
+    with get_lexi_connection() as conn:
+        row = conn.execute(
+            "SELECT raw_body FROM email_threads WHERE thread_id = "
+            "(SELECT thread_id FROM proposals WHERE id = ?)",
+            (proposal_id,),
+        ).fetchone()
+        base = str(row["raw_body"] or "") if row else ""
+        if addition not in base:
+            merged = f"{base}\n\n[Sender follow-up]: {addition}".strip()
+            conn.execute(
+                "UPDATE email_threads SET raw_body = ? WHERE thread_id = "
+                "(SELECT thread_id FROM proposals WHERE id = ?)",
+                (merged, proposal_id),
+            )
+        conn.execute(
+            """
+            UPDATE proposals
+            SET status = 'pending_triage', drafted_reply = NULL,
+                proposed_slots = NULL, teams_approval_notified_at = NULL,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (proposal_id,),
+        )
+        conn.commit()
+
+    from app.agents.scheduler_agent import process_proposal_schedule
+
+    if process_proposal_schedule(proposal_id):
+        from app.bot.teams_publisher import schedule_teams_approval_push
+
+        schedule_teams_approval_push(proposal_id, force=True)
+        logger.info(
+            "Regenerated unsent offer for proposal %s after sender follow-up.",
+            proposal_id,
+        )
+        return {
+            "ok": True,
+            "action": "lexi_thread_followup",
+            "proposal_id": proposal_id,
+            "status": "pending_approval",
+            "rescheduled": True,
+            "message": "Sender updated the ask before the offer went out — draft regenerated.",
+        }
+    # Rescheduling failed (e.g. nothing fits the new ask) — fall through to the
+    # notify branch so Kory still hears about the reply.
+    return None
 
 
 def _notify_kory_followup(proposal_id: int, *, summary: str, kind: str) -> None:
