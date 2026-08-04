@@ -14,6 +14,12 @@ from app.storage.lexi_db import get_lexi_connection
 logger = logging.getLogger(__name__)
 
 _REMINDER_HOURS = int(__import__("os").getenv("LEXI_KORY_REMINDER_HOURS", "24"))
+# Decision 2026-08-04 (Anjana): reminders belong in the 4:45 AM briefing email,
+# not as Teams pings — Teams is for decisions, the brief is for FYIs. The Teams
+# nudge stays available behind this flag but defaults OFF.
+_TEAMS_NUDGE_ENABLED = __import__("os").getenv(
+    "LEXI_KORY_24H_TEAMS_NUDGE", "false"
+).lower() in {"1", "true", "yes"}
 _BRIEFING_HOUR = int(__import__("os").getenv("LEXI_DAILY_BRIEFING_HOUR_MT", "4"))
 _BRIEFING_MINUTE = int(__import__("os").getenv("LEXI_DAILY_BRIEFING_MINUTE_MT", "45"))
 _BRIEFING_WINDOW_MIN = int(__import__("os").getenv("LEXI_DAILY_BRIEFING_WINDOW_MIN", "20"))
@@ -41,7 +47,13 @@ def run_kory_briefing_cycle() -> dict[str, Any]:
 
 
 def process_kory_24h_reminders() -> list[dict[str, Any]]:
-    """Teams nudge when Kory hasn't acted on Lexi items for 24h+."""
+    """Teams nudge when Kory hasn't acted on Lexi items for 24h+.
+
+    OFF by default — aged items reach Kory in the daily briefing email
+    (build_waiting_on_you_html) instead of as Teams cards.
+    """
+    if not _TEAMS_NUDGE_ENABLED:
+        return []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=_REMINDER_HOURS)
     cutoff_sql = cutoff.strftime("%Y-%m-%d %H:%M:%S")
     staged: list[dict[str, Any]] = []
@@ -81,6 +93,78 @@ def process_kory_24h_reminders() -> list[dict[str, Any]]:
             conn.commit()
     return staged
 
+
+
+_STATUS_LABELS = {
+    "pending_approval": "draft ready — awaiting your approval",
+    "awaiting_reply_prompt": "new ask — awaiting your go-ahead",
+    "needs_kory": "needs your guidance",
+    "needs_scheduling_guidance": "needs your guidance",
+}
+
+
+def build_waiting_on_you_html(*, min_age_hours: int | None = None) -> str:
+    """Inline-styled HTML block of Lexi items waiting on Kory, for the 4:45 AM
+    briefing email. Replaces the 24h Teams nudge (decision 2026-08-04): Teams
+    is for decisions, the brief is for reminders. Returns "" when nothing waits.
+
+    Inline styles only — Outlook strips <style> blocks. Content is Lexi's OWN
+    action queue, so it does not tread on the dashboard's briefing ownership.
+    """
+    import html as html_mod
+
+    age_hours = _REMINDER_HOURS if min_age_hours is None else min_age_hours
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=age_hours)
+    cutoff_sql = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+    with get_lexi_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.id AS proposal_id, p.status, p.created_at, e.subject, e.sender
+            FROM proposals p
+            INNER JOIN email_threads e ON e.thread_id = p.thread_id
+            WHERE p.status IN ('pending_approval', 'awaiting_reply_prompt',
+                               'needs_kory', 'needs_scheduling_guidance')
+              AND datetime(p.created_at) <= datetime(?)
+            ORDER BY p.created_at ASC
+            LIMIT 12
+            """,
+            (cutoff_sql,),
+        ).fetchall()
+
+    if not rows:
+        return ""
+
+    now = datetime.now(timezone.utc)
+    items = []
+    for row in rows:
+        subject = html_mod.escape(str(row["subject"] or "(no subject)"))
+        sender = html_mod.escape(str(row["sender"] or "unknown"))
+        label = _STATUS_LABELS.get(str(row["status"] or ""), "waiting")
+        age_text = ""
+        try:
+            created = datetime.strptime(
+                str(row["created_at"])[:19], "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc)
+            age_text = f" · waiting {max(1, int((now - created).total_seconds() // 3600))}h"
+        except (TypeError, ValueError):
+            pass
+        items.append(
+            '<li style="margin:4px 0;font-size:14px;color:#111827;">'
+            f"<strong>#{int(row['proposal_id'])} — {subject}</strong> "
+            f"({sender}) — {label}{age_text}</li>"
+        )
+
+    return (
+        '<div style="margin-top:24px;padding:16px;border:1px solid #e5e7eb;'
+        'border-radius:8px;background:#fafafa;">'
+        '<h3 style="margin:0 0 8px 0;font-size:16px;color:#111827;">'
+        "⏳ Waiting on you — Lexi</h3>"
+        f'<ul style="margin:0;padding-left:20px;">{"".join(items)}</ul>'
+        '<p style="margin:10px 0 0 0;font-size:12px;color:#6b7280;">'
+        "Reply in the Lexi Teams chat: <strong>approve #N</strong> · "
+        "<strong>reject #N — reason</strong> · <strong>show draft #N</strong></p>"
+        "</div>"
+    )
 
 
 def _kory_reminder_already_sent(conn, proposal_id: int) -> bool:
