@@ -73,10 +73,14 @@ def _chat_text_breaks(obj: Any) -> Any:
     from app.bot.teams_format import teams_markdown_breaks
 
     if isinstance(obj, dict):
+        # drafted_reply/draft/body included: staged draft bodies are shown to
+        # Kory near-verbatim too — without the break fix his bullets render as
+        # one run-on line (live O-2b, proposal 6813).
+        text_fields = {"message", "kory_message", "drafted_reply", "draft", "body"}
         return {
             key: (
                 teams_markdown_breaks(value)
-                if key in {"message", "kory_message"} and isinstance(value, str)
+                if key in text_fields and isinstance(value, str)
                 else _chat_text_breaks(value)
             )
             for key, value in obj.items()
@@ -1211,6 +1215,7 @@ def lexi_start_scheduling(
     duration_minutes: str,
     authorized_by: str = "kory",
     require_ceo_signoff: str = "true",
+    voice_mode: str = "kory",
 ) -> str:
     """Start outbound scheduling: LLM slots + draft + holds + pending_approval.
 
@@ -1219,6 +1224,14 @@ def lexi_start_scheduling(
     Do NOT hand-pick times from a calendar read into lexi_draft_outbound_email:
     only this path validates slots against Kory's rules, places holds, and
     tracks the recipient's acceptance.
+
+    "Kory" is ALWAYS Kory Mitchell, CEO of Iconic Founders Group — never any
+    other person named Kory. Subjects should read like "Kory Mitchell —
+    <purpose>" or reference the topic; never invent a different surname.
+
+    voice_mode: 'kory' = email written in Kory's first person, sent from his
+    mailbox. 'lexi' = Lexi writes as his assistant from her mailbox. Use 'lexi'
+    when Kory says "as Lexi" or asks Lexi to reach out on his behalf.
 
     meeting_intent examples: lunch, dinner, coffee, meeting, internal_sync.
     duration_minutes: e.g. '60' for lunch. Set require_ceo_signoff=false only if Kory
@@ -1242,6 +1255,7 @@ def lexi_start_scheduling(
         duration_minutes=duration,
         authorized_by=authorized_by,
         require_ceo_signoff=signoff,
+        voice_mode=voice_mode,
     )
 
 

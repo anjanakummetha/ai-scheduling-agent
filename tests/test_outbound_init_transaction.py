@@ -82,3 +82,71 @@ def test_context_cache_ttl_is_thirty_minutes():
     from app.scheduling import calendar_context as cc
 
     assert cc._CONTEXT_CACHE_TTL_SEC == 1800.0
+
+
+def test_lexi_voice_mode_lands_in_proposal(tmp_path, monkeypatch):
+    """Live O-2b #6813: 'as Lexi' outbound staged a Kory-voice draft on the
+    kory channel — the path hard-coded voice_mode. The chosen voice must reach
+    both the draft builder and the proposal's voice/channel columns."""
+    from app.agents import outbound_agent as oa
+
+    db = _fresh_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "thread_id TEXT, status TEXT, intent_classification TEXT, "
+        "priority_tier TEXT, rule_reasoning TEXT, proposed_slots TEXT, "
+        "drafted_reply TEXT, confidence_score REAL, justification TEXT, "
+        "voice_mode TEXT DEFAULT 'kory', send_channel TEXT DEFAULT 'kory', "
+        "updated_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    def _conn():
+        c = sqlite3.connect(db)
+        c.row_factory = sqlite3.Row
+        return c
+
+    monkeypatch.setattr(oa, "get_lexi_connection", _conn)
+    monkeypatch.setattr(
+        oa, "_load_calendar_context",
+        lambda **k: {"status": "available", "busy_events": []},
+    )
+
+    captured = {}
+
+    def _fake_build(**kwargs):
+        captured["voice_mode"] = kwargs.get("voice_mode")
+        return oa.OutboundScheduleResult(
+            slots=[
+                {"start": "2026-08-17T10:00:00-06:00", "end": "2026-08-17T11:00:00-06:00"},
+                {"start": "2026-08-24T10:00:00-06:00", "end": "2026-08-24T11:00:00-06:00"},
+            ],
+            drafted_reply="Hi Anjana,\n\nTimes below.\n\nBest,\nLexi",
+            confidence_score=0.9,
+            source="slot_engine",
+        )
+
+    monkeypatch.setattr(oa, "_build_outbound_schedule", _fake_build)
+
+    result = oa.initiate_outbound_scheduling(
+        recipient_email="anjanakummetha@gmail.com",
+        subject="Kory Mitchell — Availability",
+        meeting_intent="meeting",
+        duration_minutes=60,
+        authorized_by="kory",
+        require_ceo_signoff=True,
+        voice_mode="lexi",
+    )
+    assert result["ok"] is True
+    assert captured["voice_mode"] == "lexi"
+
+    with _conn() as check:
+        row = check.execute(
+            "SELECT voice_mode, send_channel, status FROM proposals WHERE id=?",
+            (result["proposal_id"],),
+        ).fetchone()
+    assert row["voice_mode"] == "lexi"
+    assert row["send_channel"] == "lexi"
+    assert row["status"] == "pending_approval"

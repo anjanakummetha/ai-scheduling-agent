@@ -62,13 +62,20 @@ def initiate_outbound_scheduling(
     authorized_by: str,
     *,
     require_ceo_signoff: bool = True,
+    voice_mode: str = "kory",
 ) -> dict[str, Any]:
     """Start an outbound Lexi scheduling thread with slots, holds, and optional auto-send."""
+    from app.scheduling.lexi_voice import normalize_voice_mode
+
     recipient = recipient_email.strip().lower()
     if not recipient or "@" not in recipient:
         raise ValueError("recipient_email must be a valid email address.")
     if duration_minutes < 15:
         raise ValueError("duration_minutes must be at least 15.")
+    # Voice decides the mailbox too: a Kory-voice email from the Lexi address
+    # (or vice versa) is an identity mismatch. Was hard-coded kory — "as
+    # Lexi" outbound requests staged Kory-voice drafts (live O-2b, #6813).
+    voice = normalize_voice_mode(voice_mode)
 
     thread_id = f"lexi-outbound-{uuid.uuid4().hex}"
     intent = _normalize_intent(meeting_intent)
@@ -105,6 +112,7 @@ def initiate_outbound_scheduling(
             duration_minutes=duration_minutes,
             authorized_by=authorized_by,
             calendar_context=calendar_context,
+            voice_mode=voice,
         )
         schedule.slots = _filter_non_conflicting_slots(
             schedule.slots,
@@ -154,6 +162,7 @@ def initiate_outbound_scheduling(
                 authorized_by=authorized_by,
                 duration_minutes=duration_minutes,
                 require_ceo_signoff=require_ceo_signoff,
+                voice_mode=voice,
             )
             # Holds are placed after Kory approves send (comms_agent send_offer).
 
@@ -234,6 +243,7 @@ def _build_outbound_schedule(
     duration_minutes: int,
     authorized_by: str,
     calendar_context: dict[str, Any],
+    voice_mode: str = "kory",
 ) -> OutboundScheduleResult:
     from app.scheduling.slot_engine import propose_meeting_slots
 
@@ -251,7 +261,7 @@ def _build_outbound_schedule(
                 recipient_first_name=first_name,
                 slots=engine.slots[:MAX_SLOT_OPTIONS],
                 sender_email=recipient_email,
-                voice_mode="kory",
+                voice_mode=voice_mode,
             ),
             confidence_score=0.92,
             source="slot_engine",
@@ -506,6 +516,7 @@ def _insert_outbound_proposal(
     authorized_by: str,
     duration_minutes: int,
     require_ceo_signoff: bool,
+    voice_mode: str = "kory",
 ) -> int:
     rule_reasoning = {
         "source": "outbound_delegation",
@@ -525,9 +536,11 @@ def _insert_outbound_proposal(
             proposed_slots,
             drafted_reply,
             confidence_score,
-            justification
+            justification,
+            voice_mode,
+            send_channel
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             thread_id,
@@ -539,6 +552,8 @@ def _insert_outbound_proposal(
             schedule.drafted_reply,
             schedule.confidence_score,
             f"Outbound delegation to schedule a {duration_minutes}-minute {intent.replace('_', ' ')}.",
+            voice_mode,
+            voice_mode,  # voice decides the mailbox: kory-voice → kory channel
         ),
     )
     return int(cursor.lastrowid)

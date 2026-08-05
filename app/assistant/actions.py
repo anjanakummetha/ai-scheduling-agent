@@ -731,6 +731,7 @@ def start_outbound_scheduling(
     duration_minutes: int,
     authorized_by: str,
     require_ceo_signoff: bool = True,
+    voice_mode: str = "kory",
 ) -> dict[str, Any]:
     """Start full outbound proposal flow (slots + draft + optional pending_approval)."""
     from app.agents.outbound_agent import initiate_outbound_scheduling
@@ -743,6 +744,7 @@ def start_outbound_scheduling(
             duration_minutes=duration_minutes,
             authorized_by=authorized_by,
             require_ceo_signoff=require_ceo_signoff,
+            voice_mode=voice_mode,
         )
         result["dry_run"] = settings.lexi_dry_run
         return result
