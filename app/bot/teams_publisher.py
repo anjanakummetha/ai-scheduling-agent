@@ -607,11 +607,60 @@ async def push_invite_prompt_for_proposal_id(proposal_id: int) -> None:
         )
         return
 
-    text = (
-        f"**Lexi — send calendar invite?**\n"
-        f"{format_approval_notification(item)}\n\n"
-        f"Recipient picked a time — approve the invite card when ready."
+    # A short decision prompt — NOT a replay of the whole offer email (live
+    # H-10 feedback: the full re-render made it unclear what approving does).
+    from zoneinfo import ZoneInfo
+
+    from app.agents.comms_agent import _parse_recipient_selected_slot
+    from app.bot.teams_format import display_sender, display_subject
+    from app.scheduling.email_format import format_slot_for_email
+    from app.storage.lexi_db import get_lexi_connection
+
+    when = "the selected time"
+    extras: list[str] = []
+    try:
+        with get_lexi_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT p.recipient_selected_slot,
+                       COALESCE(p.recipient_timezone, e.recipient_timezone) AS tz
+                FROM proposals p
+                JOIN email_threads e ON e.thread_id = p.thread_id
+                WHERE p.id = ?
+                """,
+                (proposal_id,),
+            ).fetchone()
+        slot = (
+            _parse_recipient_selected_slot(
+                {"recipient_selected_slot": row["recipient_selected_slot"]}
+            )
+            if row
+            else None
+        )
+        if slot:
+            tz = None
+            try:
+                tz = ZoneInfo(str(row["tz"])) if row["tz"] else None
+            except Exception:  # noqa: BLE001 — fall back to MT rendering
+                tz = None
+            when = format_slot_for_email(slot, recipient_tz=tz)
+            extras = list(slot.get("extra_attendees") or [])
+    except Exception:  # noqa: BLE001 — a failed lookup must not kill the push
+        logger.exception("Could not resolve selected slot for invite prompt.")
+
+    lines = [
+        f"**Send calendar invite? — #{item.proposal_id}**",
+        f"**{display_subject(item.subject)}** — {display_sender(item.sender)} picked:",
+        f"📅 {when}",
+    ]
+    if extras:
+        lines.append("Also inviting: " + ", ".join(extras))
+    lines.append("")
+    lines.append(
+        f"Say **approve #{item.proposal_id}** to send the invite, or "
+        f"**reject #{item.proposal_id} — reason** to hold off."
     )
+    text = "\n".join(lines)
     await push_approval_text_to_teams(text, proposal_id=proposal_id)
     if not settings.lexi_teams_text_only:
         await push_approval_card_to_teams(

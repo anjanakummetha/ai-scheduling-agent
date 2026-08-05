@@ -436,3 +436,53 @@ class TestApproveRetriesFailedSend:
                 conn.execute("DELETE FROM proposals WHERE id = 99003")
                 conn.execute("DELETE FROM email_threads WHERE thread_id = 'lt-h4-retry'")
                 conn.commit()
+
+
+class TestInvitePromptIsDecisionShaped:
+    """Live H-10 feedback: the invite prompt replayed the entire offer email —
+    it must show the picked time, extra attendees, and the exact commands."""
+
+    def test_prompt_shows_pick_not_full_email(self):
+        import asyncio
+
+        from app.bot import teams_publisher as tp
+        from app.storage.lexi_db import get_lexi_connection
+
+        with get_lexi_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO email_threads (thread_id, subject, sender, raw_body, recipient_timezone) "
+                "VALUES ('lt-h10-p', '[TEST] Quick catch-up? — LT-H4', 'anjana@example.com', "
+                "'full offer email body that must NOT be replayed', 'America/New_York')"
+            )
+            conn.execute("DELETE FROM proposals WHERE id = 99005")
+            conn.execute(
+                "INSERT INTO proposals (id, thread_id, status, proposed_slots, drafted_reply, recipient_selected_slot) "
+                "VALUES (99005, 'lt-h10-p', 'pending_invite', '[]', 'the whole drafted offer email', "
+                "'{\"start\": \"2026-08-24T10:00:00-06:00\", \"end\": \"2026-08-24T10:30:00-06:00\", "
+                "\"extra_attendees\": [\"anjana.kummetha@iconicfounders.com\"]}')"
+            )
+            conn.commit()
+
+        sent = {}
+
+        async def fake_push(text, *, proposal_id=None, **kwargs):
+            sent["text"] = text
+
+        try:
+            with (
+                patch.object(tp, "push_approval_text_to_teams", side_effect=fake_push),
+                patch.object(tp, "_mark_teams_push_sent"),
+            ):
+                asyncio.run(tp.push_invite_prompt_for_proposal_id(99005))
+            text = sent["text"]
+            assert "Send calendar invite? — #99005" in text
+            assert "Monday, August 24" in text
+            assert "12:00" in text  # ET-first rendering for a NY recipient
+            assert "anjana.kummetha@iconicfounders.com" in text
+            assert "approve #99005" in text
+            assert "the whole drafted offer email" not in text
+        finally:
+            with get_lexi_connection() as conn:
+                conn.execute("DELETE FROM proposals WHERE id = 99005")
+                conn.execute("DELETE FROM email_threads WHERE thread_id = 'lt-h10-p'")
+                conn.commit()
