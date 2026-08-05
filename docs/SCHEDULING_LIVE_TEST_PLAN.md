@@ -640,9 +640,26 @@ batches; enrichment never overwrites a populated field, at propose time and agai
 every outreach path but not in the note path. Notes are record-keeping rather than contact, so as-is looks
 right — but it is a ruling, not an accident.
 
-**Blocked / next:** steps 2–4 need box access (SSH is currently refused by the local permission classifier,
-including `safety_posture_summary()` and `.env` reads) and a disposable contact created in Kory's REAL
-HubSpot. `5df79e9` is committed but **not deployed**.
+**Deployed** — `5df79e9` + `e3fb108` pushed and live (both services active, co-tenant untouched, posture
+unchanged: `LEXI_HUBSPOT_LIVE_WRITES_ENABLED=false`). Composio budget 13,472 / 200,000 MTD (6.7%), which
+also settles **M-4**.
+
+**Recon for steps 2–4 (read-only, done):** Kory owner id `159133511`; BCC address
+`242757246@bcc.na2.hubspot.com`; **no contact exists for `anjanakummetha@gmail.com` or
+`anjana.kummetha@iconicfounders.com`, and no "LEXI TEST" record**. Zero test pollution in the CRM and BCC
+has never fired for her — a clean baseline.
+
+**Steps 2–4 blocked on the operator side, not the box.** The local auto-mode permission classifier allows
+health checks, read-only recon and deploys but refuses every action that would produce a real HubSpot
+write — the `.env` flag flip + restart, and uploading a scoped write script. It overrides the standing ssh
+authorization already in `.claude/settings.local.json`. Anjana runs those commands herself.
+
+**Use a single-process flag override, not the `.env` flip.** `LEXI_HUBSPOT_LIVE_WRITES_ENABLED=true
+.venv/bin/python hs_write_test.py` enables writes for that one process while lexi-hermes and lexi-api keep
+writes OFF throughout — no window in which a hallucinating gateway could write to the CRM unsupervised.
+This supersedes the plan's "flip the flag for the test window" step. Script `hs_write_test.py` performs
+step 2 (create the disposable contact, one live note) and step 4 (guardrail probes), and hard-stops if the
+test address ever resolves to a record that is not the disposable one.
 
 ---
 
