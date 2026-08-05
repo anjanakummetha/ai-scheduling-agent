@@ -89,6 +89,52 @@ def initiate_outbound_scheduling(
         "errors": [],
     }
 
+    # Slot search runs BEFORE the DB transaction opens: the calendar fetch can
+    # take 40-80s+ on a cold cache, and SQLite has a single writer — holding
+    # the write lock through a network fetch starves the orchestrator and
+    # webhook ingress for its whole duration (live DB-lock incidents).
+    try:
+        calendar_context = _load_calendar_context(
+            subject=subject.strip(),
+            body=outbound_context,
+        )
+        schedule = _build_outbound_schedule(
+            recipient_email=recipient,
+            subject=subject.strip(),
+            meeting_intent=intent,
+            duration_minutes=duration_minutes,
+            authorized_by=authorized_by,
+            calendar_context=calendar_context,
+        )
+        schedule.slots = _filter_non_conflicting_slots(
+            schedule.slots,
+            calendar_context,
+        )
+        if len(schedule.slots) < MIN_SLOT_OPTIONS:
+            raise ValueError(
+                f"Outbound scheduling produced insufficient slots ({len(schedule.slots)})."
+            )
+    except Exception as exc:
+        tb = traceback.format_exc()
+        result["errors"].append(f"{type(exc).__name__}: {exc}")
+        with get_lexi_connection() as conn:
+            _insert_audit_log(
+                conn,
+                step_name="outbound_delegation_init",
+                reference_id=thread_id,
+                log_level="ERROR",
+                message="Outbound delegation initialization failed.",
+                payload={
+                    "thread_id": thread_id,
+                    "recipient_email": recipient,
+                    "error": str(exc),
+                    "traceback": tb,
+                    "partial_result": result,
+                },
+            )
+            conn.commit()
+        return result
+
     with get_lexi_connection() as conn:
         conn.execute("SAVEPOINT outbound_init")
         try:
@@ -99,27 +145,6 @@ def initiate_outbound_scheduling(
                 """,
                 (thread_id, subject.strip(), recipient, received_at, outbound_context),
             )
-
-            calendar_context = _load_calendar_context(
-                subject=subject.strip(),
-                body=outbound_context,
-            )
-            schedule = _build_outbound_schedule(
-                recipient_email=recipient,
-                subject=subject.strip(),
-                meeting_intent=intent,
-                duration_minutes=duration_minutes,
-                authorized_by=authorized_by,
-                calendar_context=calendar_context,
-            )
-            schedule.slots = _filter_non_conflicting_slots(
-                schedule.slots,
-                calendar_context,
-            )
-            if len(schedule.slots) < MIN_SLOT_OPTIONS:
-                raise ValueError(
-                    f"Outbound scheduling produced insufficient slots ({len(schedule.slots)})."
-                )
 
             proposal_id = _insert_outbound_proposal(
                 conn,

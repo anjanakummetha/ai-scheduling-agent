@@ -115,6 +115,7 @@ def create_calendar_event(calendar_action: dict[str, Any]) -> tuple[str | None, 
 
     result = execute_write_tool("OUTLOOK_CREATE_ME_EVENT", payload)
     data = _coerce_data(result["data"])
+    _invalidate_scheduling_cache()
     return data.get("id"), result.get("log_id")
 
 
@@ -132,7 +133,20 @@ def delete_calendar_event(event_id: str) -> str | None:
             "event_id": event_id,
         },
     )
+    _invalidate_scheduling_cache()
     return result.get("log_id")
+
+
+def _invalidate_scheduling_cache() -> None:
+    """Lexi's own calendar writes must be visible to her next slot search —
+    the context cache now lives 30 minutes, long enough to offer a slot she
+    herself just held if we didn't clear it here."""
+    try:
+        from app.scheduling.calendar_context import clear_scheduling_calendar_context_cache
+
+        clear_scheduling_calendar_context_cache()
+    except Exception:  # noqa: BLE001 — cache clearing must never break a write
+        pass
 
 
 def get_write_calendar_events(start_iso: str, end_iso: str) -> tuple[list[dict[str, Any]], str | None]:

@@ -23,7 +23,13 @@ from app.scheduling.calendar_intelligence import (
 
 logger = logging.getLogger(__name__)
 
-_CONTEXT_CACHE_TTL_SEC = 300.0
+# 30 minutes, not 5: a 5-minute TTL made nearly every real command a cold
+# ~40-80s Composio fetch (~70 calls), which is what kept blowing the Hermes
+# gateway's tool timeout. Staleness is bounded because (a) every calendar
+# WRITE Lexi makes clears this cache (see outlook_calendar), (b) the
+# confirm-time re-check guards actual bookings, and (c) the hour bucket in
+# the key forces a refresh at each hour boundary regardless.
+_CONTEXT_CACHE_TTL_SEC = 1800.0
 _context_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
