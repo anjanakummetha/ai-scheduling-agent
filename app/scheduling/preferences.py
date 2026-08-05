@@ -70,6 +70,26 @@ _CAP_PATTERNS = (
     ("travel_week_max_meetings", re.compile(r"\b(\d+)\b[^.!?]{0,40}\btravel\b", re.I)),
 )
 
+_SLOT_MIN_RELAX = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"january|february|march|april|june|july|august|september|october|november|december|"
+    r"week|weeks|today|tomorrow|morning|mornings|afternoon|afternoons|evening|evenings|"
+    r"noon|lunch|breakfast|dinner|am|pm|a\.m\.|p\.m\.|time|times|slot|slots|"
+    r"hour|hours|minutes|early|earlier|late|later|only|exception|asap|urgent|"
+    r"available|availability|open)\b"
+    r"|\b\d{1,2}(?::\d{2})?\b",
+    re.IGNORECASE,
+)
+
+
+def guidance_relaxes_slot_minimum(guidance: str) -> bool:
+    """A single offered slot is acceptable ONLY when Kory's guidance actually
+    constrains the search — a day, a time window, a policy exception ("lunch is
+    fine", "try Friday", "only mornings"). Style or redo guidance ("redo the
+    draft in my voice") must keep the normal 2-slot minimum: live defect
+    2026-08-05, a redo request silently produced a one-slot offer."""
+    return bool(_SLOT_MIN_RELAX.search(guidance or ""))
+
 
 def _apply_freeform_fact(prefs: SchedulingPreferences, value: str) -> None:
     """Read a remembered sentence for rules the engine can actually enforce.

@@ -440,3 +440,52 @@ def test_gate_rule_check_honors_guidance_end_to_end():
         body="lunch sometime?",
     )
     assert not any("exception-only" in c for c in report.checks), report.checks
+
+
+class TestGuidanceSlotMinimumClassifier:
+    """Live defect 2026-08-05: 'redo the draft in my voice' — pure style
+    guidance — silently dropped the 2-slot minimum to 1 and Kory got a
+    one-slot offer when a second free slot existed."""
+
+    def test_style_guidance_keeps_the_minimum(self):
+        from app.scheduling.preferences import guidance_relaxes_slot_minimum
+
+        assert not guidance_relaxes_slot_minimum("redo the draft in my voice")
+        assert not guidance_relaxes_slot_minimum("redo the draft in Kory's voice")
+        assert not guidance_relaxes_slot_minimum("make it warmer and shorter")
+        assert not guidance_relaxes_slot_minimum("")
+
+    def test_constraining_guidance_relaxes_the_minimum(self):
+        from app.scheduling.preferences import guidance_relaxes_slot_minimum
+
+        assert guidance_relaxes_slot_minimum("Lunch approved for this one.")
+        assert guidance_relaxes_slot_minimum("try Friday")
+        assert guidance_relaxes_slot_minimum("offer next week instead")
+        assert guidance_relaxes_slot_minimum("only mornings")
+        assert guidance_relaxes_slot_minimum("9:30 works")
+        assert guidance_relaxes_slot_minimum("make an exception here")
+
+    def test_style_guidance_still_requires_two_slots_in_gate(self):
+        from datetime import date
+
+        from app.scheduling.pre_approval_gate import verify_before_kory_approval
+        from app.scheduling.scheduling_plan import SchedulingPlan, SchedulingWindow
+
+        plan = SchedulingPlan(
+            window=SchedulingWindow(
+                start=date(2026, 8, 24), end=date(2026, 8, 28), source="llm", label="guided"
+            ),
+            kory_guidance="redo the draft in my voice",
+        )
+        report = verify_before_kory_approval(
+            slots=[
+                {"start": "2026-08-26T09:30:00-06:00", "end": "2026-08-26T10:30:00-06:00"}
+            ],
+            intent="coffee",
+            subject="coffee",
+            body="coffee",
+            calendar_context={"status": "available", "busy_events": []},
+            plan=plan,
+        )
+        assert report.ok is False
+        assert any("at least 2" in c for c in report.checks)

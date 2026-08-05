@@ -114,7 +114,13 @@ def verify_before_kory_approval(
     # A Kory-directed search ("lunch approved — offer that week") may honestly
     # yield one slot; blocking it here re-escalated the question he had just
     # answered (live I-2, third layer of the same 2-slot rule).
-    required = 1 if (plan is not None and getattr(plan, "kory_guidance", "").strip()) else MIN_SLOT_OPTIONS
+    from app.scheduling.preferences import guidance_relaxes_slot_minimum
+
+    required = (
+        1
+        if (plan is not None and guidance_relaxes_slot_minimum(getattr(plan, "kory_guidance", "")))
+        else MIN_SLOT_OPTIONS
+    )
     if len(slots) < required:
         report.ok = False
         report.checks.append(f"need at least {required} slots (got {len(slots)})")

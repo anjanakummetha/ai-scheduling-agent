@@ -82,7 +82,26 @@ def test_gate_warnings_become_the_scheduling_note():
 def test_expansion_without_gate_warning_still_produces_a_note():
     schedule = _build(_engine_result(warnings=[], window_expanded=True))
     assert "no availability for week of August 10" in schedule.scheduling_note
-    assert "offering week of August 17 instead" in schedule.scheduling_note
+    # Offered label comes from the ACTUAL slots, not the ladder rung label.
+    assert "offering August 17 and August 19 instead" in schedule.scheduling_note
+
+
+def test_expansion_note_names_actual_slot_dates_not_ladder_rung():
+    """Live defect 2026-08-05: the note said 'week of August 11' while the only
+    slot offered was August 26 — the rung label names the window the ladder
+    SEARCHED, not where the surviving slots landed. Also fixes the 'for in the
+    next few weeks' grammar mash."""
+    result = _engine_result(warnings=[], window_expanded=True)
+    result.gate = None
+    result.slots = [
+        {"start": "2026-08-26T09:30:00-06:00", "end": "2026-08-26T10:30:00-06:00"}
+    ]
+    result.diagnostics["original_window"] = "in the next few weeks"
+    result.diagnostics["expanded_window"] = "week of August 11"
+    note = result.scheduling_note()
+    assert "August 26" in note
+    assert "August 11" not in note
+    assert note.startswith("no availability in the next few weeks")
 
 
 def test_clean_match_leaves_note_empty():

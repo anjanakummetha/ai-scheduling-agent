@@ -448,9 +448,16 @@ def propose_meeting_slots(
 
     # When Kory has already directed the search ("lunch approved — offer that
     # week"), a single valid slot is an obedient answer; walking the ladder to
-    # a week he did not ask for is not. Without guidance the 2-option offer
-    # pattern stands.
-    required = 1 if (plan is not None and plan.kory_guidance.strip()) else MIN_SLOT_OPTIONS
+    # a week he did not ask for is not. Without guidance — or with guidance
+    # that doesn't constrain the search ("redo in my voice") — the 2-option
+    # offer pattern stands.
+    from app.scheduling.preferences import guidance_relaxes_slot_minimum
+
+    required = (
+        1
+        if (plan is not None and guidance_relaxes_slot_minimum(plan.kory_guidance))
+        else MIN_SLOT_OPTIONS
+    )
 
     result = find_valid_slots(
         calendar_context,

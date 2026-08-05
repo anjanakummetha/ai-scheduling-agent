@@ -165,7 +165,10 @@ def _advance_proposal(conn: sqlite3.Connection, proposal: PendingProposal) -> bo
             subject=proposal.subject or "",
             body=proposal.scheduling_body(),
         )
-        from app.scheduling.preferences import load_scheduling_preferences
+        from app.scheduling.preferences import (
+            guidance_relaxes_slot_minimum,
+            load_scheduling_preferences,
+        )
 
         guidance = (proposal.kory_scheduling_guidance or "").strip()
         # Guidance-aware preferences, or this re-validation strips the very
@@ -178,7 +181,7 @@ def _advance_proposal(conn: sqlite3.Connection, proposal: PendingProposal) -> bo
             busy_events=calendar_context.get("busy_events"),
             preferences=load_scheduling_preferences(guidance=guidance),
         )
-        required_slots = 1 if guidance else MIN_SLOT_OPTIONS
+        required_slots = 1 if guidance_relaxes_slot_minimum(guidance) else MIN_SLOT_OPTIONS
         if len(schedule.slots) < required_slots:
             raise ValueError(
                 f"Insufficient valid slots ({len(schedule.slots)}); "

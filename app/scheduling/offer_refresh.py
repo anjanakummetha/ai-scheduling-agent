@@ -44,8 +44,14 @@ def prepare_scheduling_offer_for_approval(
     existing_slots = proposal_record.get("proposed_slots")
     if existing_draft and existing_slots:
         try:
+            from app.scheduling.preferences import guidance_relaxes_slot_minimum
+
             parsed = json.loads(existing_slots) if isinstance(existing_slots, str) else existing_slots
-            required = 1 if _proposal_guidance(proposal_record) else MIN_SLOT_OPTIONS
+            required = (
+                1
+                if guidance_relaxes_slot_minimum(_proposal_guidance(proposal_record))
+                else MIN_SLOT_OPTIONS
+            )
             if isinstance(parsed, list) and len(parsed) >= required:
                 return proposal_record, True
         except (TypeError, json.JSONDecodeError):
@@ -132,7 +138,9 @@ def refresh_proposal_scheduling_offer(
         body=body,
         plan=plan,
     )
-    if len(engine.slots) < (1 if guidance else MIN_SLOT_OPTIONS):
+    from app.scheduling.preferences import guidance_relaxes_slot_minimum
+
+    if len(engine.slots) < (1 if guidance_relaxes_slot_minimum(guidance) else MIN_SLOT_OPTIONS):
         logger.warning(
             "offer refresh found insufficient slots for proposal %s: %s",
             proposal_record.get("id"),

@@ -88,13 +88,45 @@ class ScheduleFromContextResult:
                 self.diagnostics.get("original_window")
                 or (self.plan.window.label if self.plan and self.plan.window else "")
             ).strip()
-            offering = str(self.diagnostics.get("expanded_window") or "").strip()
+            # Name the dates actually offered — the ladder's rung label says
+            # which window it SEARCHED, not where the surviving slots landed
+            # (live defect: note said "week of August 11", slot was Aug 26).
+            offering = self._offered_dates_label() or str(
+                self.diagnostics.get("expanded_window") or ""
+            ).strip()
             if requested:
-                return f"no availability for {requested}" + (
+                # Labels like "in the next few weeks" already carry their own
+                # preposition — "no availability for in ..." is word salad.
+                lead = (
+                    f"no availability {requested}"
+                    if requested.lower().startswith(("in ", "over ", "during "))
+                    else f"no availability for {requested}"
+                )
+                return lead + (
                     f" — offering {offering} instead" if offering else " — offering the next open times"
                 )
             return "Requested window had no availability — offering the next open times."
         return ""
+
+    def _offered_dates_label(self) -> str:
+        """Human label for the offered slot dates ("August 26" /
+        "August 26 and September 2"), straight from the slots themselves."""
+        from datetime import datetime
+
+        days: list[str] = []
+        for slot in self.slots:
+            try:
+                start = datetime.fromisoformat(str(slot["start"]).replace("Z", "+00:00"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            label = f"{start.strftime('%B')} {start.day}"
+            if label not in days:
+                days.append(label)
+        if not days:
+            return ""
+        if len(days) == 1:
+            return days[0]
+        return ", ".join(days[:-1]) + f" and {days[-1]}"
 
 
 def merge_scheduling_body(body: str, kory_scheduling_guidance: str = "") -> str:
@@ -239,7 +271,13 @@ def schedule_from_context(
 
     # Kory-directed searches may return a single slot (see propose_meeting_slots);
     # escalating "not enough options" back at him after he already chose is circular.
-    required_slots = 1 if (plan is not None and plan.kory_guidance.strip()) else MIN_SLOTS
+    from app.scheduling.preferences import guidance_relaxes_slot_minimum
+
+    required_slots = (
+        1
+        if (plan is not None and guidance_relaxes_slot_minimum(plan.kory_guidance))
+        else MIN_SLOTS
+    )
     if len(engine.slots) < required_slots:
         label = plan.window.label if plan and plan.window else None
         failure = build_failure_kory_message(
