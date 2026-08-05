@@ -232,11 +232,12 @@ def _handle_generic_lexi_followup(
             sender = str(proposal.get("sender") or "them")
             subject = str(proposal.get("subject") or "(no subject)")
             preview = body.strip().split("\n")[0][:120]
+            proposal_id = int(proposal["proposal_id"])
             summary = (
                 f"**{subject}** — {sender} wants to CANCEL the booked meeting:\n"
                 f"\"{preview}\"\n\n"
-                "I have NOT touched the calendar — tell me if you want the "
-                "meeting cancelled."
+                f"I have NOT touched the calendar — say **cancel meeting "
+                f"#{proposal_id}** to cancel it."
             )
             _notify_kory_followup(
                 int(proposal["proposal_id"]), summary=summary, kind="cancel_request"

@@ -104,6 +104,90 @@ def execute_lexi_invite(
     )
 
 
+def cancel_booked_meeting(
+    proposal_id: int,
+    *,
+    reason: str = "",
+    authorized_by: str = "kory",
+    decision_source: str = "hermes_teams_text",
+) -> dict[str, Any]:
+    """Cancel an executed proposal's booked meeting on Kory's explicit command.
+
+    Deletes the tracked invite event (Outlook sends the attendee a cancellation
+    notice) and marks the proposal cancelled. Never guesses at untracked
+    events — without invite_event_id it refuses and says so.
+    """
+    with get_lexi_connection() as conn:
+        proposal = _fetch_proposal_bundle(conn, proposal_id)
+        if not proposal:
+            return {"ok": False, "error": f"Proposal {proposal_id} was not found."}
+        status = str(proposal.get("status") or "")
+        if status != STATUS_EXECUTED:
+            return {
+                "ok": False,
+                "error": (
+                    f"Proposal {proposal_id} has no booked meeting to cancel "
+                    f"(status={status})."
+                ),
+            }
+        event_id = str(proposal.get("invite_event_id") or "").strip()
+        if not event_id:
+            return {
+                "ok": False,
+                "error": (
+                    "No invite event is tracked for this meeting — "
+                    "cancel it directly in Outlook."
+                ),
+            }
+
+        from app.integrations.outlook_calendar import delete_calendar_event
+
+        try:
+            delete_error = delete_calendar_event(event_id)
+        except Exception as exc:  # noqa: BLE001
+            delete_error = f"{type(exc).__name__}: {exc}"
+        if delete_error:
+            return {"ok": False, "error": f"Could not cancel the meeting: {delete_error}"}
+
+        _insert_approval(
+            conn,
+            proposal_id=proposal_id,
+            decision="cancelled",
+            decision_source=decision_source,
+            authorized_by=authorized_by,
+            modification_notes=(reason or None),
+        )
+        conn.execute(
+            """
+            UPDATE proposals
+            SET status = 'cancelled', invite_event_id = NULL,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (proposal_id,),
+        )
+        _insert_audit_log(
+            conn,
+            step_name="meeting_cancelled",
+            reference_id=str(proposal_id),
+            log_level="INFO",
+            message="Booked meeting cancelled on Kory's command.",
+            payload={
+                "proposal_id": proposal_id,
+                "event_id": event_id,
+                "reason": reason,
+            },
+        )
+        conn.commit()
+    return {
+        "ok": True,
+        "proposal_id": proposal_id,
+        "status": "cancelled",
+        "subject": proposal.get("subject"),
+        "sender": proposal.get("sender"),
+    }
+
+
 def get_lexi_invite_queue() -> list[LexiQueueItem]:
     """Proposals waiting for Kory to approve sending the calendar invite."""
     with get_lexi_connection() as conn:

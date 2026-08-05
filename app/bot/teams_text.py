@@ -17,6 +17,11 @@ _APPROVE_RE = re.compile(
 )
 _SEND_ONLY_RE = re.compile(r"^send$", re.IGNORECASE)
 _REJECT_RE = re.compile(r"^(?:reject|no|discard)\s+#?(\d+)(?:\s*[—\-:]\s*(.+))?$", re.IGNORECASE)
+_CANCEL_MEETING_RE = re.compile(
+    r"^cancel(?:\s+(?:the\s+)?(?:meeting|invite|call))?\s+(?:for\s+)?#?(\d+)"
+    r"(?:\s*[—\-:]\s*(.+))?$",
+    re.IGNORECASE,
+)
 _PENDING_RE = re.compile(r"^(?:pending|queue|status)$", re.IGNORECASE)
 _DRAFT_YES_RE = re.compile(
     r"^(?:draft|reply)\s+#?(\d+)(?:\s+yes)?$",
@@ -313,6 +318,14 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
             "reason": (reject.group(2) or "").strip(),
         }
 
+    cancel = _CANCEL_MEETING_RE.match(normalized)
+    if cancel:
+        return {
+            "action": "cancel_meeting",
+            "proposal_id": int(cancel.group(1)),
+            "reason": (cancel.group(2) or "").strip(),
+        }
+
     return None
 
 
@@ -352,7 +365,8 @@ def find_pending_item_by_label(*, subject: str, sender: str) -> LexiQueueItem | 
 
 TEAMS_HELP_TEXT = """**Lexi**
 - Ask naturally: "draft a reply to Dan about payroll" or use card buttons
-- `pending` — drafts ready to send
+- `pending` — drafts ready to send (and invites ready to dispatch)
+- `cancel meeting #N` — cancel a booked meeting (attendee gets the notice)
 - `inbound` — mail waiting for your draft yes/no
 - `inbox review` — last 48 hours of activity + what needs action
 - `unanswered` — emails you may still need to reply to

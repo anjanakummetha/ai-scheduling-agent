@@ -442,6 +442,36 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
             decision_source="hermes_teams_text",
         )
 
+    if action == "cancel_meeting":
+        proposal_id = int(command["proposal_id"])
+        from app.agents.comms_agent import cancel_booked_meeting
+
+        result = cancel_booked_meeting(
+            proposal_id,
+            reason=str(command.get("reason") or ""),
+            authorized_by=authorized_by,
+        )
+        if result.get("ok"):
+            label = email_thread_label(
+                subject=result.get("subject"), sender=result.get("sender")
+            )
+            return {
+                "ok": True,
+                "handled": True,
+                "message": (
+                    f"Meeting cancelled for **{label}** — the attendee gets an "
+                    "Outlook cancellation notice."
+                ),
+                "proposal_id": proposal_id,
+                "status": "cancelled",
+            }
+        return {
+            "ok": False,
+            "handled": True,
+            "message": str(result.get("error") or "Could not cancel the meeting."),
+            "proposal_id": proposal_id,
+        }
+
     if action == "reject":
         proposal_id = int(command["proposal_id"])
         bundle = _fetch_bundle(proposal_id)
