@@ -28,6 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 TO_EMAIL = os.getenv("BCC_TEST_TO", "anjanakummetha@gmail.com")
+# A copy in a mailbox you control. Nothing here reads Lexi's inbox — the script
+# only sends from it — but without a CC the only record you can open is the
+# received copy, and the CC also proves the send from a second angle.
+CC_EMAIL = os.getenv("BCC_TEST_CC", "anjana.kummetha@iconicfounders.com").strip()
 KEEP = "--keep" in sys.argv
 CC_KORY = "--cc-kory" in sys.argv
 
@@ -104,8 +108,9 @@ banner("PRE-FLIGHT")
 print(f"  bcc_enabled (this process): {settings.hubspot_bcc_enabled}")
 print(f"  bcc_address              : {settings.hubspot_bcc_address}")
 print(f"  cc_kory_enabled          : {settings.cc_kory_enabled}")
-print(f"  lexi mailbox             : {settings.lexi_mailbox_email}")
-print(f"  recipient                : {TO_EMAIL}")
+print(f"  lexi mailbox (sender)    : {settings.lexi_mailbox_email}")
+print(f"  recipient (To)           : {TO_EMAIL}")
+print(f"  cc                       : {CC_EMAIL or '(none)'}")
 
 resolved_bcc = hubspot_bcc_addresses([TO_EMAIL])
 print(f"  BCC that will be applied : {resolved_bcc or '(NONE)'}")
@@ -135,6 +140,7 @@ try:
         body=BODY,
         approved_send=True,
         send_channel="lexi",
+        cc_emails=[CC_EMAIL] if CC_EMAIL else None,
     )
     print(f"  sent. message_id={message_id} composio_log_id={log_id}")
     print(f"  subject: {SUBJECT}")
