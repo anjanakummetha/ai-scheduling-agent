@@ -298,7 +298,9 @@ def mark_recipient_slot_choice(
         ).fetchone()
         if not row:
             return {"ok": False, "error": f"Proposal {proposal_id} not found."}
-        if row["status"] != STATUS_OFFER_SENT:
+        # pending_reoffer counts: they rejected the offered times and then
+        # proposed a NEW one that validated — that pick is what we wanted.
+        if row["status"] not in {STATUS_OFFER_SENT, STATUS_PENDING_REOFFER}:
             return {
                 "ok": False,
                 "error": f"Proposal {proposal_id} is not awaiting recipient reply (status={row['status']}).",
