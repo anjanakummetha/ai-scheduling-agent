@@ -973,7 +973,13 @@ def lexi_draft_outbound_email(
     body: str,
     send_channel: str = "",
 ) -> str:
-    """Preview an outbound email without sending.
+    """Preview a NON-SCHEDULING outbound email without sending.
+
+    NEVER use this for an email that offers meeting times or shares Kory's
+    availability — call lexi_start_scheduling instead, so the slots are
+    engine-validated, calendar holds are placed, and an acceptance can be
+    tracked. A time offered from a plain draft has no hold and can be
+    double-booked before the recipient answers.
 
     send_channel: kory (Kory's voice / mailbox) or lexi (Lexi assistant). Leave blank to infer from sign-off.
     After Kory approves, call lexi_send_outbound_email with the same send_channel.
@@ -1207,6 +1213,12 @@ def lexi_start_scheduling(
     require_ceo_signoff: str = "true",
 ) -> str:
     """Start outbound scheduling: LLM slots + draft + holds + pending_approval.
+
+    THE tool whenever an outbound email will offer meeting times — "share my/his
+    availability", "offer some times", "set up a meeting/coffee/lunch with X".
+    Do NOT hand-pick times from a calendar read into lexi_draft_outbound_email:
+    only this path validates slots against Kory's rules, places holds, and
+    tracks the recipient's acceptance.
 
     meeting_intent examples: lunch, dinner, coffee, meeting, internal_sync.
     duration_minutes: e.g. '60' for lunch. Set require_ceo_signoff=false only if Kory
