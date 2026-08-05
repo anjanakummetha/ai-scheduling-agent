@@ -664,8 +664,10 @@ def _place_holds_after_offer(
     if not slots:
         return 0, None
     existing = _fetch_holds(conn, proposal_id)
-    if existing:
+    if len(existing) >= len(slots):
         return len(existing), None
+    # Fewer holds than slots: a partial earlier run — place_offered_holds
+    # skips the slots already held and completes the rest.
     try:
         count = place_offered_holds(
             conn,
