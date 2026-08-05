@@ -194,12 +194,17 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
     # natural next ask is "redo it (differently)". Without it the retry tool
     # refused and Hermes hand-composed an unstaged draft in chat — no #id, no
     # approval path (live defect, coffee thread re-draft 2026-08-05).
+    # "pending_reoffer": the recipient declined the offered times (or
+    # counter-proposed a busy one) — the retry tool IS how Kory supplies the
+    # replacement times (live H-4: without it, "retry scheduling for #6861 —
+    # offer Monday 10:30" was refused while the thread sat waiting).
     if bundle["status"] not in {
         NEEDS_SCHEDULING_GUIDANCE,
         AWAITING_REPLY_PROMPT,
         PENDING_APPROVAL,
         "needs_kory",
         "rejected",
+        "pending_reoffer",
     }:
         return {
             "ok": False,

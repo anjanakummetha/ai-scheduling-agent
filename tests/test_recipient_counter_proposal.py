@@ -81,6 +81,77 @@ def test_rejection_with_counter_time_routes_to_inbound_time_path():
     reoffer.assert_not_called()
 
 
+def test_blocked_counter_time_parks_proposal_for_reoffer():
+    """H-4 follow-through: a busy counter-proposal must release holds and move
+    the proposal to pending_reoffer so `retry scheduling for #N` works."""
+    from app.agents import lexi_thread_followup as ltf
+
+    proposal = {
+        "proposal_id": 6861,
+        "status": "offer_sent",
+        "intent_classification": "referral_or_intro",
+        "subject": "[TEST] Quick catch-up? — LT-H4",
+        "sender": "anjana@example.com",
+    }
+    marked = {}
+    with (
+        patch(
+            "app.scheduling.inbound_availability.body_looks_like_inbound_availability",
+            return_value=True,
+        ),
+        patch(
+            "app.scheduling.inbound_availability.extract_inbound_time_candidates",
+            return_value=[
+                {"start": "2026-08-17T11:00:00-06:00", "end": "2026-08-17T11:30:00-06:00"}
+            ],
+        ),
+        patch(
+            "app.scheduling.calendar_context.load_scheduling_calendar_context",
+            return_value={"status": "available", "busy_events": []},
+        ),
+        patch(
+            "app.scheduling.inbound_availability.validate_inbound_candidates",
+            return_value=([], [{"start": "2026-08-17T11:00:00-06:00"}], ["busy at Monday 11:00 AM"]),
+        ),
+        patch(
+            "app.scheduling.inbound_availability.find_compliant_slots_on_date",
+            return_value=[],
+        ),
+        patch(
+            "app.agents.comms_agent.mark_recipient_reoffer_request",
+            side_effect=lambda pid, *, reply_body: marked.update(pid=pid),
+        ),
+        patch.object(ltf, "_notify_kory_followup"),
+    ):
+        out = ltf._try_inbound_time_suggestion(
+            {"subject": "Re: [TEST] Quick catch-up? — LT-H4"},
+            proposal,
+            body="Could we do Monday, August 17 at 1:00 PM ET instead?",
+        )
+    assert out is not None and out["action"] == "inbound_time_blocked"
+    assert marked["pid"] == 6861
+    assert "retry scheduling for #6861" in out["message"]
+
+
+def test_retry_gate_accepts_pending_reoffer():
+    from app.agents import inbound_reply as ir
+
+    with (
+        patch.object(
+            ir,
+            "_fetch_proposal_bundle",
+            return_value={"status": "pending_reoffer", "id": 6861},
+        ),
+        patch.object(ir, "process_proposal_schedule", return_value=True, create=True),
+        patch(
+            "app.agents.scheduler_agent.process_proposal_schedule", return_value=True
+        ),
+        patch("app.bot.teams_publisher.schedule_teams_approval_push"),
+    ):
+        out = ir.retry_scheduling_with_guidance(6861, "offer Monday 10:30 AM MT")
+    assert "not awaiting scheduling guidance" not in str(out.get("error") or "")
+
+
 def test_plain_rejection_still_reoffers():
     from app.agents import offer_reply as orp
 

@@ -140,18 +140,36 @@ def _try_inbound_time_suggestion(
                     alt.append(s)
             if alt:
                 break
+        proposal_id = int(proposal["proposal_id"])
+        # The recipient effectively declined the offered times by proposing
+        # their own: release the stale holds and park the proposal in
+        # pending_reoffer so Kory's "retry scheduling for #N — …" can act on it
+        # (offer_sent blocks the retry tool by design).
+        if str(proposal.get("status") or "") == "offer_sent":
+            from app.agents.comms_agent import mark_recipient_reoffer_request
+
+            try:
+                mark_recipient_reoffer_request(proposal_id, reply_body=body)
+            except Exception:  # noqa: BLE001 — the Kory ping must still go out
+                logger.exception(
+                    "Could not mark reoffer for proposal %s", proposal_id
+                )
+        retry_hint = (
+            f"Say **retry scheduling for #{proposal_id} — <your times>** to offer "
+            "alternatives."
+        )
         if alt:
             alt_text = ", ".join(format_slot_for_email(s) for s in alt[:3])
             summary = (
                 f"**{subject}** — they asked for a time that's booked ({reason}), but you're "
-                f"open {alt_text} on that day. Want me to offer those?"
+                f"open {alt_text} on that day. Want me to offer those? {retry_hint}"
             )
         else:
             summary = (
                 f"**{subject}** — they suggested a time but it doesn't fit: {reason} "
-                f"That day is full — should I offer other days?"
+                f"That day is full — should I offer other days? {retry_hint}"
             )
-        _notify_kory_followup(int(proposal["proposal_id"]), summary=summary, kind="inbound_time_blocked")
+        _notify_kory_followup(proposal_id, summary=summary, kind="inbound_time_blocked")
         return {
             "ok": True,
             "action": "inbound_time_blocked",
