@@ -890,6 +890,13 @@ def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     still be executing in the background. NEVER tell Kory to approve again — a
     second approve can double-send. Say the send is likely still in progress and
     to check with 'pending' or 'show draft #N' in a minute.
+
+    Natural-language confirmations count too: if Kory says 'yes send it',
+    'send the invite', 'go ahead' about a specific proposal, call this tool
+    with 'approve #N' for that proposal — do NOT answer conversationally.
+    NEVER claim an email or invite was sent, or that something is 'already
+    done', unless a tool result IN THIS TURN says so — prior chat context is
+    not evidence; the database is the only authority.
     """
     from app.teams.commands import handle_teams_command
 

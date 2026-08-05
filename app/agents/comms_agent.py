@@ -493,34 +493,19 @@ def execute_lexi_approval(
                             conn.execute("RELEASE SAVEPOINT lexi_execution")
                             conn.commit()
                             conn.execute("SAVEPOINT lexi_execution")
-                            try:
-                                hold_count, hold_error = _place_holds_after_offer(
-                                    conn, proposal_id=proposal_id, proposal=proposal, result=result
-                                )
-                            except Exception as hold_exc:  # noqa: BLE001 — never revert a sent offer
-                                conn.execute("ROLLBACK TO SAVEPOINT lexi_execution")
-                                conn.execute("SAVEPOINT lexi_execution")
-                                hold_count = 0
-                                hold_error = f"{type(hold_exc).__name__}: {hold_exc}"
+                            # Holds go on their OWN connection: the approval
+                            # connection races the orchestrator/webhook writers,
+                            # and both live runs of this path died on a lock
+                            # mid-loop (orphaning calendar events). Per-slot
+                            # resumability makes the retries incremental.
+                            hold_count, hold_error = _place_holds_isolated(
+                                proposal_id=proposal_id, proposal=proposal, result=result
+                            )
                             if hold_error:
                                 result.errors.append(hold_error)
                                 result.warnings = (result.warnings or []) + [
                                     f"Email sent — calendar holds need attention: {hold_error}"
                                 ]
-                                _insert_audit_log(
-                                    conn,
-                                    step_name="hold_placement_failed",
-                                    reference_id=str(proposal_id),
-                                    log_level="ERROR",
-                                    message=(
-                                        "Offer email sent but hold placement failed: "
-                                        f"{hold_error}"
-                                    ),
-                                    payload={
-                                        "proposal_id": proposal_id,
-                                        "hold_error": hold_error,
-                                    },
-                                )
                             result.holds_confirmed = hold_count
                             try:
                                 _dispatch_asana_reservation_reminder_if_needed(
@@ -688,6 +673,54 @@ def execute_lexi_approval(
             result.errors = (result.errors or []) + [f"{type(exc).__name__}: {exc}"]
             result.ok = False
             return result
+
+
+def _place_holds_isolated(
+    *,
+    proposal_id: int,
+    proposal: dict[str, Any],
+    result: ExecutionResult,
+) -> tuple[int, str | None]:
+    """Post-send hold placement on a fresh connection, retried on lock races.
+
+    The offer email is already out; this must never raise. Each attempt gets
+    its own connection + transaction so a 'database is locked' loser rolls back
+    cleanly, and the per-slot resume in place_offered_holds (plus own-orphan
+    adoption) lets the next attempt finish what a crashed one started. The
+    outcome — success or final failure — is always audited on a connection that
+    cannot be rolled back by the caller.
+    """
+    import time as _time
+
+    last_error: str | None = None
+    for attempt in range(3):
+        if attempt:
+            _time.sleep(0.5 * attempt)
+        try:
+            with get_lexi_connection() as hconn:
+                count, err = _place_holds_after_offer(
+                    hconn, proposal_id=proposal_id, proposal=proposal, result=result
+                )
+                hconn.commit()
+            if not err:
+                return count, None
+            last_error = err
+        except Exception as exc:  # noqa: BLE001 — sent offer must never revert
+            last_error = f"{type(exc).__name__}: {exc}"
+    try:
+        with get_lexi_connection() as aconn:
+            _insert_audit_log(
+                aconn,
+                step_name="hold_placement_failed",
+                reference_id=str(proposal_id),
+                log_level="ERROR",
+                message=f"Offer email sent but hold placement failed: {last_error}",
+                payload={"proposal_id": proposal_id, "hold_error": last_error},
+            )
+            aconn.commit()
+    except Exception:  # noqa: BLE001 — auditing is best-effort here
+        logger.exception("Could not audit hold placement failure for %s", proposal_id)
+    return 0, last_error
 
 
 def _place_holds_after_offer(

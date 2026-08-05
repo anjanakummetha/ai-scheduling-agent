@@ -177,6 +177,67 @@ def test_adopts_own_orphaned_hold_event():
     assert row[0] == "evt-orphan-123"
 
 
+def test_isolated_placement_retries_lock_losses():
+    """Post-send holds retry on 'database is locked' instead of giving up —
+    both live runs of the in-transaction version died on this race."""
+    import sqlite3 as _sqlite3
+
+    from app.agents import comms_agent as ca
+
+    attempts = {"n": 0}
+
+    def flaky(conn, *, proposal_id, proposal, result):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise _sqlite3.OperationalError("database is locked")
+        return 3, None
+
+    with (
+        patch.object(ca, "_place_holds_after_offer", side_effect=flaky),
+        patch("time.sleep", lambda _s: None),
+    ):
+        count, err = ca._place_holds_isolated(
+            proposal_id=1,
+            proposal={},
+            result=ca.ExecutionResult(
+                ok=True, proposal_id=1, status="offer_sent", decision="approved"
+            ),
+        )
+    assert (count, err) == (3, None)
+    assert attempts["n"] == 3
+
+
+def test_isolated_placement_audits_final_failure():
+    import sqlite3 as _sqlite3
+
+    from app.agents import comms_agent as ca
+    from app.storage.lexi_db import get_lexi_connection
+
+    def always_locked(conn, *, proposal_id, proposal, result):
+        raise _sqlite3.OperationalError("database is locked")
+
+    with (
+        patch.object(ca, "_place_holds_after_offer", side_effect=always_locked),
+        patch("time.sleep", lambda _s: None),
+    ):
+        count, err = ca._place_holds_isolated(
+            proposal_id=98765,
+            proposal={},
+            result=ca.ExecutionResult(
+                ok=True, proposal_id=98765, status="offer_sent", decision="approved"
+            ),
+        )
+    assert count == 0 and "locked" in (err or "")
+    with get_lexi_connection() as conn:
+        row = conn.execute(
+            "SELECT message FROM audit_log WHERE reference_id='98765' "
+            "AND step_name='hold_placement_failed' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        conn.execute("DELETE FROM audit_log WHERE reference_id='98765'")
+        conn.commit()
+    assert row is not None and "locked" in row["message"]
+
+
 def test_real_conflict_still_raises():
     """A genuine busy event (different subject) must still block the hold."""
     conn = _holds_conn()
