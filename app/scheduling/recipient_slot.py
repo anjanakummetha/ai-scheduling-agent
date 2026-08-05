@@ -220,6 +220,13 @@ _REJECTION_PATTERNS = (
     r"\bunavailable (?:on|for|at)\b",
     r"\bwhat else (?:do you|have you) got\b",
     r"\bany other (?:times|options|availability)\b",
+    # Window shift = the offered times don't work: "could we look at the
+    # following week instead?" (live H-5 — fell to unparsed, holds kept).
+    r"\b(?:look at|do|try|move (?:it|this|to)|push (?:it|this)? ?to|how about|"
+    r"switch to|go with)\s+(?:the\s+)?(?:following|next|another|a different)\s+week\b",
+    r"\b(?:following|another|a different) week instead\b",
+    r"\bthat (?:whole )?week\b[^.\n]{0,50}\b(?:messy|full|busy|bad|tough|"
+    r"doesn'?t work|won'?t work|not (?:great|good|ideal))\b",
 )
 
 

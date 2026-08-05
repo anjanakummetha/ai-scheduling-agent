@@ -224,3 +224,24 @@ def test_single_guided_time_passes_gate_via_plan():
         body="",
     )
     assert not any("need at least" in c for c in report.checks), report.checks
+
+
+def test_week_shift_reads_as_rejection():
+    """Live H-5: 'could we look at the following week instead?' fell to the
+    unparsed path and kept the stale holds."""
+    assert recipient_times_rejected(
+        "Thanks for these! Actually, that whole week is looking messy on my "
+        "end now — could we look at the following week instead?"
+    )
+    assert recipient_times_rejected("How about next week instead?")
+    # A genuine pick naming a day must NOT read as rejection.
+    assert not recipient_times_rejected("Tuesday next week works great for me!")
+    assert not recipient_times_rejected("Monday, August 17 at 12:30 PM ET works.")
+
+
+def test_body_preview_skips_greeting_line():
+    from app.agents.lexi_thread_followup import _body_preview
+
+    body = "Hi Lexi,\n\nCould we look at the following week instead?\n\nThanks,\nAnjana"
+    assert _body_preview(body) == "Could we look at the following week instead?"
+    assert _body_preview("Just one line") == "Just one line"

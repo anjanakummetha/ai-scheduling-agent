@@ -205,6 +205,18 @@ def _try_inbound_time_suggestion(
     }
 
 
+def _body_preview(body: str, limit: int = 120) -> str:
+    """First substantive line — skip greeting-only lines ('Hi Lexi,')."""
+    for line in (body or "").strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.match(r"^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b[^a-z]*[a-z]*\s*[,!—-]*$", line, re.I):
+            continue
+        return line[:limit]
+    return (body or "").strip().split("\n")[0][:limit]
+
+
 def _handle_unparsed_followup(
     raw_email: dict[str, Any],
     proposal: dict[str, Any],
@@ -214,7 +226,7 @@ def _handle_unparsed_followup(
 ) -> dict[str, Any]:
     sender = str(proposal.get("sender") or "them")
     subject = str(proposal.get("subject") or "(no subject)")
-    preview = body.strip().split("\n")[0][:120]
+    preview = _body_preview(body)
     summary = (
         f"**{subject}** — {sender} replied and I couldn't auto-parse it:\n"
         f"\"{preview}\"\n\n"
@@ -259,7 +271,7 @@ def _handle_generic_lexi_followup(
         if _CANCEL_RE.search(body) and not _RESCHEDULE_RE.search(body):
             sender = str(proposal.get("sender") or "them")
             subject = str(proposal.get("subject") or "(no subject)")
-            preview = body.strip().split("\n")[0][:120]
+            preview = _body_preview(body)
             proposal_id = int(proposal["proposal_id"])
             summary = (
                 f"**{subject}** — {sender} wants to CANCEL the booked meeting:\n"
@@ -294,7 +306,7 @@ def _handle_generic_lexi_followup(
 
     sender = str(proposal.get("sender") or "them")
     subject = str(proposal.get("subject") or "(no subject)")
-    preview = body.strip().split("\n")[0][:120]
+    preview = _body_preview(body)
     summary = (
         f"**{subject}** — new reply from {sender} on a thread Lexi is handling:\n"
         f"\"{preview}\"\n\n"
