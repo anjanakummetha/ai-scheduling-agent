@@ -62,7 +62,7 @@ Analyze the inbound email subject and body.
 
 Return ONLY a single valid JSON object with exactly these keys:
 - intent: string — one of: referral_or_intro, meeting_request, pitch, new_client, coffee, happy_hour, dinner_request, lunch_request, podcast, internal_sync, board_meeting, reschedule, cancellation, delegation, non_scheduling, unknown
-  Use referral_or_intro for 30-minute intro/referral calls. Use pitch or meeting_request for investor/diligence/deal calls (60 min). Use coffee, happy_hour, dinner_request for those meeting types. Use podcast for The Turn podcast recording requests.
+  Use referral_or_intro for 30-minute intro/referral calls. Use pitch or meeting_request for investor/diligence/deal calls (60 min). Use coffee, happy_hour, dinner_request ONLY when the sender explicitly asks for that meeting type (the word coffee / drinks / dinner, or an unambiguous in-person meal request). Kory's default meeting format is VIRTUAL: an ambiguous ask ("quick sync", "grab 30 minutes", "catch up") is referral_or_intro, never coffee — misclassifying books a 60-minute in-person block with venues instead of a 30-minute call. Use podcast for The Turn podcast recording requests.
 - priority: string, exactly one of high, medium, low
 - confidence_score: float between 0.0 and 1.0
 - justification: string, one sentence explaining intent and priority
