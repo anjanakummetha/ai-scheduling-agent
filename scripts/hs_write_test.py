@@ -184,21 +184,56 @@ try:
     if not other:
         print("  (no non-Kory-owned contact found in the sample — skipped)")
     else:
-        print(f"  probing {other.get('email')} owned by {other.get('hubspot_owner_id')}")
-        # If the guard holds, this body never lands anywhere. If it does land, it is on
-        # a real colleague's record, so make it explain itself rather than shout.
-        out = hs.stage_meeting_note(
-            email=str(other.get("email")),
-            note=(
-                "Lexi ownership-guard test. If you are reading this on a real contact, the "
-                "guard that blocks writes to another owner's record failed — please tell "
-                "Anjana and delete this note."
-            ),
-            approved=True,
-        )
-        print("  ok:", out.get("ok"), "| error_code:", out.get("error_code"))
-        print("  ", (out.get("error") or "")[:200])
-        assert out.get("error_code") == "owner_confirmation_required", "OWNERSHIP GUARD FAILED"
+        print(f"  candidate: {other.get('email')} owned by {other.get('hubspot_owner_id')}")
+
+        # Two-phase, so this probe can never be the thing that writes to a
+        # colleague's record. Phase 1 reproduces exactly what stage_meeting_note
+        # does internally — same lookup, same exact-email match, same guard — but
+        # stops before the write. assert_contact_writable is a pure function over
+        # the contact dict, so this costs nothing but a read. Only if it already
+        # refuses do we exercise the full path, at which point the refusal is the
+        # proven outcome rather than the hoped-for one. Testing a guard by
+        # trusting the guard is circular; this breaks the circle.
+        #
+        # It resolves the record the same way rather than reusing the scan's dict:
+        # a guard verdict is only meaningful on the dict the write path will
+        # actually hold, and the two lookups are separate calls.
+        probe_email = str(other.get("email"))
+        resolved = None
+        for cand in hs.search_contacts(limit=5, query=probe_email).get("contacts") or []:
+            if (cand.get("email") or "").strip().lower() == probe_email.strip().lower():
+                resolved = cand
+                break
+
+        if resolved is None:
+            # The write path would refuse on contact_not_found before ever
+            # reaching the ownership guard, so there is nothing here to prove.
+            print("  the write path would not resolve this address — skipped, nothing attempted")
+        else:
+            precheck = hs.assert_contact_writable(resolved, owner_ack=False)
+            print(f"  phase 1 (read-only): owner={resolved.get('hubspot_owner_id')} "
+                  f"→ guard says {precheck.get('error_code') if precheck else 'WRITABLE'}")
+
+            if not precheck or precheck.get("error_code") != "owner_confirmation_required":
+                print("  ❌ OWNERSHIP GUARD FAILED at the read-only check.")
+                print("     Skipping the live call — no note attempted on a real record.")
+                print(f"     contact={probe_email} owner={resolved.get('hubspot_owner_id')} "
+                      f"kory={hs.kory_owner_id()}")
+                raise AssertionError("ownership guard did not refuse a non-Kory-owned contact")
+
+            print("  phase 2: guard already refused this record, so the live call is safe to make")
+            out = hs.stage_meeting_note(
+                email=probe_email,
+                note=(
+                    "Lexi ownership-guard test. If you are reading this on a real contact, the "
+                    "guard that blocks writes to another owner's record failed — please tell "
+                    "Anjana and delete this note."
+                ),
+                approved=True,
+            )
+            print("  ok:", out.get("ok"), "| error_code:", out.get("error_code"))
+            print("  ", (out.get("error") or "")[:200])
+            assert out.get("error_code") == "owner_confirmation_required", "OWNERSHIP GUARD FAILED"
 
     banner("STEP 4e — GUARDRAIL: Do Not Contact record (note path — ruling pending)")
     dnc = None
