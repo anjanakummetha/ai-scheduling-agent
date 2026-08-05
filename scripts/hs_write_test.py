@@ -104,17 +104,27 @@ def read_contact_by_id(contact_id, *, archived=False):
 
 
 CONTACT_ID = ""
+NOTE_IDS: list[str] = []
 
 
 def cleanup():
-    """Archive the test contact. Always runs — the portal is shared by all of IFG."""
-    banner("CLEANUP — archive the disposable contact")
-    if not CONTACT_ID:
-        print("  no contact was created — nothing to clean up.")
-        return
+    """Remove the test note and contact. Always runs — the portal is shared by all of IFG."""
+    banner("CLEANUP — remove the disposable note and contact")
     if KEEP:
-        print(f"  --keep given: leaving contact {CONTACT_ID} ({TEST_EMAIL}) in the portal.")
-        print("  Archive it yourself in HubSpot, or re-run without --keep.")
+        print(f"  --keep given: leaving contact {CONTACT_ID} and notes {NOTE_IDS} in place.")
+        return
+
+    # Notes first: archiving the contact hides them from the UI but leaves the
+    # note objects behind, and an orphaned note is harder to find than a contact.
+    for note_id in NOTE_IDS:
+        try:
+            execute_tool("HUBSPOT_DELETE_NOTE", {"noteId": note_id}, role="hubspot")
+            print(f"  ✅ deleted note {note_id}")
+        except Exception as exc:
+            print(f"  ⚠️  could not delete note {note_id}: {type(exc).__name__}: {exc}")
+
+    if not CONTACT_ID:
+        print("  no contact was created — nothing else to clean up.")
         return
     try:
         # ARCHIVE, never the GDPR delete: GDPR erases permanently and blacklists
@@ -246,13 +256,32 @@ try:
         # to go look in the UI later. A create call returning ok is not proof the
         # body landed on the right record.
         try:
+            # LIST_CONTACT_NOTES returns association stubs only — ids, no bodies.
+            # Checking for the body in that payload always says False and looks
+            # like a failed write. Get the note ids here, then read the objects.
             notes = execute_tool(
                 "HUBSPOT_LIST_CONTACT_NOTES", {"contact_id": CONTACT_ID, "limit": 10},
                 role="hubspot",
             )
-            raw = json.dumps(notes.get("data"), default=str)
-            print(f"  notes payload ({len(raw)} chars):", raw[:600])
-            print("  body found on the record:", "HUBSPOT_CREATE_NOTE lands on the" in raw)
+            results = (notes.get("data") or {}).get("results") or []
+            NOTE_IDS.extend(str(r.get("toObjectId")) for r in results if r.get("toObjectId"))
+            print(f"  associated notes: {NOTE_IDS or '(none)'}")
+
+            for note_id in NOTE_IDS:
+                obj = execute_tool(
+                    "HUBSPOT_READ_CRM_OBJECT_BY_ID",
+                    {"objectType": "notes", "objectId": note_id,
+                     "properties": ["hs_note_body", "hs_timestamp", "hubspot_owner_id"]},
+                    role="hubspot",
+                )
+                props = (obj.get("data") or {}).get("properties") or {}
+                body_text = props.get("hs_note_body") or ""
+                print(f"  note {note_id}: owner={props.get('hubspot_owner_id')} "
+                      f"ts={props.get('hs_timestamp')}")
+                print(f"    body: {body_text[:120]!r}")
+                print("    ✅ body matches what we sent"
+                      if "HUBSPOT_CREATE_NOTE lands on the" in body_text
+                      else "    ❌ body is not what we sent")
         except Exception as exc:
             print(f"  read-back failed: {type(exc).__name__}: {exc}")
 
