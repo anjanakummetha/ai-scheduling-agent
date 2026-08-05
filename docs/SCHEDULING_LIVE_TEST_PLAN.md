@@ -554,6 +554,22 @@ One thread (#6835, anjanakummetha@gmail.com → kory@, CC lexi@) exercised the e
 
 Also observed (banked for Phase 4 / compose polish, no code): warm-rewrite dropped the dual-TZ "(MT)" parentheticals; hold/invite titles say "Anjanakummetha" (guest-name parse of a bare-address sender); regenerated reschedule offer kept intent `referral_or_intro` (3-day holds instead of the 1-day reschedule rule); cancel ping quotes "Hi Lexi," as the preview line; "no availability for next week" gate note should say "only one opening" when the ladder widened on the 2-slot minimum rather than zero slots (the widen itself was CORRECT: Aug 10 10:00 MT was next week's only clean slot). Suite 566.
 
+### RUN 7 — P3-B `LT-H4`: counter-proposals, week shift, vague reply, extra attendee — 2026-08-05 ✅ COMPLETE
+
+Thread #6861. Final state: booked Mon Aug 24 12:00–12:30 PM ET, Teams meeting, BOTH attendees (gmail + anjana.kummetha@iconicfounders.com), zero leftover holds. The chain surfaced 9 more defects, all fixed & deployed:
+
+1. **`f09ab85` counter-proposed time nearly booked as a pick (THE H-4 catch)**: "None of those quite work — could we do Monday, August 17 at 1:00 PM ET instead?" matched the Aug 10 slot via bare-weekday matching. Now: weekday must be unique among offered slots; explicit dates/clock-times must agree (TZ labels honored, unlabeled compared across US zones); "quite work" phrasings read as rejections; a rejection + concrete new time routes to the inbound-time validator (busy → escalate with same-day alternatives — verified live: WOB conflict flagged, 10:30/15:30 MT offered).
+2. **`09db236` blocked counter-proposals park in pending_reoffer**: retry tool refused offer_sent while the thread sat "waiting"; now holds release, status pending_reoffer, retry gate accepts it, ping names the exact retry command.
+3. **`0618d79` exact-time guidance honored**: "10:30 AM MT and 3:30 PM MT" — continuation times now inherit the named day (extractor), and _try_inbound_slots passes the plan so the gate's 2-slot minimum relaxes for Kory-directed times. Before: same generic 3 slots regardless of guidance.
+4. **`62434da` failed-send recovery**: OUTLOOK_SEND_DRAFT returned an empty body (transient Composio), escalated to needs_kory — but approve only accepted pending_approval, so the escalation's own "try again" advice was impossible. approve #N now re-dispatches needs_kory-with-draft (verified live; orphan draft deleted by hand).
+5. **`14edf94` week-shift = rejection + greeting-skipping previews**: "could we look at the following week instead?" fell to unparsed (holds kept on the declined week); pings quoted "Hi Lexi,".
+6. **`a3af2e0` quoted-history poisoning (H-6)**: "Sounds good, thanks!" read as a rejection because the Gmail quote below it contained the earlier "none of those quite work" — rejection detection now reads only the sender's new text.
+7. **`89c8061` extra attendees (H-10)**: "include my colleague — her email is X" was silently dropped; addresses in the new text (minus Lexi/Kory/internal) now ride the selected slot into build_invite_action.
+8. **`d5d9ca1` invite prompt redesigned** (Anjana's feedback): was a full replay of the offer email; now shows picked time (recipient-TZ first), extra attendees, exact commands.
+9. **Hermes hallucination pattern (3 occurrences logged)**: claimed "already sent/done" for actions never taken — mitigated via docstring truth guards; gateway restarts during deploys also wipe its chat context mid-conversation (ops note: deploys mid-conversation confuse the chat).
+
+Banked: stale UAT-era Adaptive Card copy ("Invite send is disabled — UAT safety" + "Not yet" button) appeared on an invite prompt though writes_allowed=True at check time — root-cause in M-3 log sweep; guided re-offers put all options on one day (day-spread preference). Suite 587.
+
 ---
 
 ## RUN 1 RESULTS — 2026-07-26 (sends CLOSED)
