@@ -570,6 +570,21 @@ Thread #6861. Final state: booked Mon Aug 24 12:00–12:30 PM ET, Teams meeting,
 
 Banked: stale UAT-era Adaptive Card copy ("Invite send is disabled — UAT safety" + "Not yet" button) appeared on an invite prompt though writes_allowed=True at check time — root-cause in M-3 log sweep; guided re-offers put all options on one day (day-spread preference). Suite 587.
 
+### RUN 8 — P3-C `LT-H3` (full delegation sequence) + P3-D — 2026-08-05 ✅ COMPLETE
+
+Thread #7041 ran the REAL production flow end-to-end: Anjana emailed Kory alone → Kory replied CCing lexi@ "please find time" → delegation detected (`is_delegation=1`) → offer → guided "next week instead" retry (single-slot relax correct: next week genuinely has one clean slot) → travel-day counter-proposal escalated (Tue Aug 11 = "Kory in Chicago" from 22:00; conservative by design) → valid counter (Mon Aug 10 5:30 PM ET) validated → decision-shaped invite prompt → invite dispatched. Final: meeting Aug 10 3:30–4:00 MT booked, holds clean. #6497/#6820 rejected (P3-D ✅). Fixes this run:
+1. **`4bd598a` zone-labeled counter times**: "3:30 PM ET (1:30 PM MT)" parsed as 15:30 MT (non-MT labels ignored) and "That Monday doesn't work" spawned a phantom Monday-9AM candidate — labels now reinterpret the wall clock; defaulted candidates dropped when explicit-time ones exist.
+2. **`5fb24d8`** valid new-time pick accepted while pending_reoffer (was offer_sent-only — the reoffer state dead-ended the happy path).
+3. **`de34f2f`** bare `send` sees the invite queue (one pending invite + zero drafts left it unresolved).
+
+**KNOWN GAPS (Phase 4 decisions, not regressions):**
+- **K-3 memory rules not enforced in slot search**: `remember: no meetings before 8:30 AM MT Tuesdays` stored+recalled fine, but the engine offered Tue 7:00 AM MT. Wiring kory_memory into scheduling preferences is a dedicated feature.
+- **H-8 declines invisible**: recipient declining the Outlook invite produced zero reaction (meeting-response messages never enter ingestion). Meeting stays booked-with-decline on the calendar.
+- `invite_event_id` not stored when invite dispatches via the no-hold path (reoffer had released them) — `cancel meeting #N` refuses on such meetings.
+- Hermes gateway discipline (5 logged occurrences): claims "already sent/done"/"didn't go through" without tool results, asks for numbers it was given, advises re-approve after timeouts despite docstring guards; deploy restarts wipe its chat context mid-conversation. Needs a Hermes-repo prompt/system fix, not Lexi logic.
+
+Remaining before Phase 4: box-side E-3/E-4 (expiry sweeps via SQL backdate), E-6 (conflict-at-confirm, safety-critical), M-1/M-2 (4:45 AM briefing "⏳ Waiting on you" + overnight), M-3 (log sweep incl. stale-card mystery), M-4 (budget). Cleanup list: delete Aug 10 + Aug 24 test meetings (Aug 24 shows declined; Aug 10's proposal lacks invite_event_id — delete via calendar directly), reject #6481/#6244, delete #6235 stale offer thread, remove Tuesday-8:30 memory fact, sweep [TEST] emails. Suite 591.
+
 ---
 
 ## RUN 1 RESULTS — 2026-07-26 (sends CLOSED)
