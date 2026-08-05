@@ -262,6 +262,7 @@ def _build_outbound_schedule(
                 slots=engine.slots[:MAX_SLOT_OPTIONS],
                 sender_email=recipient_email,
                 voice_mode=voice_mode,
+                outbound=True,
             ),
             confidence_score=0.92,
             source="slot_engine",

@@ -263,8 +263,14 @@ def build_scheduling_reply(
     recipient_body: str = "",
     internet_headers: list | None = None,
     stored_recipient_timezone: str | None = None,
+    outbound: bool = False,
 ) -> str:
-    """Build a scheduling reply matching Kory's rules (plain text email body)."""
+    """Build a scheduling reply matching Kory's rules (plain text email body).
+
+    outbound=True means WE are initiating (delegation like "set up a meeting
+    with X") — the recipient never wrote to us, so "Thanks for reaching out"
+    would be a false statement in the very first line (live O-2b, #6820).
+    """
     from app.scheduling.lexi_voice import normalize_voice_mode
 
     mode = normalize_voice_mode(voice_mode)
@@ -357,16 +363,23 @@ def build_scheduling_reply(
         tz_note = ""
 
     if mode == "lexi":
-        opening = (
-            f"Hi {name},\n\n"
-            "I'm Lexi, Kory's assistant. Thanks for reaching out — "
+        lead = (
+            "I'm Lexi, Kory's assistant. Kory asked me to reach out — "
+            if outbound
+            else "I'm Lexi, Kory's assistant. Thanks for reaching out — "
         )
+        opening = f"Hi {name},\n\n{lead}"
         if context_line:
             opening = f"{opening}{context_line.lstrip()}"
         else:
             opening = f"{opening}a few options that work on Kory's end:\n\n"
     else:
-        opening = f"Hi {name},\n\nThanks for reaching out — "
+        lead = (
+            "I'd love to find a time to connect — "
+            if outbound
+            else "Thanks for reaching out — "
+        )
+        opening = f"Hi {name},\n\n{lead}"
         if context_line:
             opening = f"{opening}{context_line.lstrip()}"
         else:
