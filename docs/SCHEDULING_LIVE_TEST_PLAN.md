@@ -56,7 +56,7 @@ Serial, unique `[TEST] … — LT-x` subjects, ~1–2 min between sends, as befo
 | T5 `LT-C6` — "coffee near Cherry Creek?" | 1 | C-6 shaping (8:30/9:00 starts, 90-min, in-person) · **OB-4** single-slot-coffee data point |
 | T6 — Teams only | 0 | L-1 Kory-voice on request · **O-1/O-2/O-4/O-5/O-6/O-7** draft stack (O-3 already ✅ at draft level) |
 | T7/T8 `LT-G2`→fresh thread — NY signature, then no signature | 2 | G-2 Eastern-first · G-3 learned-TZ reuse. **Run these LAST in Phase 1**, then decide: delete the learned profile row (so Phase 3 offers aren't Eastern-labelled) or keep it deliberately — note which. |
-| T9 — Kory's Outlook → lexi@, ×3 | 3 | J-1 (then remove the fact before anything else runs) · J-2 · J-3 (verify **staged-only**, Asana writes off) · K-1/K-2 via Teams + one service restart. Expect silence per CG-2; verify by side effects; allow ~5 min (Sent-Items poll). |
+| T9 — Kory's Outlook → lexi@, ×3 | 3 | ~~J-1 · J-2 · J-3~~ **DEFERRED 2026-08-05 (Anjana)** — email-to-Lexi instruction tests move to the later window with Group N / HubSpot writes; the feature stays live but dormant (only fires on mail from Kory's own address to lexi@). K-1/K-2 via Teams + one service restart stay IN scope, run before Phase 2. |
 
 **Gate:** everything above green (or fixed + re-run) → Phase 2 flip.
 
