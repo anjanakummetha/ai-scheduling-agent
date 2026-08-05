@@ -270,11 +270,23 @@ def _timezone_from_prior_emails(
     *,
     exclude_thread_id: str | None = None,
 ) -> RecipientTimezoneResult | None:
-    """Scan prior ingested threads from the same sender for timezone cues."""
+    """Scan prior ingested threads from the same sender for timezone cues.
+
+    Two passes on purpose: TEXT evidence (signature/body/area code) across ALL
+    threads first, and only then any thread's email headers. Interleaving them
+    per-thread let the newest thread's Gmail headers (sender's physical UTC
+    offset — the weakest signal) preempt an explicit signature sitting one
+    thread older (live G-3 defect: learned NY signature lost to a -0600
+    header, offer went out MT-only).
+    """
     from app.scheduling.timezone_chain import recipient_chain_text
     from app.storage.recipient_profiles import list_prior_email_threads
 
-    for thread in list_prior_email_threads(sender_email, exclude_thread_id=exclude_thread_id):
+    threads = list(
+        list_prior_email_threads(sender_email, exclude_thread_id=exclude_thread_id)
+    )
+
+    for thread in threads:
         raw_body = str(thread.get("raw_body") or "")
         if not raw_body.strip():
             continue
@@ -317,6 +329,7 @@ def _timezone_from_prior_emails(
                     detail=f"Prior thread {thread.get('thread_id')}: {area_result.detail}",
                 )
 
+    for thread in threads:
         headers: list[dict[str, Any]] = []
         raw_headers = thread.get("internet_headers_json")
         if raw_headers:

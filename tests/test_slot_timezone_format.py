@@ -98,3 +98,44 @@ def test_fallback_offer_template_is_voice_aware():
     lexi = _template_fallback_offer("Anjana", slot_block, "lexi")
     assert "on Kory's end" in lexi
     assert "I'm Lexi, Kory's assistant" in lexi
+
+
+def test_prior_thread_signature_outranks_newer_thread_headers(monkeypatch):
+    """Live G-3 defect: the newest prior thread had no signature, so its Gmail
+    Date header (-0600, the sender's physical location) answered before the
+    older thread's explicit NY signature was ever scanned — the learned
+    Eastern timezone was lost and the offer went out MT-only."""
+    import json as json_mod
+
+    from app.scheduling import timezone_intel as tzi
+
+    threads = [
+        {  # newest: bare follow-up, no signature, Denver-offset headers
+            "thread_id": "t-new",
+            "raw_body": "Hi Kory,\n\nCould we look at the week after next instead?\n\nAnjana",
+            "internet_headers_json": json_mod.dumps(
+                [{"name": "Date", "value": "Tue, 4 Aug 2026 21:20:00 -0600"}]
+            ),
+        },
+        {  # older: carries the NY signature
+            "thread_id": "t-old",
+            "raw_body": (
+                "Hi Kory,\n\nWould love to grab 30 minutes next week.\n\n"
+                "Best,\nAnjana Kummetha\nNew York, NY | (212) 555-0100"
+            ),
+            "internet_headers_json": json_mod.dumps(
+                [{"name": "Date", "value": "Tue, 4 Aug 2026 20:00:00 -0600"}]
+            ),
+        },
+    ]
+    monkeypatch.setattr(
+        "app.storage.recipient_profiles.list_prior_email_threads",
+        lambda sender_email, exclude_thread_id=None: threads,
+    )
+    result = tzi.detect_recipient_timezone(
+        sender_email="anjanakummetha@gmail.com",
+        body="Hi Kory,\n\nOne more thought.\n\nAnjana",
+        allow_prior_threads=True,
+    )
+    assert result.source == "prior_email_signature"
+    assert result.tz_name() == "America/New_York"
