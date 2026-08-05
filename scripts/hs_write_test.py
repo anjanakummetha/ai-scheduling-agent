@@ -133,8 +133,17 @@ if not other:
     print("  (no non-Kory-owned contact found in the sample — skipped)")
 else:
     print(f"  probing {other.get('email')} owned by {other.get('hubspot_owner_id')}")
-    out = hs.stage_meeting_note(email=str(other.get("email")), note="MUST NOT BE WRITTEN",
-                                approved=True)
+    # If the guard holds, this body never lands anywhere. If it does land, it is on
+    # a real colleague's record, so make it explain itself rather than shout.
+    out = hs.stage_meeting_note(
+        email=str(other.get("email")),
+        note=(
+            "Lexi ownership-guard test. If you are reading this on a real contact, the "
+            "guard that blocks writes to another owner's record failed — please tell "
+            "Anjana and delete this note."
+        ),
+        approved=True,
+    )
     print("  ok:", out.get("ok"), "| error_code:", out.get("error_code"))
     print("  ", (out.get("error") or "")[:200])
     assert out.get("error_code") == "owner_confirmation_required", "OWNERSHIP GUARD FAILED"
