@@ -374,3 +374,65 @@ class TestApproveConfirmationIsExecutionBacked:
             out = commands.handle_teams_command("approve #42")
         assert out["ok"] is True
         assert "Sent reply" in out["message"]
+
+
+class TestApproveRetriesFailedSend:
+    """Live H-4: a failed send escalates to needs_kory with the draft intact —
+    Kory's approve retry must re-dispatch, not be refused."""
+
+    def test_typed_approve_routes_needs_kory_to_run_approval(self):
+        from app.teams import commands
+
+        ran = {}
+
+        def fake_run_approval(**kwargs):
+            ran.update(kwargs)
+            return {"ok": True, "handled": True, "message": "Sent.", "proposal_id": 6861}
+
+        with (
+            patch.object(commands, "find_pending_item", return_value=None),
+            patch.object(commands, "_find_invite_item", return_value=None),
+            patch.object(commands, "_fetch_proposal_status", return_value="needs_kory"),
+            patch.object(commands, "_run_approval", side_effect=fake_run_approval),
+        ):
+            out = commands.handle_teams_command("approve #6861")
+        assert out["ok"] is True
+        assert ran["proposal_id"] == 6861
+        assert ran["decision"] == "approved"
+
+    def test_executor_accepts_needs_kory_with_draft(self):
+        from app.agents import comms_agent as ca
+        from app.storage.lexi_db import get_lexi_connection
+
+        with get_lexi_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO email_threads (thread_id, subject, sender, raw_body) "
+                "VALUES ('lt-h4-retry', '[TEST] H4 retry', 'anjana@example.com', 'body')"
+            )
+            conn.execute("DELETE FROM proposals WHERE id = 99003")
+            conn.execute(
+                "INSERT INTO proposals (id, thread_id, status, proposed_slots, drafted_reply) "
+                "VALUES (99003, 'lt-h4-retry', 'needs_kory', '[]', 'Hi Anjana — times below.')"
+            )
+            conn.commit()
+        try:
+            with (
+                patch.object(ca, "_send_drafted_reply", return_value=(True, None)),
+                patch.object(ca, "_place_holds_isolated", return_value=(0, None)),
+                patch.object(ca, "is_hold_reminder_proposal", create=True) as _unused,
+                patch(
+                    "app.scheduling.hold_reminder.is_hold_reminder_proposal",
+                    return_value=False,
+                ),
+            ):
+                result = ca.execute_lexi_approval(99003, "approved", "", "kory")
+            assert result.ok is True
+            assert result.email_sent is True
+            assert result.status == "offer_sent"
+        finally:
+            with get_lexi_connection() as conn:
+                conn.execute("DELETE FROM approvals WHERE proposal_id = 99003")
+                conn.execute("DELETE FROM audit_log WHERE reference_id = '99003'")
+                conn.execute("DELETE FROM proposals WHERE id = 99003")
+                conn.execute("DELETE FROM email_threads WHERE thread_id = 'lt-h4-retry'")
+                conn.commit()

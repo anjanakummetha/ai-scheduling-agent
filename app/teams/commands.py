@@ -420,6 +420,16 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
             invite_result = _run_invite_from_text(proposal_id, authorized_by)
             if invite_result is not None:
                 return invite_result
+            if _fetch_proposal_status(proposal_id) == "needs_kory":
+                # Failed-send escalation: the draft is intact and Kory said go —
+                # re-attempt the dispatch instead of claiming nothing is pending.
+                return _run_approval(
+                    proposal_id=proposal_id,
+                    decision="approved",
+                    selected_slot="",
+                    authorized_by=authorized_by,
+                    decision_source="hermes_teams_text",
+                )
             bundle = _fetch_bundle(proposal_id)
             return {
                 "ok": False,

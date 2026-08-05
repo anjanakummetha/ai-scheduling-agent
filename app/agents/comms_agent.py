@@ -500,7 +500,13 @@ def execute_lexi_approval(
                     conn.execute("RELEASE SAVEPOINT lexi_execution")
                     conn.commit()
                     return result
-                if status != PENDING_APPROVAL:
+                if status == "needs_kory" and str(proposal.get("drafted_reply") or "").strip():
+                    # A failed send escalates to needs_kory with the draft
+                    # intact; Kory's "approve #N" retry must work (live H-4:
+                    # the escalation itself suggested re-approving, but this
+                    # gate refused it).
+                    pass
+                elif status != PENDING_APPROVAL:
                     raise ValueError(
                         f"Proposal {proposal_id} is not pending draft approval (status={status})."
                     )
