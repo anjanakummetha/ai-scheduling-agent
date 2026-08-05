@@ -885,6 +885,11 @@ def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     message; only if handled=false may you respond conversationally.
     Examples that MUST route here: 'reject #6487 — test complete',
     'approve #6481', 'pending', 'show draft #6449', 'send'.
+
+    If an approve call TIMES OUT or errors without a clear result, the send may
+    still be executing in the background. NEVER tell Kory to approve again — a
+    second approve can double-send. Say the send is likely still in progress and
+    to check with 'pending' or 'show draft #N' in a minute.
     """
     from app.teams.commands import handle_teams_command
 

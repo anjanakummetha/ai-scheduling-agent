@@ -7,8 +7,10 @@ orchestrator/status surface can alarm when the month is tracking over budget.
 from __future__ import annotations
 
 import os
+import sqlite3
 from typing import Any
 
+from app.config import settings
 from app.storage.lexi_db import get_lexi_connection
 
 # 200k/month ≈ 6,600/day. Alarm at 80%.
@@ -28,9 +30,19 @@ def _ensure_table(conn: Any) -> None:
 
 
 def record_composio_call(n: int = 1) -> None:
-    """Increment today's Composio call count (best-effort; never blocks a call)."""
+    """Increment today's Composio call count (best-effort; never blocks a call).
+
+    Uses its own short-timeout connection instead of get_lexi_connection: this
+    runs inside every real Composio call, including calls made while another
+    connection in the same process holds the write lock (e.g. the approval
+    transaction around the send pipeline). Inheriting the standard 30s
+    busy_timeout turned each of those calls into a 30s stall — long enough to
+    blow the Teams gateway's 120s ceiling. Losing a count is fine; waiting is not.
+    """
     try:
-        with get_lexi_connection() as conn:
+        conn = sqlite3.connect(settings.lexi_database_path, timeout=0.25)
+        try:
+            conn.execute("PRAGMA busy_timeout = 250")
             _ensure_table(conn)
             conn.execute(
                 """
@@ -41,6 +53,8 @@ def record_composio_call(n: int = 1) -> None:
                 (n, n),
             )
             conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
