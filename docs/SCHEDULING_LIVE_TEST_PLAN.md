@@ -515,6 +515,15 @@ Cosmetic (logged, not fixed): shifting the compound window labels the expansion 
 
 **New open ruling for Kory (generalizes OB-4):** when the requested window holds exactly **one** valid slot, offer it plus disclosed following-week alternatives, or keep the current all-or-nothing expansion? Also noted: the sender-facing draft did not acknowledge the window shift ("he's traveling most of next week…") — composer courtesy — worst case Kory edits the draft; revisit with the ruling.
 
+### RUN 5 — Group L (Teams drafting), 2026-08-04/05
+
+**L-1 — ✅ PASS after a four-defect chain** (thread 6497, "draft a reply to the coffee email from Anjana in my voice"). Final verified live: Kory-voice first-person body, single "Let's Win, / Kory", two valid slots (Aug 26, Sep 2), truthful ⚠️ note. Nice behaviors confirmed on the way: disambiguation across three coffee emails, and an honest "can't re-draft, want me to start fresh?" instead of a phantom success. The chain, each fixed + deployed:
+- **`2eb0c95`** — the timeout-fallback offer template was voice-blind: said "on Kory's end" (Lexi phrasing) then signed "Let's Win, Kory" regardless of `voice_mode`. Now voice-aware.
+- **`da478a0`** — the retry tool's status gate refused `rejected`, so "reject #N → redo it" had no valid tool and Hermes **hand-composed an unstaged draft in chat** — no #id, nothing approvable, offered to "send" what could never send. Rejected is now valid retry input (already-sent statuses stay blocked); docstring forbids chat-composed drafts.
+- **`83762d3`** — the guided single-slot minimum fired on ANY guidance text: "redo the draft in my voice" (style, not scheduling) silently dropped the 2-slot minimum to 1 across all five enforcement sites. New central `guidance_relaxes_slot_minimum()` relaxes only for day/window/policy guidance; all five sites use it.
+- **`b9bc5b8`** — the ⚠️ note named the ladder rung searched ("week of August 11", then "week of August 18") instead of the offered dates, plus "for in the next few weeks" grammar mash. TWO builders existed (gate warning outranks diagnostics note); both now use shared `offered_dates_label()` from the actual slots, keeping "(after travel)"-style reasons. **Eighth + ninth drift copies for post-sign-off refactor #1.**
+- Suite 538. Ops note: `sleep`-prefixed remote polling is fine, but user interrupted a 60s poll — prefer short direct queries between user pastes.
+
 ---
 
 ## RUN 1 RESULTS — 2026-07-26 (sends CLOSED)
