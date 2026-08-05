@@ -231,8 +231,15 @@ _REJECTION_PATTERNS = (
 
 
 def recipient_times_rejected(body: str) -> bool:
-    """True when the reply indicates offered slots don't work (not a slot pick)."""
+    """True when the reply indicates offered slots don't work (not a slot pick).
+
+    Only the sender's NEW text counts: the quoted history below a Gmail reply
+    carries every earlier "none of those work" line, and scanning it turned a
+    plain "Sounds good, thanks!" into a rejection (live H-6).
+    """
     if not body.strip():
         return False
-    text = body.lower()
+    text = _reply_text_for_matching(body).lower()
+    if not text:
+        return False
     return any(re.search(p, text) for p in _REJECTION_PATTERNS)

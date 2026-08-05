@@ -245,3 +245,19 @@ def test_body_preview_skips_greeting_line():
     body = "Hi Lexi,\n\nCould we look at the following week instead?\n\nThanks,\nAnjana"
     assert _body_preview(body) == "Could we look at the following week instead?"
     assert _body_preview("Just one line") == "Just one line"
+
+
+def test_quoted_history_rejection_does_not_poison_new_reply():
+    """Live H-6: 'Sounds good, thanks!' read as a rejection because the quoted
+    Gmail history below it contained the earlier 'none of those quite work'."""
+    body = (
+        "Sounds good, thanks!\n\n"
+        "On Wed, Aug 5, 2026 at 9:36 AM Lexi Knightly <lexi@iconicfounders.com> wrote:\n"
+        "> Happy to look at the following week\n"
+        "> None of those quite work for me. Could we do Monday...\n"
+    )
+    assert not recipient_times_rejected(body)
+    # New-text rejections still fire.
+    assert recipient_times_rejected(
+        "None of those quite work for me.\n\nOn Wed, Aug 5 Lexi wrote:\n> times"
+    )
