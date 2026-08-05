@@ -25,6 +25,7 @@ from ever being added to this portal again.
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 # Running as `python scripts/hs_write_test.py` puts scripts/ on sys.path, not the
@@ -61,46 +62,15 @@ def banner(title):
     print(f"\n{'=' * 70}\n{title}\n{'=' * 70}")
 
 
-# ---------------------------------------------------------------- STEP 2a
-banner("STEP 2a — create the disposable contact (only if absent)")
-contact = find_test_contact()
-if contact:
-    print(f"  already exists: id={contact.get('id')} name={contact.get('name')!r}")
-else:
-    created = execute_tool(
-        "HUBSPOT_CREATE_CONTACT",
-        {
-            "properties": {
-                "email": TEST_EMAIL,
-                "firstname": TEST_FIRST,
-                "lastname": TEST_LAST,
-                "hubspot_owner_id": hs.kory_owner_id(),
-                "company": "LEXI TEST — safe to delete",
-            }
-        },
-        role="hubspot",
-    )
-    print("  create result:", json.dumps(created.get("data"), default=str)[:400])
-    contact = find_test_contact()
+CONTACT_ID = ""
 
-if not contact:
-    sys.exit("could not resolve the test contact after creation — stopping before any write")
-
-CONTACT_ID = str(contact.get("id"))
-print(f"\n  TEST CONTACT id={CONTACT_ID} email={contact.get('email')} "
-      f"name={contact.get('name')!r} owner={contact.get('hubspot_owner_id')}")
-
-# Hard scope guard: never proceed against a record that isn't the test one.
-if TEST_FIRST.lower() not in str(contact.get("name") or "").lower():
-    sys.exit(f"SAFETY STOP: {TEST_EMAIL} resolves to {contact.get('name')!r}, not the test record")
-if str(contact.get("hubspot_owner_id")) != hs.kory_owner_id():
-    print(f"  WARNING: owner is {contact.get('hubspot_owner_id')}, expected {hs.kory_owner_id()}")
-
-# ---------------------------------------------------------------- STEP 2b
 
 def cleanup():
     """Archive the test contact. Always runs — the portal is shared by all of IFG."""
     banner("CLEANUP — archive the disposable contact")
+    if not CONTACT_ID:
+        print("  no contact was created — nothing to clean up.")
+        return
     if KEEP:
         print(f"  --keep given: leaving contact {CONTACT_ID} ({TEST_EMAIL}) in the portal.")
         print("  Archive it yourself in HubSpot, or re-run without --keep.")
@@ -109,10 +79,12 @@ def cleanup():
         # ARCHIVE, never the GDPR delete: GDPR erases permanently and blacklists
         # the address from ever being re-added to this portal.
         execute_tool("HUBSPOT_ARCHIVE_CONTACT", {"contactId": CONTACT_ID}, role="hubspot")
-        gone = find_test_contact()
-        if gone:
-            print(f"  ⚠️  archive call returned but {TEST_EMAIL} is still visible "
-                  f"(id={gone.get('id')}) — delete it by hand in HubSpot.")
+        # Verify by id, not by search: the search index lags writes by seconds, so
+        # an empty search result would "confirm" the archive even if it failed.
+        still = hs.contacts_by_ids([CONTACT_ID])
+        if still:
+            print(f"  ⚠️  archive call returned but contact {CONTACT_ID} still reads back "
+                  f"— delete it by hand in HubSpot.")
         else:
             print(f"  ✅ archived contact {CONTACT_ID} — no longer in the shared portal.")
             print("  It sits in HubSpot's recycle bin, restorable for 90 days.")
@@ -121,33 +93,106 @@ def cleanup():
         print(f"  DELETE CONTACT {CONTACT_ID} ({TEST_EMAIL}) BY HAND in HubSpot.")
 
 
+# Everything that can create or write runs inside this try. The create used to sit
+# above it, so a failure between creating the contact and entering the block left
+# the record sitting in a portal the whole company can see.
 try:
+    # ------------------------------------------------------------ STEP 2a
+    banner("STEP 2a — create the disposable contact (only if absent)")
+    contact = find_test_contact()
+    if contact:
+        CONTACT_ID = str(contact.get("id") or "")
+        print(f"  already exists: id={CONTACT_ID} name={contact.get('name')!r}")
+    else:
+        created = execute_tool(
+            "HUBSPOT_CREATE_CONTACT",
+            {
+                "properties": {
+                    "email": TEST_EMAIL,
+                    "firstname": TEST_FIRST,
+                    "lastname": TEST_LAST,
+                    "hubspot_owner_id": hs.kory_owner_id(),
+                    "company": "LEXI TEST — safe to delete",
+                }
+            },
+            role="hubspot",
+        )
+        data = created.get("data") or {}
+        # Take the id straight from the create response. Searching for the record
+        # we just made loses it: HubSpot's search index trails writes by seconds,
+        # and a miss there means an orphaned contact nobody knows to delete.
+        CONTACT_ID = str(data.get("id") or "")
+        print("  create result:", json.dumps(data, default=str)[:300])
+        print(f"  created id: {CONTACT_ID or '(NONE — see payload above)'}")
 
-    banner("STEP 2b — live meeting note against the test contact")
-    out = hs.stage_meeting_note(
-        email=TEST_EMAIL,
-        note="Live write test from Lexi. Confirms HUBSPOT_CREATE_NOTE lands on the "
-             "right record with the right body. Safe to delete.",
-        meeting_subject="LEXI WRITE TEST",
-        approved=True,
-    )
-    print("  RESULT:", json.dumps({k: v for k, v in out.items() if k != "kory_message"}, default=str))
-    print("  wrote_for_real:", out.get("ok") and not out.get("dry_run"))
+    if not CONTACT_ID:
+        raise RuntimeError("no contact id after create — stopping before any write")
+
+    # Read the canonical record back BY ID rather than by search, for the same
+    # index-lag reason, and check the scope guard against that.
+    record = (hs.contacts_by_ids([CONTACT_ID]) or [{}])[0]
+    print(f"\n  TEST CONTACT id={CONTACT_ID} email={record.get('email')} "
+          f"name={record.get('name')!r} owner={record.get('hubspot_owner_id')}")
+
+    # Hard scope guard: never write against a record that isn't the test one.
+    if TEST_FIRST.lower() not in str(record.get("name") or "").lower():
+        raise RuntimeError(
+            f"SAFETY STOP: id {CONTACT_ID} reads back as {record.get('name')!r}, "
+            "not the test record — no writes attempted"
+        )
+    if str(record.get("hubspot_owner_id")) != hs.kory_owner_id():
+        print(f"  WARNING: owner is {record.get('hubspot_owner_id')}, "
+              f"expected {hs.kory_owner_id()}")
+
+    # ------------------------------------------------------------ STEP 2a-wait
+    banner("STEP 2a-wait — wait for the new contact to become searchable")
+    # stage_meeting_note resolves its target by SEARCH, and HubSpot's search index
+    # trails writes by seconds. Without this wait, 2b reports contact_not_found on
+    # a record that demonstrably exists — testing the index, not the note path.
+    searchable = None
+    for attempt in range(1, 13):
+        searchable = find_test_contact()
+        if searchable:
+            print(f"  indexed after {attempt} attempt(s)")
+            break
+        print(f"  not indexed yet (attempt {attempt}/12) — waiting 5s")
+        time.sleep(5)
+
+    if not searchable:
+        print("  ⚠️  still not searchable after 60s. Skipping 2b/2c — a "
+              "contact_not_found here would be the index, not the note path.")
+        print("  The guardrail probes below do not depend on it. Re-run in a minute for 2b.")
+
+    # ------------------------------------------------------------ STEP 2b
+    if searchable:
+        banner("STEP 2b — live meeting note against the test contact")
+        out = hs.stage_meeting_note(
+            email=TEST_EMAIL,
+            note="Live write test from Lexi. Confirms HUBSPOT_CREATE_NOTE lands on the "
+                 "right record with the right body. Safe to delete.",
+            meeting_subject="LEXI WRITE TEST",
+            approved=True,
+        )
+        print("  RESULT:",
+              json.dumps({k: v for k, v in out.items() if k != "kory_message"}, default=str))
+        print("  wrote_for_real:", out.get("ok") and not out.get("dry_run"))
 
     # ------------------------------------------------------------ STEP 2c
-    banner("STEP 2c — read the note back off the contact")
-    # The contact gets archived at the end, so verify here rather than promising
-    # to go look in the UI later. A create call returning ok is not proof the
-    # body landed on the right record.
-    try:
-        notes = execute_tool(
-            "HUBSPOT_LIST_CONTACT_NOTES", {"contact_id": CONTACT_ID, "limit": 10}, role="hubspot"
-        )
-        raw = json.dumps(notes.get("data"), default=str)
-        print(f"  notes payload ({len(raw)} chars):", raw[:600])
-        print("  body found on the record:", "HUBSPOT_CREATE_NOTE lands on the" in raw)
-    except Exception as exc:
-        print(f"  read-back failed: {type(exc).__name__}: {exc}")
+    if searchable:
+        banner("STEP 2c — read the note back off the contact")
+        # The contact gets archived at the end, so verify here rather than promising
+        # to go look in the UI later. A create call returning ok is not proof the
+        # body landed on the right record.
+        try:
+            notes = execute_tool(
+                "HUBSPOT_LIST_CONTACT_NOTES", {"contact_id": CONTACT_ID, "limit": 10},
+                role="hubspot",
+            )
+            raw = json.dumps(notes.get("data"), default=str)
+            print(f"  notes payload ({len(raw)} chars):", raw[:600])
+            print("  body found on the record:", "HUBSPOT_CREATE_NOTE lands on the" in raw)
+        except Exception as exc:
+            print(f"  read-back failed: {type(exc).__name__}: {exc}")
 
     # ---------------------------------------------------------------- STEP 4
     banner("STEP 4a — GUARDRAIL: nonexistent contact must refuse, write nothing")
