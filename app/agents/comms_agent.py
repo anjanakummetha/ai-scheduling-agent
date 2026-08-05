@@ -264,6 +264,26 @@ def get_lexi_invite_queue() -> list[LexiQueueItem]:
         return items
 
 
+def _extra_attendees_from_reply(reply_body: str) -> list[str]:
+    """Other addresses the recipient asks to include ('add my colleague …').
+
+    Reads only the sender's new text (quoted history repeats every address in
+    the thread) and drops Lexi/Kory/known-internal addresses.
+    """
+    from app.config import resolve_kory_cc_email, resolve_kory_sender_emails, settings
+    from app.scheduling.recipient_slot import _reply_text_for_matching
+
+    text = _reply_text_for_matching(reply_body or "").lower()
+    if not text:
+        return []
+    found = set(re.findall(r"[\w.+-]+@[\w.-]+\.\w+", text))
+    skip = {resolve_kory_cc_email(), *(e.lower() for e in resolve_kory_sender_emails())}
+    if settings.lexi_mailbox_email:
+        skip.add(settings.lexi_mailbox_email.lower())
+    skip.add("lexi@iconicfounders.com")
+    return sorted(found - skip)
+
+
 def mark_recipient_slot_choice(
     proposal_id: int,
     selected_slot: dict[str, str],
@@ -273,7 +293,7 @@ def mark_recipient_slot_choice(
     """Store recipient's chosen slot and move proposal to pending_invite."""
     with get_lexi_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM proposals WHERE id = ?",
+            "SELECT status, thread_id FROM proposals WHERE id = ?",
             (proposal_id,),
         ).fetchone()
         if not row:
@@ -283,6 +303,16 @@ def mark_recipient_slot_choice(
                 "ok": False,
                 "error": f"Proposal {proposal_id} is not awaiting recipient reply (status={row['status']}).",
             }
+        sender_row = conn.execute(
+            "SELECT sender FROM email_threads WHERE thread_id = ?",
+            (row["thread_id"],),
+        ).fetchone()
+        own = _extract_email(sender_row["sender"] if sender_row else "") or ""
+        extras = [
+            e for e in _extra_attendees_from_reply(reply_body) if e != own.lower()
+        ]
+        if extras:
+            selected_slot = {**selected_slot, "extra_attendees": extras}
         conn.execute(
             """
             UPDATE proposals
@@ -858,18 +888,21 @@ def _place_holds_after_offer(
         return 0, str(exc)
 
 
-def _parse_recipient_selected_slot(proposal: dict[str, Any]) -> dict[str, str] | None:
+def _parse_recipient_selected_slot(proposal: dict[str, Any]) -> dict[str, Any] | None:
     raw = proposal.get("recipient_selected_slot")
     if not raw:
         return None
+    if not isinstance(raw, dict):
+        try:
+            raw = json.loads(str(raw))
+        except (TypeError, json.JSONDecodeError):
+            return None
     if isinstance(raw, dict) and raw.get("start"):
-        return {"start": str(raw["start"]), "end": str(raw.get("end") or "")}
-    try:
-        parsed = json.loads(str(raw))
-    except (TypeError, json.JSONDecodeError):
-        return None
-    if isinstance(parsed, dict) and parsed.get("start"):
-        return {"start": str(parsed["start"]), "end": str(parsed.get("end") or "")}
+        slot: dict[str, Any] = {"start": str(raw["start"]), "end": str(raw.get("end") or "")}
+        extras = raw.get("extra_attendees")
+        if isinstance(extras, list) and extras:
+            slot["extra_attendees"] = [str(e) for e in extras]
+        return slot
     return None
 
 
@@ -1039,6 +1072,7 @@ def _confirm_selected_hold(
         if tz_result.timezone and tz_result.confidence != "unknown"
         else ZoneInfo(settings.scheduling_timezone)
     )
+    extras = selected_slot.get("extra_attendees") if isinstance(selected_slot, dict) else None
     invite_action = build_invite_action(
         slot=selected_slot,
         meeting_subject=proposal.get("subject"),
@@ -1046,6 +1080,7 @@ def _confirm_selected_hold(
         attendee_email=attendee,
         sender_display=proposal.get("sender"),
         body=str(proposal.get("raw_body") or ""),
+        extra_attendees=list(extras) if extras else None,
         recipient_timezone=format_tz,
     )
 

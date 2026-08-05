@@ -231,3 +231,64 @@ def test_failed_regeneration_still_pings_kory():
         out = ltf._handle_generic_lexi_followup({}, _proposal(), body=RESCHEDULE_BODY)
     assert out is not None
     assert notified["kind"] == "reschedule_failed"
+
+
+class TestExtraAttendeesFromReply:
+    """Live H-10: 'include my colleague — her email is X' was silently dropped
+    from the invite."""
+
+    def test_extracts_colleague_and_skips_internal_and_quoted(self):
+        from app.agents.comms_agent import _extra_attendees_from_reply
+
+        body = (
+            "Monday, August 24 at 12:00 PM ET works for me. Could you also "
+            "include my colleague? Her email is anjana.kummetha@iconicfounders.com.\n\n"
+            "On Wed, Aug 5, 2026 Lexi Knightly <lexi@iconicfounders.com> wrote:\n"
+            "> quoted-person@elsewhere.com said hi\n"
+        )
+        assert _extra_attendees_from_reply(body) == [
+            "anjana.kummetha@iconicfounders.com"
+        ]
+
+    def test_no_addresses_means_no_extras(self):
+        from app.agents.comms_agent import _extra_attendees_from_reply
+
+        assert _extra_attendees_from_reply("Monday works, thanks!") == []
+
+    def test_slot_choice_stores_extras_and_parse_carries_them(self):
+        from app.agents import comms_agent as ca
+        from app.storage.lexi_db import get_lexi_connection
+
+        with get_lexi_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO email_threads (thread_id, subject, sender, raw_body) "
+                "VALUES ('lt-h10', '[TEST] H10', 'Anjana <anjanakummetha@gmail.com>', 'body')"
+            )
+            conn.execute("DELETE FROM proposals WHERE id = 99004")
+            conn.execute(
+                "INSERT INTO proposals (id, thread_id, status, proposed_slots) "
+                "VALUES (99004, 'lt-h10', 'offer_sent', '[]')"
+            )
+            conn.commit()
+        try:
+            out = ca.mark_recipient_slot_choice(
+                99004,
+                {"start": "2026-08-24T10:00:00-06:00", "end": "2026-08-24T10:30:00-06:00"},
+                reply_body=(
+                    "Monday, August 24 at 12:00 PM ET works. Include my colleague: "
+                    "anjana.kummetha@iconicfounders.com please!"
+                ),
+            )
+            assert out["ok"] is True
+            with get_lexi_connection() as conn:
+                raw = conn.execute(
+                    "SELECT recipient_selected_slot FROM proposals WHERE id = 99004"
+                ).fetchone()[0]
+            slot = ca._parse_recipient_selected_slot({"recipient_selected_slot": raw})
+            assert slot["extra_attendees"] == ["anjana.kummetha@iconicfounders.com"]
+        finally:
+            with get_lexi_connection() as conn:
+                conn.execute("DELETE FROM audit_log WHERE reference_id = '99004'")
+                conn.execute("DELETE FROM proposals WHERE id = 99004")
+                conn.execute("DELETE FROM email_threads WHERE thread_id = 'lt-h10'")
+                conn.commit()
