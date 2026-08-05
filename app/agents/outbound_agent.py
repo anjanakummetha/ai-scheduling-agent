@@ -577,43 +577,17 @@ def _filter_non_conflicting_slots(
     slots: list[dict[str, str]],
     calendar_context: dict[str, Any],
 ) -> list[dict[str, str]]:
+    # Uses the shared busy_intervals check, NOT a private copy: the local
+    # duplicate compared naive event times against aware slot times and blew
+    # up the whole outbound flow ("can't compare offset-naive and
+    # offset-aware datetimes", live O-2b).
+    from app.scheduling.busy_intervals import slot_conflicts_busy
+
     busy_events = calendar_context.get("busy_events") or []
     if calendar_context.get("status") != "available" or not busy_events:
         return slots[:MAX_SLOT_OPTIONS]
 
-    safe: list[dict[str, str]] = []
-    for slot in slots:
-        if not _slot_conflicts_busy(slot, busy_events):
-            safe.append(slot)
-    return safe
-
-
-def _slot_conflicts_busy(slot: dict[str, str], busy_events: list[dict[str, Any]]) -> bool:
-    slot_start = _parse_iso_datetime(slot["start"])
-    slot_end = _parse_iso_datetime(slot["end"])
-    if not slot_start or not slot_end:
-        return True
-    for event in busy_events:
-        event_start = _parse_event_datetime(event.get("start"))
-        event_end = _parse_event_datetime(event.get("end"))
-        if event_start and event_end and event_start < slot_end and event_end > slot_start:
-            return True
-    return False
-
-
-def _parse_iso_datetime(value: str) -> datetime | None:
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _parse_event_datetime(value: Any) -> datetime | None:
-    if isinstance(value, dict):
-        value = value.get("dateTime")
-    if not isinstance(value, str):
-        return None
-    return _parse_iso_datetime(value)
+    return [slot for slot in slots if not slot_conflicts_busy(slot, busy_events)]
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:
