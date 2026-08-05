@@ -1,0 +1,74 @@
+# Kory Preferences vs. Code — Audit (PAUSED, verify-only, no changes made)
+
+Status 2026-08-05: 2 of 3 audit sweeps complete (time/day rules; blocks/holds/reschedules).
+The meeting-type sweep (coffee/happy hour/dinner durations, venues, weekly caps) was paused
+mid-run at Anjana's request — resume it before acting on this document.
+NOTHING here has been changed in code. This is the raw flag list for review with Anjana/Kory.
+
+## Headline flags (things that disagree with Kory's written preferences)
+
+1. **CONTRADICTED — Tue/Thu 7:00/8:00 AM are routine, not occasional.** slot_engine adds
+   07:00+08:00 to every Tue/Thu candidate list unconditionally; rules.py declares
+   `earliest_default: "09:00"` for Tue/Thu but NO code reads that key.
+2. **CONTRADICTED — the "7:00 floor" ruling can block 6:00 AM East-Coast starts.** When a
+   time-of-day window is parsed from the email ("we could do 6 AM ET"), scheduling_plan/
+   scheduling_window clamp to 7:00, making the 6 AM Tue/Thu East-Coast lane unreachable.
+   Without a stated time preference, 6 AM works. V-1 ruling vs. preference conflict — needs Kory.
+3. **CONTRADICTED — "no minimum notice" isn't true.** Hard 2-hour lead PLUS the candidate
+   loop starts at day_offset=1, so TODAY is never offered. Effective minimum = next day.
+4. **MISSING — weekend family-calendar exception.** Weekends are correctly blocked by default,
+   but the exception path (weekend OK only during a window when Bridget/Maclain are busy —
+   check family calendar first) does not exist. Worse: DINNER intents are exempt from the
+   weekend block entirely, with no family check. Family calendar read only ingests
+   "Do Not Move" events as busy blockers — ordinary family events are invisible.
+5. **MISSING — 30-min-Teams batching.** Selector deliberately picks one slot per day and
+   prevents adjacency; "batch 30-min Teams back-to-back, max 2h block" has no implementation.
+   The 2h-chain/30-min-break check exists but only for virtual informal intents, only against
+   existing calendar events (never across offered slots — `all_batch` is a dead variable).
+6. **PARTIAL — drive-time rules mostly unimplemented.** Only Cherry Creek 15 min is enforced.
+   Downtown/DTC/Littleton/DEN times, the DEN leave-45 rule, and calls-during-drives exist
+   only as prompt prose. (TRAVEL_TIMES consulted nowhere else.)
+7. **DEFECT — reschedule prospects never get the follow-up reminder.** Reschedule holds
+   expire at 1 day (correct) but the reminder is computed on the 2-day default and the
+   release stamps the hold `released`, which the reminder query excludes. Net: reminder
+   can never fire for reschedules; only Kory gets a Teams notice.
+8. **DEFECT — outbound-initiated offers place NO holds.** `_insert_outbound_holds` in
+   outbound_agent.py is dead code (zero call sites). Inbound offers place holds after
+   send (all-or-nothing); outbound path doesn't.
+9. **MISSING — reschedules are not prioritized.** Queue is priority_tier then FIFO;
+   nothing bumps intent == "reschedule". Prompt-only.
+10. **PARTIAL — Capital Demolition.** The 7:00 Thursday rule blocks EVERY Thursday
+    (bi-weekly not modeled = over-blocking, safe direction), and the current real 8:00 AM
+    occurrence is only protected when the calendar event exists.
+11. **PARTIAL — soft blocks (Patrick/WOB/3PM review) protected only when the event exists
+    on the calendar; SOFT_BLOCKS data feeds prompts only. Effectively as hard as hard
+    blocks — no "ask Kory to move it" workflow exists in code (prompt-only). Agent has no
+    capability to move existing meetings at all (update_calendar_event: zero call sites).
+12. **PARTIAL — urgent exception.** The "never move YPO/boards/Doug/workouts/CapDemo/HRT"
+    guarantee holds. But urgent=True also relaxes lunch, travel days, and 6 AM — broader
+    than the stated "ask me to move other meetings" intent; the "within a week" scope and
+    the ask-Kory flow are unmodeled.
+13. **CAVEAT — Friday hold sweep fires at ANY hour Friday** (not end of day), and silently
+    (no Kory/prospect notification). A Wednesday-offered hold for next week can vanish
+    Friday morning ~2 days after offer.
+14. **NOTE — M/W/F formats.** 8:00 vs 9:30 split enforced, but ambiguous emails default to
+    "virtual", so an undeclared in-person could slip into the 8:00 lane. Untested.
+15. **NOTE — many rules.py keys are decorative** (read by nothing): Tue/Thu DAILY_AVAILABILITY,
+    SOFT_BLOCKS timings, default_buffer, wob/inbox-counts-as-break flags, TRAVEL_TIMES (except
+    Cherry Creek), DRIVE_TIME_RULE, HARD_NO/YES_DEFAULTS, URGENT_EXCEPTION. The 6 PM cutoff
+    works but is a hardcoded 18, not read from rules.py.
+
+## Confirmed working (deterministically enforced, with evidence)
+- Trainer M/W/F 6:30–8:00; Doug Mon 1:15; travel-day ban; weekend default-ban; 6 PM
+  non-dinner cutoff + happy-hour 6 PM end + nothing-after-happy-hour; lunch exception-only;
+  coffee 60-min offer + 90-min reserve + no-following-meeting; no default buffer otherwise;
+  weekly caps (HH 2/dinner 1) exist in validators; 6 AM gated to Tue/Thu East-Coast/urgent;
+  morning-preference scoring; no daily cap (as desired); YPO/boards/HRT/drop-off/pick-up/
+  "Do Not Move" block WHEN the event is on a read calendar (+ unknown events block by
+  default — safe); hold all-or-nothing on inbound offers; reminder at 2 days; release at
+  3 days (1 day for reschedules); Friday next-week sweep exists; nobody books without
+  approval (gates verified); no VIP auto-yes (priority contacts only raise triage priority).
+
+## Still to audit (paused)
+Meeting-type sweep: durations per type, coffee times/venues, happy-hour times/venues/caps
+vs REAL calendar counts, dinner stacking, virtual-default inference, podcast ad-hoc.
