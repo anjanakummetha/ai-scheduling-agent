@@ -464,3 +464,60 @@ def test_merges_are_one_at_a_time_and_must_name_the_pair(
     out = execute_hubspot_batch(batch_id=batch_id, approved=True, merge_pair="9:9")
     assert out["ok"] is False
     assert mock_tool.call_count == 1
+
+
+def test_note_payload_matches_the_composio_schema():
+    """Pin the exact field names HUBSPOT_CREATE_NOTE accepts.
+
+    The note path shipped sending {"contactId": ..., "body": ...}. Neither key
+    exists in the tool's schema and the required hs_timestamp was missing, so
+    every meeting note was rejected or filed empty and unattached. A dry-run
+    harness cannot catch this — it records what we meant to send, not what the
+    tool accepts — so the field names are asserted here instead.
+    """
+    from app.integrations.hubspot_manager import note_payload
+
+    args = note_payload(contact_id="12345", body="Talked about the Q3 close.")
+
+    # Schema of HUBSPOT_CREATE_NOTE: required hs_timestamp; body is hs_note_body;
+    # the contact link is an association. There is no contactId parameter.
+    assert set(args) <= {
+        "hs_note_body", "hs_timestamp", "hubspot_owner_id",
+        "associations", "custom_properties", "hs_attachment_ids",
+    }, f"sending fields the tool does not accept: {set(args)}"
+    assert "hs_timestamp" in args, "hs_timestamp is required by the tool"
+    assert args["hs_note_body"] == "Talked about the Q3 close."
+    assert "contactId" not in args and "body" not in args
+
+    assoc = args["associations"][0]
+    assert assoc["to"]["id"] == "12345"
+    assert assoc["types"][0]["associationTypeId"] == 202  # note -> contact
+    assert assoc["types"][0]["associationCategory"] == "HUBSPOT_DEFINED"
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_meeting_note_sends_the_schema_shaped_payload(mock_search, _blocked, mock_tool, tmp_path, monkeypatch):
+    """The live note path must send what the tool accepts, not what we assumed."""
+    monkeypatch.setenv("LEXI_DATABASE_PATH", str(tmp_path / "lexi.db"))
+    from scripts.init_lexi_db import init_lexi_db
+
+    init_lexi_db(tmp_path / "lexi.db")
+    mock_tool.return_value = {"data": {"id": "note-1"}}
+    mock_search.return_value = {
+        "contacts": [
+            {"id": "777", "email": "real@person.com", "name": "Real Person",
+             "hubspot_owner_id": "159133511"}
+        ]
+    }
+
+    out = stage_meeting_note(email="real@person.com", note="Met about the deal.", approved=True)
+    assert out["ok"] is True
+
+    tool, args = mock_tool.call_args[0]
+    assert tool == "HUBSPOT_CREATE_NOTE"
+    assert args["hs_note_body"] == "Met about the deal."
+    assert args["hs_timestamp"]
+    assert args["associations"][0]["to"]["id"] == "777"
+    assert "contactId" not in args

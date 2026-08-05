@@ -339,6 +339,42 @@ def search_contacts(
     }
 
 
+# HubSpot's built-in association type linking a note to a contact.
+NOTE_TO_CONTACT_ASSOCIATION_TYPE_ID = 202
+
+
+def note_payload(*, contact_id: str, body: str) -> dict[str, Any]:
+    """Build the arguments for HUBSPOT_CREATE_NOTE.
+
+    The tool's schema is flat and uses HubSpot's own field names: the text goes in
+    `hs_note_body`, `hs_timestamp` is REQUIRED, and the link to the contact is an
+    `associations` entry — there is no `contactId` parameter at all.
+
+    This previously sent {"contactId": ..., "body": ...}. Neither key exists in
+    the schema, so both were dropped and the required timestamp was never sent:
+    every meeting note was either rejected outright or filed as an empty note
+    attached to nobody. Nothing in the dry-run harness could catch it, because
+    stubbing execute_hubspot_tool captures what we MEANT to send and never
+    compares it against what the tool actually accepts.
+    """
+    return {
+        "hs_note_body": body,
+        "hs_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "hubspot_owner_id": kory_owner_id(),
+        "associations": [
+            {
+                "to": {"id": str(contact_id)},
+                "types": [
+                    {
+                        "associationCategory": "HUBSPOT_DEFINED",
+                        "associationTypeId": NOTE_TO_CONTACT_ASSOCIATION_TYPE_ID,
+                    }
+                ],
+            }
+        ],
+    }
+
+
 def assert_contact_writable(
     contact: dict[str, Any], *, owner_ack: bool = False
 ) -> dict[str, Any] | None:
@@ -1394,10 +1430,7 @@ def stage_meeting_note(
             ),
         }
 
-    result = execute_hubspot_tool(
-        HUBSPOT_CREATE_NOTE,
-        {"contactId": contact_id, "body": body},
-    )
+    result = execute_hubspot_tool(HUBSPOT_CREATE_NOTE, note_payload(contact_id=contact_id, body=body))
     return {
         "ok": True,
         "batch_id": batch_id,
@@ -1725,10 +1758,10 @@ def execute_hubspot_batch(
         try:
             execute_hubspot_tool(
                 HUBSPOT_CREATE_NOTE,
-                {
-                    "contactId": payload.get("contact_id"),
-                    "body": payload.get("note"),
-                },
+                note_payload(
+                    contact_id=str(payload.get("contact_id") or ""),
+                    body=str(payload.get("note") or ""),
+                ),
             )
             applied = 1
         except Exception as exc:

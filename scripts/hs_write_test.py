@@ -151,16 +151,18 @@ try:
         CONTACT_ID = str(contact.get("id") or "")
         print(f"  already exists: id={CONTACT_ID} name={contact.get('name')!r}")
     else:
+        # Composio's HUBSPOT_CREATE_CONTACT takes FLAT top-level fields, not the
+        # nested {"properties": {...}} the HubSpot REST API itself uses. Passing
+        # the nested shape is silently accepted and creates an empty contact —
+        # which is what produced three blank records before this was spotted.
         created = execute_tool(
             "HUBSPOT_CREATE_CONTACT",
             {
-                "properties": {
-                    "email": TEST_EMAIL,
-                    "firstname": TEST_FIRST,
-                    "lastname": TEST_LAST,
-                    "hubspot_owner_id": hs.kory_owner_id(),
-                    "company": "LEXI TEST — safe to delete",
-                }
+                "email": TEST_EMAIL,
+                "firstname": TEST_FIRST,
+                "lastname": TEST_LAST,
+                "hubspot_owner_id": hs.kory_owner_id(),
+                "company": "LEXI TEST — safe to delete",
             },
             role="hubspot",
         )
