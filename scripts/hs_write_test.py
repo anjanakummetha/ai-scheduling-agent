@@ -10,6 +10,16 @@ there is no window in which the live gateway could write to the CRM on its own.
 Every write here targets the contact whose email is TEST_EMAIL. The script
 refuses to run if that address resolves to anything that is not the disposable
 test record.
+
+HubSpot is ONE portal shared by all of IFG — an owner id is a property, not a
+partition — so the test contact is visible to everyone until it is gone. It is
+therefore archived automatically at the end of the run, pass or fail, and the
+note is read back before that so the evidence survives the cleanup. Pass --keep
+to leave it in place for eyeballing in the UI.
+
+Cleanup uses HUBSPOT_ARCHIVE_CONTACT — HubSpot's recycle bin, restorable for 90
+days. Never the GDPR variants: those erase permanently AND blacklist the address
+from ever being added to this portal again.
 """
 
 import json
@@ -19,6 +29,7 @@ import sys
 TEST_EMAIL = "anjanakummetha@gmail.com"
 TEST_FIRST = "LEXI TEST"
 TEST_LAST = "DELETE ME"
+KEEP = "--keep" in sys.argv
 
 if os.getenv("LEXI_HUBSPOT_LIVE_WRITES_ENABLED", "").lower() not in {"1", "true", "yes"}:
     sys.exit("refusing to run: LEXI_HUBSPOT_LIVE_WRITES_ENABLED is not true for this process")
@@ -80,95 +91,137 @@ if str(contact.get("hubspot_owner_id")) != hs.kory_owner_id():
     print(f"  WARNING: owner is {contact.get('hubspot_owner_id')}, expected {hs.kory_owner_id()}")
 
 # ---------------------------------------------------------------- STEP 2b
-banner("STEP 2b — live meeting note against the test contact")
-out = hs.stage_meeting_note(
-    email=TEST_EMAIL,
-    note="Live write test from Lexi. Confirms HUBSPOT_CREATE_NOTE lands on the "
-         "right record with the right body. Safe to delete.",
-    meeting_subject="LEXI WRITE TEST",
-    approved=True,
-)
-print("  RESULT:", json.dumps({k: v for k, v in out.items() if k != "kory_message"}, default=str))
-print("  wrote_for_real:", out.get("ok") and not out.get("dry_run"))
 
-# ---------------------------------------------------------------- STEP 4
-banner("STEP 4a — GUARDRAIL: nonexistent contact must refuse, write nothing")
-out = hs.stage_meeting_note(
-    email="definitely-not-a-real-contact@nowhere.invalid", note="should never be written",
-    approved=True,
-)
-print("  ok:", out.get("ok"), "| error_code:", out.get("error_code"))
-print("  ", (out.get("kory_message") or "")[:200])
+def cleanup():
+    """Archive the test contact. Always runs — the portal is shared by all of IFG."""
+    banner("CLEANUP — archive the disposable contact")
+    if KEEP:
+        print(f"  --keep given: leaving contact {CONTACT_ID} ({TEST_EMAIL}) in the portal.")
+        print("  Archive it yourself in HubSpot, or re-run without --keep.")
+        return
+    try:
+        # ARCHIVE, never the GDPR delete: GDPR erases permanently and blacklists
+        # the address from ever being re-added to this portal.
+        execute_tool("HUBSPOT_ARCHIVE_CONTACT", {"contactId": CONTACT_ID}, role="hubspot")
+        gone = find_test_contact()
+        if gone:
+            print(f"  ⚠️  archive call returned but {TEST_EMAIL} is still visible "
+                  f"(id={gone.get('id')}) — delete it by hand in HubSpot.")
+        else:
+            print(f"  ✅ archived contact {CONTACT_ID} — no longer in the shared portal.")
+            print("  It sits in HubSpot's recycle bin, restorable for 90 days.")
+    except Exception as exc:
+        print(f"  ⚠️  ARCHIVE FAILED: {type(exc).__name__}: {exc}")
+        print(f"  DELETE CONTACT {CONTACT_ID} ({TEST_EMAIL}) BY HAND in HubSpot.")
 
-banner("STEP 4b — GUARDRAIL: approval required (approved=False)")
+
 try:
-    hs.stage_meeting_note(email=TEST_EMAIL, note="unapproved — must not be written", approved=False)
-    print("  ❌ NO REFUSAL — approval gate did not fire")
-except PermissionError as exc:
-    print(f"  ✅ refused: {exc}")
 
-banner("STEP 4c — GUARDRAIL: fuzzy match must not be written to (the 5df79e9 fix)")
-# A name-shaped query that HubSpot's loose search will answer with SOMEBODY,
-# but which is nobody's actual address.
-out = hs.stage_meeting_note(
-    email="kory@thisisnotarealdomainforlexi.invalid", note="should never be written", approved=True
-)
-print("  ok:", out.get("ok"), "| error_code:", out.get("error_code"))
-print("  near_matches:", json.dumps(out.get("near_matches"), default=str))
-
-banner("STEP 4d — GUARDRAIL: contact owned by another IFG employee")
-other = None
-try:
-    scan = hs.search_contacts(limit=200, properties=["email", "firstname", "lastname",
-                                                     "hubspot_owner_id", "hs_lead_status"])
-    for c in scan.get("contacts") or []:
-        owner = str(c.get("hubspot_owner_id") or "")
-        if owner and owner != hs.kory_owner_id() and (c.get("email") or ""):
-            other = c
-            break
-except Exception as exc:
-    print("  scan failed:", exc)
-
-if not other:
-    print("  (no non-Kory-owned contact found in the sample — skipped)")
-else:
-    print(f"  probing {other.get('email')} owned by {other.get('hubspot_owner_id')}")
-    # If the guard holds, this body never lands anywhere. If it does land, it is on
-    # a real colleague's record, so make it explain itself rather than shout.
+    banner("STEP 2b — live meeting note against the test contact")
     out = hs.stage_meeting_note(
-        email=str(other.get("email")),
-        note=(
-            "Lexi ownership-guard test. If you are reading this on a real contact, the "
-            "guard that blocks writes to another owner's record failed — please tell "
-            "Anjana and delete this note."
-        ),
+        email=TEST_EMAIL,
+        note="Live write test from Lexi. Confirms HUBSPOT_CREATE_NOTE lands on the "
+             "right record with the right body. Safe to delete.",
+        meeting_subject="LEXI WRITE TEST",
+        approved=True,
+    )
+    print("  RESULT:", json.dumps({k: v for k, v in out.items() if k != "kory_message"}, default=str))
+    print("  wrote_for_real:", out.get("ok") and not out.get("dry_run"))
+
+    # ------------------------------------------------------------ STEP 2c
+    banner("STEP 2c — read the note back off the contact")
+    # The contact gets archived at the end, so verify here rather than promising
+    # to go look in the UI later. A create call returning ok is not proof the
+    # body landed on the right record.
+    try:
+        notes = execute_tool(
+            "HUBSPOT_LIST_CONTACT_NOTES", {"contact_id": CONTACT_ID, "limit": 10}, role="hubspot"
+        )
+        raw = json.dumps(notes.get("data"), default=str)
+        print(f"  notes payload ({len(raw)} chars):", raw[:600])
+        print("  body found on the record:", "HUBSPOT_CREATE_NOTE lands on the" in raw)
+    except Exception as exc:
+        print(f"  read-back failed: {type(exc).__name__}: {exc}")
+
+    # ---------------------------------------------------------------- STEP 4
+    banner("STEP 4a — GUARDRAIL: nonexistent contact must refuse, write nothing")
+    out = hs.stage_meeting_note(
+        email="definitely-not-a-real-contact@nowhere.invalid", note="should never be written",
         approved=True,
     )
     print("  ok:", out.get("ok"), "| error_code:", out.get("error_code"))
-    print("  ", (out.get("error") or "")[:200])
-    assert out.get("error_code") == "owner_confirmation_required", "OWNERSHIP GUARD FAILED"
+    print("  ", (out.get("kory_message") or "")[:200])
 
-banner("STEP 4e — GUARDRAIL: Do Not Contact record (note path — ruling pending)")
-dnc = None
-try:
-    found = hs.search_contacts(
-        limit=5,
-        filters=[
-            {"propertyName": "hubspot_owner_id", "operator": "EQ", "value": hs.kory_owner_id()},
-            {"propertyName": "hs_lead_status", "operator": "EQ", "value": "Do Not Contact"},
-        ],
+    banner("STEP 4b — GUARDRAIL: approval required (approved=False)")
+    try:
+        hs.stage_meeting_note(email=TEST_EMAIL, note="unapproved — must not be written", approved=False)
+        print("  ❌ NO REFUSAL — approval gate did not fire")
+    except PermissionError as exc:
+        print(f"  ✅ refused: {exc}")
+
+    banner("STEP 4c — GUARDRAIL: fuzzy match must not be written to (the 5df79e9 fix)")
+    # A name-shaped query that HubSpot's loose search will answer with SOMEBODY,
+    # but which is nobody's actual address.
+    out = hs.stage_meeting_note(
+        email="kory@thisisnotarealdomainforlexi.invalid", note="should never be written", approved=True
     )
-    dnc = (found.get("contacts") or [None])[0]
-except Exception as exc:
-    print("  DNC lookup failed:", exc)
+    print("  ok:", out.get("ok"), "| error_code:", out.get("error_code"))
+    print("  near_matches:", json.dumps(out.get("near_matches"), default=str))
 
-if not dnc:
-    print("  (no DNC contact found — skipped)")
-else:
-    print(f"  A DNC record exists: id={dnc.get('id')} status={dnc.get('hs_lead_status')!r}")
-    print("  NOT probing it with a write — notes on DNC records are an open ruling for Kory.")
-    print("  Outreach exclusion is already proven; this line is informational only.")
+    banner("STEP 4d — GUARDRAIL: contact owned by another IFG employee")
+    other = None
+    try:
+        scan = hs.search_contacts(limit=200, properties=["email", "firstname", "lastname",
+                                                         "hubspot_owner_id", "hs_lead_status"])
+        for c in scan.get("contacts") or []:
+            owner = str(c.get("hubspot_owner_id") or "")
+            if owner and owner != hs.kory_owner_id() and (c.get("email") or ""):
+                other = c
+                break
+    except Exception as exc:
+        print("  scan failed:", exc)
 
-banner("DONE")
-print(f"Test contact id {CONTACT_ID} ({TEST_EMAIL}) — DELETE THIS AT CLEANUP.")
-print("The lexi-hermes / lexi-api services never had writes enabled.")
+    if not other:
+        print("  (no non-Kory-owned contact found in the sample — skipped)")
+    else:
+        print(f"  probing {other.get('email')} owned by {other.get('hubspot_owner_id')}")
+        # If the guard holds, this body never lands anywhere. If it does land, it is on
+        # a real colleague's record, so make it explain itself rather than shout.
+        out = hs.stage_meeting_note(
+            email=str(other.get("email")),
+            note=(
+                "Lexi ownership-guard test. If you are reading this on a real contact, the "
+                "guard that blocks writes to another owner's record failed — please tell "
+                "Anjana and delete this note."
+            ),
+            approved=True,
+        )
+        print("  ok:", out.get("ok"), "| error_code:", out.get("error_code"))
+        print("  ", (out.get("error") or "")[:200])
+        assert out.get("error_code") == "owner_confirmation_required", "OWNERSHIP GUARD FAILED"
+
+    banner("STEP 4e — GUARDRAIL: Do Not Contact record (note path — ruling pending)")
+    dnc = None
+    try:
+        found = hs.search_contacts(
+            limit=5,
+            filters=[
+                {"propertyName": "hubspot_owner_id", "operator": "EQ", "value": hs.kory_owner_id()},
+                {"propertyName": "hs_lead_status", "operator": "EQ", "value": "Do Not Contact"},
+            ],
+        )
+        dnc = (found.get("contacts") or [None])[0]
+    except Exception as exc:
+        print("  DNC lookup failed:", exc)
+
+    if not dnc:
+        print("  (no DNC contact found — skipped)")
+    else:
+        print(f"  A DNC record exists: id={dnc.get('id')} status={dnc.get('hs_lead_status')!r}")
+        print("  NOT probing it with a write — notes on DNC records are an open ruling for Kory.")
+        print("  Outreach exclusion is already proven; this line is informational only.")
+
+finally:
+    cleanup()
+    banner("DONE")
+    print("The lexi-hermes / lexi-api services never had writes enabled.")
