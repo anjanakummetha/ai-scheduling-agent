@@ -1,9 +1,15 @@
 """READ-ONLY recon for the HubSpot write test. Makes no writes of any kind."""
 
 import json
+import sys
+from pathlib import Path
 
-from app.config import settings
-from app.integrations import hubspot_manager as hs
+# scripts/ is sys.path[0] when run as `python scripts/hs_recon.py`; the repo root is not.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from app.config import settings  # noqa: E402
+from app.integrations import hubspot_manager as hs  # noqa: E402
 
 print("kory_owner_id      :", hs.kory_owner_id())
 print("writes_blocked     :", hs.hubspot_writes_blocked())

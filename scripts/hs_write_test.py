@@ -25,6 +25,12 @@ from ever being added to this portal again.
 import json
 import os
 import sys
+from pathlib import Path
+
+# Running as `python scripts/hs_write_test.py` puts scripts/ on sys.path, not the
+# repo root, so `app` is not importable without this. Same idiom as verify_stack.py.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 TEST_EMAIL = "anjanakummetha@gmail.com"
 TEST_FIRST = "LEXI TEST"
