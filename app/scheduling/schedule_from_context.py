@@ -221,6 +221,7 @@ def schedule_from_context(
             calendar_context=calendar_context,
             intent=intent,
             subject=subj,
+            plan=plan,
         )
         if inbound and inbound.ok:
             inbound.recipient_timezone = tz_result.tz_name()
@@ -387,6 +388,7 @@ def _try_inbound_slots(
     calendar_context: dict[str, Any],
     intent: str | None,
     subject: str,
+    plan: Any = None,
 ) -> ScheduleFromContextResult | None:
     from app.scheduling.inbound_availability import (
         extract_inbound_time_candidates,
@@ -406,9 +408,12 @@ def _try_inbound_slots(
     )
     if valid:
         slots = valid[:MAX_SLOT_OPTIONS]
+        # plan carries kory_guidance — without it the gate's 2-slot minimum
+        # rejects a single Kory-directed time ("offer 10:30 only", live H-4).
         gate = verify_before_kory_approval(
             slots=slots,
             calendar_context=calendar_context,
+            plan=plan,
             intent=intent,
             subject=subject,
             body=body,

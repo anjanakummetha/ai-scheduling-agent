@@ -182,3 +182,45 @@ def test_plain_rejection_still_reoffers():
     assert out is not None
     assert out["action"] == "recipient_reoffer_request"
     reoffer.assert_called_once()
+
+
+def test_extractor_continuation_times_share_the_day():
+    """H-4 retry: 'Monday August 17 at 10:30 AM MT and 3:30 PM MT' must yield
+    BOTH times — the second was silently dropped."""
+    import datetime
+    import zoneinfo
+
+    from app.scheduling.inbound_availability import extract_inbound_time_candidates
+
+    ref = datetime.datetime(2026, 8, 5, 6, 0, tzinfo=zoneinfo.ZoneInfo("America/Denver"))
+    got = extract_inbound_time_candidates(
+        "Offer Monday August 17 at 10:30 AM MT and 3:30 PM MT only", reference=ref
+    )
+    starts = [c["start"] for c in got]
+    assert "2026-08-17T10:30:00-06:00" in starts
+    assert "2026-08-17T15:30:00-06:00" in starts
+
+
+def test_single_guided_time_passes_gate_via_plan():
+    """A single Kory-directed time must not be gate-blocked on the 2-slot
+    minimum when the plan carries relaxing guidance."""
+    from app.scheduling.pre_approval_gate import verify_before_kory_approval
+    from app.scheduling.scheduling_plan import build_scheduling_plan
+
+    slots = [{"start": "2026-08-17T10:30:00-06:00", "end": "2026-08-17T11:00:00-06:00"}]
+    plan = build_scheduling_plan(
+        subject="[TEST] LT-H4",
+        body="Offer Monday August 17 at 10:30 AM MT only",
+        intent="referral_or_intro",
+        use_llm=False,
+    )
+    plan.kory_guidance = "Offer Monday August 17 at 10:30 AM MT only"
+    report = verify_before_kory_approval(
+        slots=slots,
+        calendar_context={"status": "available", "busy_events": []},
+        plan=plan,
+        intent="referral_or_intro",
+        subject="[TEST] LT-H4",
+        body="",
+    )
+    assert not any("need at least" in c for c in report.checks), report.checks

@@ -127,12 +127,62 @@ def extract_inbound_time_candidates(body: str, *, reference: datetime | None = N
 
     for kind, pattern in patterns:
         for match in pattern.finditer(text):
-            _add(_match_to_slot(match, now=now, kind=kind,
-                                prefer_next_week=prefer_next_week, tod_hour=tod_hour,
-                                date_only_default=date_only_default))
+            slot = _match_to_slot(match, now=now, kind=kind,
+                                  prefer_next_week=prefer_next_week, tod_hour=tod_hour,
+                                  date_only_default=date_only_default)
+            _add(slot)
+            if slot:
+                # Continuation times share the named day: "Monday August 17 at
+                # 10:30 AM MT and 3:30 PM MT" is TWO candidates (live H-4 —
+                # the second time was silently dropped).
+                for cont in _continuation_times(text[match.end():match.end() + 60]):
+                    _add(_slot_at_same_day(slot, cont))
             if len(candidates) >= 5:
                 break
     return candidates[:5]
+
+
+_CONTINUATION_RE = re.compile(
+    r"\s*(?:m[sd]?t|mountain(?:\s+time)?|e[sd]?t|eastern|c[sd]?t|central"
+    r"|p[sd]?t|pacific)?\.?\s*(?:,\s*)?(?:and|or|,)\s+(?:at\s+)?"
+    r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)",
+    re.I,
+)
+
+
+def _continuation_times(tail: str) -> list[tuple[int, int]]:
+    """(hour24, minute) list from 'and 3:30 PM' continuations at tail start."""
+    out: list[tuple[int, int]] = []
+    rest = tail
+    while True:
+        m = _CONTINUATION_RE.match(rest)
+        if not m:
+            break
+        hour = int(m.group(1))
+        minute = int(m.group(2) or 0)
+        ampm = m.group(3).lower().replace(".", "")
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+        out.append((hour, minute))
+        rest = rest[m.end():]
+    return out
+
+
+def _slot_at_same_day(slot: dict[str, str], clock: tuple[int, int]) -> dict[str, str] | None:
+    try:
+        start = datetime.fromisoformat(slot["start"])
+        end = datetime.fromisoformat(slot["end"])
+    except (KeyError, ValueError):
+        return None
+    duration = end - start
+    new_start = start.replace(hour=clock[0], minute=clock[1])
+    return {
+        "start": new_start.isoformat(),
+        "end": (new_start + duration).isoformat(),
+        "source": slot.get("source", "inbound_availability"),
+    }
 
 
 def _clock(match: re.Match[str], h_grp: int, m_grp: int, ap_grp: int,
