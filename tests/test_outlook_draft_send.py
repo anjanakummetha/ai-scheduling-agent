@@ -75,3 +75,36 @@ def test_infer_outbound_send_channel_from_kory_signoff():
 def test_infer_outbound_send_channel_explicit_lexi():
     body = "Let's Win,\nKory"
     assert infer_outbound_send_channel(body, explicit="lexi") == "lexi"
+
+
+def test_infer_channel_from_bare_kory_signoff():
+    """Live O-2a defect: Hermes drafts sign a bare 'Kory' before the finalizer
+    stamps 'Let's Win,' — requiring the canonical block routed Kory-voice mail
+    to the Lexi mailbox (identity mismatch + slips the kory-channel block)."""
+    body = (
+        "Hey Anjana,\n\nI'll be in town this Thursday (August 6) and would "
+        "love to catch up.\n\nLooking forward to it!\n\nKory"
+    )
+    assert infer_outbound_send_channel(body) == "kory"
+
+
+def test_infer_channel_from_casual_kory_signoff():
+    assert infer_outbound_send_channel("Quick note.\n\nThanks,\nKory") == "kory"
+    assert infer_outbound_send_channel("Quick note.\n\n- Kory Mitchell") == "kory"
+
+
+def test_infer_channel_from_lexi_signoff():
+    body = (
+        "Hi Anjana,\n\nI'm Lexi, Kory's assistant. Kory asked me to share his "
+        "availability.\n\nBest,\nLexi"
+    )
+    assert infer_outbound_send_channel(body) == "lexi"
+
+
+def test_infer_channel_kory_mention_midline_is_not_a_signoff():
+    body = "Hi,\n\nKory asked me to reach out about next week.\n\nBest,\nLexi"
+    assert infer_outbound_send_channel(body) == "lexi"
+
+
+def test_infer_channel_no_signoff_defaults_lexi():
+    assert infer_outbound_send_channel("Hello there, quick question.") == "lexi"

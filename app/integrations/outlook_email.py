@@ -759,9 +759,21 @@ def infer_outbound_send_channel(body: str, *, explicit: str = "") -> str:
     channel = (explicit or "").strip().lower()
     if channel in {"kory", "lexi"}:
         return channel
-    normalized = (body or "").strip().lower()
-    if "let's win" in normalized and normalized.rstrip().endswith("kory"):
+    # Read the sign-off, not just the canonical "Let's Win,\nKory": Hermes
+    # drafts sign a bare "Kory" BEFORE the finalizer stamps the canonical
+    # block, so requiring "let's win" sent Kory-voice mail from the Lexi
+    # mailbox — an identity mismatch that also slips past the kory-channel
+    # outbound block (live O-2a defect). Whichever name signs LAST wins.
+    tail = (body or "").rstrip()[-200:]
+    kory_sig = lexi_sig = None
+    for match in re.finditer(r"(?mi)^\s*[-–—]*\s*Kory(?:\s+Mitchell)?\s*[.!]?\s*$", tail):
+        kory_sig = match
+    for match in re.finditer(r"(?mi)^\s*[-–—]*\s*Lexi(?:\s+Knightly)?\s*[.!]?\s*$", tail):
+        lexi_sig = match
+    if kory_sig and (lexi_sig is None or kory_sig.start() > lexi_sig.start()):
         return "kory"
+    if lexi_sig:
+        return "lexi"
     default = (settings.lexi_default_send_channel or "lexi").strip().lower()
     return default if default in {"kory", "lexi"} else "lexi"
 
