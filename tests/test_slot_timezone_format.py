@@ -81,3 +81,20 @@ def test_enforce_offered_times_block_replaces_bullets():
     assert "11:00 AM" not in fixed
     assert "• Tuesday" in fixed
     assert "MT" in fixed
+
+
+def test_fallback_offer_template_is_voice_aware():
+    """Timeout-fallback offers must not speak as Lexi on Kory-voice proposals
+    (live defect: #6497 said "on Kory's end" then signed "Let's Win, Kory")."""
+    from app.scheduling.hermes_compose import _template_fallback_offer
+
+    slot_block = "• Wednesday, August 26 at 9:30 AM–10:30 AM MT"
+
+    kory = _template_fallback_offer("Anjana", slot_block, "kory")
+    assert "Kory's end" not in kory
+    assert "I'm Lexi" not in kory
+    assert "I have a few times that work:" in kory
+
+    lexi = _template_fallback_offer("Anjana", slot_block, "lexi")
+    assert "on Kory's end" in lexi
+    assert "I'm Lexi, Kory's assistant" in lexi

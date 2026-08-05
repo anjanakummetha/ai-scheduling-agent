@@ -598,14 +598,16 @@ def _template_fallback_offer(
     from app.scheduling.lexi_voice import normalize_voice_mode
 
     intro = ""
+    slots_line = "I have a few times that work:"
     if normalize_voice_mode(voice_mode) == "lexi":
         intro = "I'm Lexi, Kory's assistant — happy to help find a time.\n\n"
+        slots_line = "I have a few times that work on Kory's end:"
     tz_line = timezone_note.strip()
     if tz_line:
         tz_line = f"{tz_line}\n\n"
     return (
         f"Hi {name},\n\n{intro}{tz_line}"
-        f"I have a few times that work on Kory's end:\n\n"
+        f"{slots_line}\n\n"
         f"{slot_block}\n\n"
         "Let me know which works best and I can send a calendar invite."
     )
