@@ -126,6 +126,19 @@ def _wrap(action: str, fn, **kwargs: Any) -> str:
         return _error(f"{action} failed: {type(exc).__name__}: {exc}", code="exception")
 
 
+def _campaign_tool(fn):
+    """Register an outreach-campaign tool only while the feature is switched on.
+
+    Campaigns are parked. Leaving the tools unregistered — rather than registered
+    and returning "paused" — means Hermes never sees them in its tool list, so it
+    cannot offer to run a campaign or narrate one it never staged. The functions
+    stay in the tree; LEXI_OUTREACH_CAMPAIGNS_ENABLED=true brings them back.
+    """
+    from app.scheduling.outreach_campaign import campaigns_paused
+
+    return fn if campaigns_paused() else mcp.tool()(fn)
+
+
 # ── Conversational assistant (Hermes drives dialogue; tools execute) ─────────
 
 
@@ -633,7 +646,7 @@ def lexi_hubspot_recent_changes(days: str = "7") -> str:
     return _wrap("lexi_hubspot_recent_changes", lexi.hubspot_recent_changes_action, days=n)
 
 
-@mcp.tool()
+@_campaign_tool
 def lexi_hubspot_outreach_batch(goal: str = "", limit: str = "10") -> str:
     """Draft outreach emails for a HubSpot batch — approval required before send."""
     try:
@@ -758,7 +771,7 @@ def lexi_hubspot_deals_snapshot(limit: str = "8") -> str:
     return _wrap("lexi_hubspot_deals_snapshot", lexi.hubspot_deals_snapshot_action, limit=n)
 
 
-@mcp.tool()
+@_campaign_tool
 def lexi_create_outreach_campaign(
     name: str,
     goal: str = "",
@@ -795,7 +808,7 @@ def lexi_create_outreach_campaign(
     )
 
 
-@mcp.tool()
+@_campaign_tool
 def lexi_list_outreach_campaigns(limit: str = "20") -> str:
     """List staged/approved outreach campaigns."""
     try:
@@ -805,7 +818,7 @@ def lexi_list_outreach_campaigns(limit: str = "20") -> str:
     return _wrap("lexi_list_outreach_campaigns", lexi.list_outreach_campaigns_action, limit=n)
 
 
-@mcp.tool()
+@_campaign_tool
 def lexi_get_outreach_campaign(campaign_id: str) -> str:
     """Show one outreach campaign and its staged drafts (text only)."""
     return _wrap(
@@ -815,7 +828,7 @@ def lexi_get_outreach_campaign(campaign_id: str) -> str:
     )
 
 
-@mcp.tool()
+@_campaign_tool
 def lexi_approve_outreach_campaign(campaign_id: str, confirm: str = "false") -> str:
     """Mark campaign approved. Does not send while LEXI_OUTREACH_LIVE_SENDS_ENABLED is false."""
     ok = (confirm or "").strip().lower() in {"1", "true", "yes"}
@@ -827,7 +840,7 @@ def lexi_approve_outreach_campaign(campaign_id: str, confirm: str = "false") -> 
     )
 
 
-@mcp.tool()
+@_campaign_tool
 def lexi_send_outreach_campaign(campaign_id: str, confirm: str = "false") -> str:
     """Send approved outreach drafts — hard-blocked for UAT (returns dry-run message)."""
     ok = (confirm or "").strip().lower() in {"1", "true", "yes"}
@@ -839,7 +852,7 @@ def lexi_send_outreach_campaign(campaign_id: str, confirm: str = "false") -> str
     )
 
 
-@mcp.tool()
+@_campaign_tool
 def lexi_remove_outreach_recipient(campaign_id: str, email: str) -> str:
     """Remove one recipient from a staged outreach campaign."""
     return _wrap(

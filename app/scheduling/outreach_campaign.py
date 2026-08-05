@@ -100,8 +100,48 @@ def _ensure_tables(conn) -> None:
     )
 
 
+def campaigns_paused() -> bool:
+    """Whether the whole campaign feature is parked.
+
+    Campaigns are shelved until someone picks the feature back up: mass outreach
+    is a second risk surface with its own approval path, and nothing downstream
+    needs it right now. This is the outer switch — sends have their own kill
+    switch below, but a paused feature never gets far enough to consult it.
+
+    Read from the environment at call time, matching outreach_sends_blocked(),
+    so flipping LEXI_OUTREACH_CAMPAIGNS_ENABLED=true and restarting is the whole
+    of turning it back on.
+    """
+    import os
+
+    return os.getenv("LEXI_OUTREACH_CAMPAIGNS_ENABLED", "false").lower() not in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _paused_response(did_not: str) -> dict[str, Any]:
+    """Refusal shaped like every other campaign return, so callers need no new branch."""
+    return {
+        "ok": False,
+        "paused": True,
+        "campaign_id": None,
+        "draft_count": 0,
+        "sent": 0,
+        "sends_blocked": True,
+        "error": "Outreach campaigns are paused (LEXI_OUTREACH_CAMPAIGNS_ENABLED=false).",
+        "kory_message": (
+            f"Outreach campaigns are switched off at the moment, so I haven't {did_not}. "
+            "It's parked rather than broken — we can turn it back on whenever you want it."
+        ),
+    }
+
+
 def outreach_sends_blocked() -> bool:
     """Hard block for UAT — no campaign sends until explicitly enabled later."""
+    if campaigns_paused():
+        return True
     if settings.lexi_dry_run:
         return True
     if settings.lexi_kory_outbound_blocked:
@@ -168,6 +208,8 @@ def create_outreach_campaign(
     custom_subject: str = "",
 ) -> dict[str, Any]:
     """Create campaign + compose personalized drafts (staged locally; Outlook drafts dry-run)."""
+    if campaigns_paused():
+        return _paused_response("staged anything")
     template_key = (template_key or "generic").strip().lower()
     if template_key not in CAMPAIGN_TEMPLATES:
         template_key = "generic"
@@ -397,6 +439,8 @@ def list_campaigns(*, limit: int = 20) -> dict[str, Any]:
 
 def approve_outreach_campaign(*, campaign_id: str, approved_by: str = "kory") -> dict[str, Any]:
     """Mark campaign approved. Does NOT send while outreach sends are blocked."""
+    if campaigns_paused():
+        return _paused_response("marked that campaign approved")
     detail = get_campaign(campaign_id)
     if not detail:
         return {"ok": False, "error": f"Unknown campaign {campaign_id}"}
@@ -442,6 +486,12 @@ def approve_outreach_campaign(*, campaign_id: str, approved_by: str = "kory") ->
 
 def send_outreach_campaign(*, campaign_id: str, approved: bool = False, batch_size: int = 25) -> dict[str, Any]:
     """Send approved drafts in waves. Hard-blocked until LEXI_OUTREACH_LIVE_SENDS_ENABLED."""
+    # Ahead of the approval gate: while the feature is parked the answer is no
+    # regardless of who approved what, and "campaigns are off" is a truer reply
+    # than an approval error.
+    if campaigns_paused():
+        return _paused_response("sent anything")
+
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Outreach campaign send")
@@ -532,6 +582,8 @@ def _staged_draft_count(campaign_id: str) -> int:
 
 
 def remove_outreach_recipient(*, campaign_id: str, email: str) -> dict[str, Any]:
+    if campaigns_paused():
+        return _paused_response("changed that campaign's recipients")
     email_l = email.strip().lower()
     with get_lexi_connection() as conn:
         _ensure_tables(conn)

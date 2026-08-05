@@ -31,8 +31,12 @@ def test_hubspot_status_reads_via_correct_slug():
 
 
 # --- Outreach send path (was a "not enabled in this build" stub) ---
+# The campaign feature is parked in production; these tests opt it back on so the
+# send path stays covered for whoever picks it up. tests/test_outreach_campaign.py
+# covers the parked state.
 
-def test_outreach_send_blocked_returns_dry_run():
+def test_outreach_send_blocked_returns_dry_run(monkeypatch):
+    monkeypatch.setenv("LEXI_OUTREACH_CAMPAIGNS_ENABLED", "true")
     with patch.object(oc, "get_campaign", return_value={"campaign_id": "c1"}):
         with patch.object(oc, "outreach_sends_blocked", return_value=True):
             r = oc.send_outreach_campaign(campaign_id="c1", approved=True)
@@ -43,6 +47,7 @@ def test_outreach_send_blocked_returns_dry_run():
 def test_outreach_send_dispatches_staged_drafts_when_unblocked(monkeypatch):
     # Stage two drafts in a real campaign, then send with the block lifted + a mocked mailer.
     monkeypatch.setenv("LEXI_HUBSPOT_LIVE_WRITES_ENABLED", "false")
+    monkeypatch.setenv("LEXI_OUTREACH_CAMPAIGNS_ENABLED", "true")
     camp = oc.create_outreach_campaign(
         name="unit send test",
         goal="general",

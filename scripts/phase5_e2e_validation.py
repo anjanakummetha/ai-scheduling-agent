@@ -198,28 +198,32 @@ def _prebrief():
     return f"prebrief ok ({type(r).__name__})"
 
 
-# ── Outreach (stage drafts; send blocked) ─────────────────────────────────────
-@check("outreach.stage_and_send_blocked")
+# ── Outreach (feature parked) ─────────────────────────────────────────────────
+@check("outreach.campaigns_paused")
 def _outreach():
+    """Campaigns are parked, so the thing to validate is that they stay parked.
+
+    When the feature is picked back up, restore the stage-and-send-blocked check
+    from git history — it lived here through Phase 5.
+    """
     from app.scheduling.outreach_campaign import (
+        campaigns_paused,
         create_outreach_campaign,
-        approve_outreach_campaign,
         send_outreach_campaign,
     )
+
+    if not campaigns_paused():
+        return "campaigns ENABLED — re-enable the stage/send checks in this script"
 
     camp = create_outreach_campaign(
         name="E2E test campaign",
         goal="general",
         pasted_list="Pat Prospect, pat@example.com\nDana Doe, dana@example.com",  # one per line
     )
-    cid = camp.get("campaign_id")
-    assert cid, camp
-    drafts = camp.get("drafts") or camp.get("recipients") or []
-    approve_outreach_campaign(campaign_id=cid)
-    sent = send_outreach_campaign(campaign_id=cid, approved=True)
-    assert sent.get("sends_blocked") or sent.get("dry_run"), f"expected send blocked, got {sent}"
-    assert sent.get("sent", 0) == 0
-    return f"campaign {cid[:8]} staged {len(drafts)} drafts; send blocked (0 sent)"
+    assert camp.get("paused") and not camp.get("campaign_id"), f"paused create leaked: {camp}"
+    sent = send_outreach_campaign(campaign_id="camp-none", approved=True)
+    assert sent.get("paused") and sent.get("sent", 0) == 0, f"paused send leaked: {sent}"
+    return "campaigns paused — nothing staged, nothing sent"
 
 
 # ── Reminders ─────────────────────────────────────────────────────────────────

@@ -339,6 +339,8 @@ def safety_posture_summary() -> dict[str, object]:
         "LEXI_ASANA_LIVE_WRITES_ENABLED": settings.asana_live_writes_enabled,
         "LEXI_HUBSPOT_LIVE_WRITES_ENABLED": settings.hubspot_live_writes_enabled,
         "LEXI_OUTREACH_LIVE_SENDS_ENABLED": settings.outreach_live_sends_enabled,
+        # Outer switch on the whole campaign feature — parked, not deleted.
+        "LEXI_OUTREACH_CAMPAIGNS_ENABLED": _bool_env("LEXI_OUTREACH_CAMPAIGNS_ENABLED", False),
     }
 
 

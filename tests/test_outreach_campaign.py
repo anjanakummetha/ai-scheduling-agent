@@ -9,6 +9,10 @@ def _init_db(tmp_path, monkeypatch):
     monkeypatch.setenv("LEXI_DRY_RUN", "true")
     monkeypatch.setenv("LEXI_OUTREACH_LIVE_SENDS_ENABLED", "false")
     monkeypatch.setenv("LEXI_OUTREACH_OUTLOOK_DRAFTS_ENABLED", "false")
+    # The feature is parked in production. These tests keep its behaviour covered
+    # so it can be picked back up without re-deriving it; test_campaigns_are_paused
+    # below covers the parked state itself.
+    monkeypatch.setenv("LEXI_OUTREACH_CAMPAIGNS_ENABLED", "true")
     import importlib
 
     import app.config
@@ -127,6 +131,80 @@ def test_remove_recipient(tmp_path, monkeypatch):
     statuses = {d["recipient_email"]: d["status"] for d in detail["drafts"]}
     assert statuses["drop@x.com"] == "removed"
     assert statuses["keep@x.com"] == "staged"
+
+
+def test_campaigns_are_paused_by_default(tmp_path, monkeypatch):
+    """The parked state: nothing stages, nothing approves, nothing sends."""
+    _init_db(tmp_path, monkeypatch)
+    monkeypatch.delenv("LEXI_OUTREACH_CAMPAIGNS_ENABLED", raising=False)
+    from app.scheduling.outreach_campaign import (
+        approve_outreach_campaign,
+        campaigns_paused,
+        create_outreach_campaign,
+        outreach_sends_blocked,
+        remove_outreach_recipient,
+        send_outreach_campaign,
+    )
+
+    assert campaigns_paused() is True
+    # The outer switch subsumes the send switch: a parked feature never gets
+    # far enough to consult it.
+    assert outreach_sends_blocked() is True
+
+    created = create_outreach_campaign(name="should not stage", pasted_list="a@b.com")
+    assert created["ok"] is False
+    assert created["paused"] is True
+    assert created["campaign_id"] is None
+
+    for result in (
+        approve_outreach_campaign(campaign_id="camp-whatever"),
+        send_outreach_campaign(campaign_id="camp-whatever", approved=True),
+        remove_outreach_recipient(campaign_id="camp-whatever", email="a@b.com"),
+    ):
+        assert result["paused"] is True
+        assert result["sent"] == 0
+
+    # Nothing reached the database — a paused create must not leave a row behind.
+    from app.scheduling.outreach_campaign import list_campaigns
+
+    assert not [c for c in list_campaigns()["campaigns"] if c["name"] == "should not stage"]
+
+
+def test_paused_send_refuses_before_the_approval_gate(tmp_path, monkeypatch):
+    """Unapproved + paused answers "campaigns are off", not "needs approval"."""
+    _init_db(tmp_path, monkeypatch)
+    monkeypatch.delenv("LEXI_OUTREACH_CAMPAIGNS_ENABLED", raising=False)
+    from app.scheduling.outreach_campaign import send_outreach_campaign
+
+    result = send_outreach_campaign(campaign_id="camp-whatever", approved=False)
+    assert result["paused"] is True
+    assert "switched off" in result["kory_message"]
+
+
+def test_paused_campaign_tools_are_not_registered_with_hermes(monkeypatch):
+    """Hermes should not see a tool it cannot use — an unregistered tool cannot
+    be offered to Kory or hallucinated into having run."""
+    monkeypatch.delenv("LEXI_OUTREACH_CAMPAIGNS_ENABLED", raising=False)
+    import importlib
+
+    import hermes_mcp_server
+
+    importlib.reload(hermes_mcp_server)
+    names = {tool.name for tool in hermes_mcp_server.mcp._tool_manager.list_tools()}
+
+    parked = {
+        "lexi_create_outreach_campaign",
+        "lexi_list_outreach_campaigns",
+        "lexi_get_outreach_campaign",
+        "lexi_approve_outreach_campaign",
+        "lexi_send_outreach_campaign",
+        "lexi_remove_outreach_recipient",
+        "lexi_hubspot_outreach_batch",
+    }
+    assert not (names & parked), sorted(names & parked)
+    # Scheduling and the read-only CRM tools are untouched by the pause.
+    assert "lexi_hubspot_find_contacts" in names
+    assert "lexi_hubspot_outreach_candidates" in names
 
 
 def test_teams_outreach_commands_parse():
