@@ -261,3 +261,33 @@ def test_quoted_history_rejection_does_not_poison_new_reply():
     assert recipient_times_rejected(
         "None of those quite work for me.\n\nOn Wed, Aug 5 Lexi wrote:\n> times"
     )
+
+
+def test_et_labeled_counter_time_converts_to_mt():
+    """Live H-3: '3:30 PM ET (1:30 PM MT)' parsed as 15:30 MT and phantom
+    'That Monday' became a 9 AM candidate."""
+    import datetime
+    import zoneinfo
+
+    from app.scheduling.inbound_availability import extract_inbound_time_candidates
+
+    ref = datetime.datetime(2026, 8, 5, 6, 0, tzinfo=zoneinfo.ZoneInfo("America/Denver"))
+    got = extract_inbound_time_candidates(
+        "That Monday doesn't quite work for me, but could we do Tuesday, "
+        "August 11 at 3:30 PM ET (1:30 PM MT) instead?",
+        reference=ref,
+    )
+    assert [c["start"] for c in got] == ["2026-08-11T13:30:00-06:00"]
+
+
+def test_bare_weekday_still_candidate_when_no_explicit_times():
+    import datetime
+    import zoneinfo
+
+    from app.scheduling.inbound_availability import extract_inbound_time_candidates
+
+    ref = datetime.datetime(2026, 8, 5, 6, 0, tzinfo=zoneinfo.ZoneInfo("America/Denver"))
+    got = extract_inbound_time_candidates(
+        "Could Kory meet sometime Thursday to connect?", reference=ref
+    )
+    assert len(got) == 1 and got[0]["start"].startswith("2026-08-06")

@@ -139,7 +139,14 @@ def extract_inbound_time_candidates(body: str, *, reference: datetime | None = N
                     _add(_slot_at_same_day(slot, cont))
             if len(candidates) >= 5:
                 break
-    return candidates[:5]
+    # "That Monday doesn't work, but Tuesday at 3:30 PM ET?" — the bare
+    # weekday spawned a phantom Monday-9AM candidate (live H-3). When any
+    # candidate carries an explicit clock time, defaulted ones are noise.
+    explicit = [c for c in candidates if c.get("explicit_time")]
+    chosen = explicit if explicit else candidates
+    for c in chosen:
+        c.pop("explicit_time", None)
+    return chosen[:5]
 
 
 _CONTINUATION_RE = re.compile(
@@ -182,6 +189,7 @@ def _slot_at_same_day(slot: dict[str, str], clock: tuple[int, int]) -> dict[str,
         "start": new_start.isoformat(),
         "end": (new_start + duration).isoformat(),
         "source": slot.get("source", "inbound_availability"),
+        "explicit_time": True,
     }
 
 
@@ -260,18 +268,56 @@ def _match_to_slot(
             start = datetime(year, month, day_num, hour, minute, tzinfo=MT)
             if not match.group(3) and start < now - timedelta(hours=12):
                 start = start.replace(year=year + 1)
+        # A zone label right after the time ("3:30 PM ET") means the wall time
+        # is in THAT zone — parsing it as MT validated the wrong instant
+        # (live H-3: 3:30 PM ET became 15:30 MT and hit the travel rule).
+        label_zone = _tz_label_after(match)
+        if label_zone and str(label_zone) != str(MT):
+            start = start.replace(tzinfo=label_zone).astimezone(MT)
         # Reject implausible clock times (e.g. "12:27 AM" pulled from a quoted
         # reply header) — real meeting proposals fall in business hours.
         if not (6 <= start.hour <= 21):
             return None
         end = start + timedelta(minutes=30)
+        explicit = any(
+            match.group(i) is not None
+            for i in range(1, (match.lastindex or 0) + 1)
+            if str(match.group(i) or "").lower().replace(".", "") in {"am", "pm"}
+        )
         return {
             "start": start.isoformat(),
             "end": end.isoformat(),
             "source": "inbound_availability",
+            "explicit_time": explicit,
         }
     except (TypeError, ValueError):
         return None
+
+
+_TZ_LABEL_AFTER_RE = re.compile(
+    r"^\s*\(?\s*(et|est|edt|eastern|ct|cst|cdt|central|mt|mst|mdt|mountain"
+    r"|pt|pst|pdt|pacific)\b",
+    re.I,
+)
+_LABEL_ZONES = {
+    "et": "America/New_York", "est": "America/New_York", "edt": "America/New_York",
+    "eastern": "America/New_York",
+    "ct": "America/Chicago", "cst": "America/Chicago", "cdt": "America/Chicago",
+    "central": "America/Chicago",
+    "mt": "America/Denver", "mst": "America/Denver", "mdt": "America/Denver",
+    "mountain": "America/Denver",
+    "pt": "America/Los_Angeles", "pst": "America/Los_Angeles",
+    "pdt": "America/Los_Angeles", "pacific": "America/Los_Angeles",
+}
+
+
+def _tz_label_after(match: re.Match[str]):
+    from zoneinfo import ZoneInfo
+
+    m = _TZ_LABEL_AFTER_RE.match(match.string[match.end():match.end() + 16])
+    if not m:
+        return None
+    return ZoneInfo(_LABEL_ZONES[m.group(1).lower()])
 
 
 def validate_inbound_candidates(
