@@ -202,12 +202,15 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
         return {"ok": True, "handled": True, "message": TEAMS_HELP_TEXT}
 
     if action == "pending":
+        from app.agents.comms_agent import get_lexi_invite_queue
+
         items = get_lexi_pending_queue()
+        invite_items = get_lexi_invite_queue()
         return {
             "ok": True,
             "handled": True,
-            "message": format_pending_list(items),
-            "pending_count": len(items),
+            "message": format_pending_list(items, invite_items=invite_items),
+            "pending_count": len(items) + len(invite_items),
         }
 
     if action == "inbound":
@@ -414,6 +417,9 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
         option = int(command.get("option") or 1)
         item = find_pending_item(proposal_id)
         if not item:
+            invite_result = _run_invite_from_text(proposal_id, authorized_by)
+            if invite_result is not None:
+                return invite_result
             bundle = _fetch_bundle(proposal_id)
             return {
                 "ok": False,
@@ -439,7 +445,7 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
     if action == "reject":
         proposal_id = int(command["proposal_id"])
         bundle = _fetch_bundle(proposal_id)
-        if not find_pending_item(proposal_id):
+        if not find_pending_item(proposal_id) and _find_invite_item(proposal_id) is None:
             return {
                 "ok": False,
                 "handled": True,
@@ -544,6 +550,68 @@ def _show_draft_message(proposal_id: int, *, prefix: str = "") -> dict[str, Any]
         "handled": True,
         "message": "No draft found for that email. Try `pending` or `inbound`.",
         "proposal_id": proposal_id,
+    }
+
+
+def _find_invite_item(proposal_id: int):
+    """Return the queue item if this proposal is waiting on invite dispatch."""
+    from app.agents.comms_agent import get_lexi_invite_queue
+
+    for item in get_lexi_invite_queue():
+        if item.proposal_id == proposal_id:
+            return item
+    return None
+
+
+def _run_invite_from_text(proposal_id: int, authorized_by: str) -> dict[str, Any] | None:
+    """Typed 'approve #N' on a pending_invite proposal sends the calendar invite.
+
+    Returns None when the proposal is not in the invite queue (caller falls back
+    to its normal not-found handling). The selected slot is the stored
+    recipient_selected_slot; execute_lexi_invite reads it from the proposal.
+    """
+    item = _find_invite_item(proposal_id)
+    if item is None:
+        return None
+    from app.agents.comms_agent import execute_lexi_invite
+
+    label = email_thread_label(subject=item.subject, sender=item.sender)
+    try:
+        result = execute_lexi_invite(
+            proposal_id,
+            "",
+            authorized_by,
+            decision_source="hermes_teams_text",
+        )
+    except Exception as exc:  # noqa: BLE001 — surface, never crash the router
+        return {
+            "ok": False,
+            "handled": True,
+            "message": (
+                f"Could not send the invite for **{label}**: {exc}. "
+                "The accepted time is unchanged — check **pending** before retrying."
+            ),
+            "proposal_id": proposal_id,
+        }
+    if result.ok:
+        released = result.holds_released or 0
+        return {
+            "ok": True,
+            "handled": True,
+            "message": (
+                f"Calendar invite sent for **{label}**"
+                + (f" — released {released} unused hold(s)." if released else ".")
+            ),
+            "proposal_id": proposal_id,
+            "execution": result.to_dict(),
+        }
+    errors = ", ".join(result.errors or []) or "unknown error"
+    return {
+        "ok": False,
+        "handled": True,
+        "message": f"Invite failed for **{label}**: {errors}",
+        "proposal_id": proposal_id,
+        "execution": result.to_dict(),
     }
 
 

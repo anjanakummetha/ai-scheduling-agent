@@ -86,19 +86,35 @@ def format_pending_approval_digest(items: list) -> str:
     return "\n".join(lines).rstrip()
 
 
-def format_pending_list(items: list[LexiQueueItem]) -> str:
-    if not items:
+def format_pending_list(
+    items: list[LexiQueueItem],
+    *,
+    invite_items: list[LexiQueueItem] | None = None,
+) -> str:
+    invite_items = invite_items or []
+    if not items and not invite_items:
         return "No drafts waiting to send."
     from app.bot.teams_format import display_subject, display_sender
 
-    lines = ["**Drafts ready**\n"]
-    for item in items[:15]:
-        lines.append(
-            f"• **#{item.proposal_id} — {display_subject(item.subject)}** — "
-            f"from {display_sender(item.sender)}"
-        )
-    if len(items) > 15:
-        lines.append(f"_…and {len(items) - 15} more._")
+    lines: list[str] = []
+    if invite_items:
+        lines.append("**Invites ready to send** (recipient picked a time)\n")
+        for item in invite_items[:15]:
+            lines.append(
+                f"• **#{item.proposal_id} — {display_subject(item.subject)}** — "
+                f"{display_sender(item.sender)} accepted — "
+                f"say **approve #{item.proposal_id}** to send the invite"
+            )
+        lines.append("")
+    if items:
+        lines.append("**Drafts ready**\n")
+        for item in items[:15]:
+            lines.append(
+                f"• **#{item.proposal_id} — {display_subject(item.subject)}** — "
+                f"from {display_sender(item.sender)}"
+            )
+        if len(items) > 15:
+            lines.append(f"_…and {len(items) - 15} more._")
     lines.append(
         "\nSay **show draft #N**, **approve #N**, or **reject #N — reason**."
     )

@@ -115,6 +115,31 @@ class TestApprovalTextCarriesGateContext:
         assert "approve #N" in text
         assert "card buttons" not in text.lower()
 
+    def test_pending_list_shows_invite_queue(self):
+        """LT-D1: an accepted offer waiting on invite dispatch must show in
+        `pending` — it was invisible, so a lost Teams push left it stranded."""
+        from app.bot.teams_text import format_pending_list
+
+        class _Draft:
+            proposal_id = 6450
+            subject = "Intro call"
+            sender = "anjana@example.com"
+
+        class _Invite:
+            proposal_id = 6835
+            subject = "[TEST] Intro chat next week? — LT-D1"
+            sender = "anjana@example.com"
+
+        text = format_pending_list([_Draft()], invite_items=[_Invite()])
+        assert "#6835" in text
+        assert "accepted" in text
+        assert "approve #6835" in text
+        assert "#6450" in text
+
+        invites_only = format_pending_list([], invite_items=[_Invite()])
+        assert "#6835" in invites_only
+        assert "No drafts waiting" not in invites_only
+
 
 class TestMcpResultNormalization:
     def test_ok_normalizes_message_fields(self):
@@ -167,6 +192,73 @@ class TestProactivePushNormalization:
             )
         out = capsys.readouterr().out
         assert "**Subject**\n\nFrom someone" in out
+
+
+class TestTypedApproveDispatchesInvite:
+    """LT-D1: `approve #N` typed for a pending_invite proposal must send the
+    calendar invite — it used to dead-end with 'No draft is pending approval'."""
+
+    def _invite_item(self):
+        class _Item:
+            proposal_id = 6835
+            subject = "[TEST] Intro chat next week? — LT-D1"
+            sender = "anjana@example.com"
+
+        return _Item()
+
+    def test_approve_routes_to_invite_dispatch(self):
+        from app.teams import commands
+
+        class _Result:
+            ok = True
+            holds_released = 2
+            errors: list = []
+
+            def to_dict(self):
+                return {"ok": True}
+
+        calls = {}
+
+        def fake_invite(proposal_id, selected_slot, authorized_by, **kwargs):
+            calls["proposal_id"] = proposal_id
+            calls["selected_slot"] = selected_slot
+            return _Result()
+
+        import app.agents.comms_agent as comms
+
+        with (
+            patch.object(commands, "find_pending_item", return_value=None),
+            patch.object(commands, "_find_invite_item", return_value=self._invite_item()),
+            patch.object(comms, "execute_lexi_invite", side_effect=fake_invite),
+        ):
+            out = commands.handle_teams_command("approve #6835")
+        assert out["ok"] is True
+        assert calls["proposal_id"] == 6835
+        assert calls["selected_slot"] == ""  # stored recipient_selected_slot wins
+        assert "invite sent" in out["message"].lower()
+        assert "2 unused hold" in out["message"]
+
+    def test_invite_failure_reports_and_blocks_nothing(self):
+        from app.teams import commands
+
+        class _Result:
+            ok = False
+            holds_released = 0
+            errors = ["conflict at confirm"]
+
+            def to_dict(self):
+                return {"ok": False}
+
+        import app.agents.comms_agent as comms
+
+        with (
+            patch.object(commands, "find_pending_item", return_value=None),
+            patch.object(commands, "_find_invite_item", return_value=self._invite_item()),
+            patch.object(comms, "execute_lexi_invite", return_value=_Result()),
+        ):
+            out = commands.handle_teams_command("approve #6835")
+        assert out["ok"] is False
+        assert "conflict at confirm" in out["message"]
 
 
 class TestApproveConfirmationIsExecutionBacked:
