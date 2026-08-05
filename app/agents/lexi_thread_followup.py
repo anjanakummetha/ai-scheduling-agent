@@ -50,6 +50,16 @@ def try_handle_lexi_thread_followup(raw_email: dict[str, Any]) -> dict[str, Any]
     if not proposal:
         return None
 
+    if str(proposal.get("status") or "") == "executed" and (
+        _CANCEL_RE.search(body) or _RESCHEDULE_RE.search(body)
+    ):
+        # A booked meeting being cancelled/moved MUST win over the
+        # inbound-time path: "cancel our Wednesday call" mentions a weekday,
+        # and the time-suggestion detector would hijack it (live E-8).
+        handled = _handle_generic_lexi_followup(raw_email, proposal, body=body)
+        if handled is not None:
+            return handled
+
     from app.agents.offer_reply import try_handle_recipient_slot_reply
 
     offer_result = try_handle_recipient_slot_reply(raw_email)

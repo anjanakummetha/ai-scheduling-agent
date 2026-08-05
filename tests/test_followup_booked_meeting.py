@@ -183,6 +183,37 @@ def test_reschedule_dispatch_removes_previous_invite():
             conn.commit()
 
 
+def test_cancel_with_weekday_beats_inbound_time_path():
+    """Live E-8: 'cancel our Wednesday call' was hijacked by the inbound
+    time-suggestion detector because it mentions a weekday. On an executed
+    thread, cancel/reschedule wording must be routed FIRST."""
+    conn = _mem_db()
+    notified = {}
+    raw = {
+        "conversation_id": "conv-1",
+        "sender": "anjana@example.com",
+        "subject": "Re: [TEST] Intro chat next week? — LT-D1",
+        "raw_body": "I need to cancel our Wednesday call — the intro is no longer needed.",
+    }
+    with (
+        patch.object(ltf, "get_lexi_connection", lambda: conn),
+        patch.object(ltf, "_find_lexi_involved_proposal", return_value=_proposal()),
+        patch.object(
+            ltf,
+            "_try_inbound_time_suggestion",
+            side_effect=AssertionError("inbound-time path must not run"),
+        ),
+        patch.object(
+            ltf,
+            "_notify_kory_followup",
+            side_effect=lambda pid, *, summary, kind: notified.update(kind=kind),
+        ),
+    ):
+        out = ltf.try_handle_lexi_thread_followup(raw)
+    assert out is not None and out["ok"] is True
+    assert notified["kind"] == "cancel_request"
+
+
 def test_failed_regeneration_still_pings_kory():
     conn = _mem_db()
     notified = {}
