@@ -71,20 +71,10 @@ def main() -> int:
     subject = str(draft.get("subject") or "CEO Daily Briefing")
     body_html = str(draft["bodyHtml"])
 
-    # Lexi's own action queue rides along with the dashboard's briefing —
-    # this replaced the 24h Teams nudge (Teams is for decisions; reminders
-    # belong in the brief). Failure here must never block the briefing.
-    try:
-        from app.jobs.kory_briefings import build_waiting_on_you_html
-
-        waiting = build_waiting_on_you_html()
-        if waiting:
-            if "</body>" in body_html:
-                body_html = body_html.replace("</body>", waiting + "</body>", 1)
-            else:
-                body_html += waiting
-    except Exception as exc:  # noqa: BLE001
-        print(f"warning: waiting-on-you section skipped: {exc}")
+    # The "Waiting on you — Lexi" block was REMOVED (Anjana, 2026-08-05):
+    # the dashboard is the single surface for Kory's action queue; the email
+    # stays a read-only brief. build_waiting_on_you_html remains available
+    # for the dashboard's Lexi panel.
 
     if args.dry_run:
         print(f"TO:      {args.to}")
