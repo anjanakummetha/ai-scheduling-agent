@@ -585,6 +585,65 @@ Thread #7041 ran the REAL production flow end-to-end: Anjana emailed Kory alone 
 
 Remaining before Phase 4: box-side E-3/E-4 (expiry sweeps via SQL backdate), E-6 (conflict-at-confirm, safety-critical), M-1/M-2 (4:45 AM briefing "⏳ Waiting on you" + overnight), M-3 (log sweep incl. stale-card mystery), M-4 (budget). Cleanup list: delete Aug 10 + Aug 24 test meetings (Aug 24 shows declined; Aug 10's proposal lacks invite_event_id — delete via calendar directly), reject #6481/#6244, delete #6235 stale offer thread, remove Tuesday-8:30 memory fact, sweep [TEST] emails. Suite 591.
 
+### RUN 9 — HubSpot write-test plan, STEP 1 (dry-run payload review) — 2026-08-06 ✅ COMPLETE
+
+Done entirely locally, zero network calls: a harness stubbed `execute_hubspot_tool` and drove every
+write path with live writes forced ON, capturing the exact Composio payload each would emit
+(`scratchpad/hubspot_payload_review.py`). Writes stay OFF in prod; nothing was deployed.
+
+**Reachability (matters more than the payloads):** the ONLY HubSpot write reachable from Hermes today is
+`lexi_hubspot_meeting_note` → `stage_meeting_note` → `HUBSPOT_CREATE_NOTE`. `execute_hubspot_batch` —
+which owns merges and field enrichment — **is not exposed as an MCP tool at all** (grep: no caller outside
+tests). So enrichment/merge batches can be staged and never applied. That downgrades their urgency and
+concentrates the risk on the meeting-note path.
+
+**Payloads captured** (all minimal, no surprise fields):
+- `HUBSPOT_CREATE_NOTE` → `{contactId, body}`; body prefixes `Meeting: <subject>\n\n` when a subject is given.
+- `HUBSPOT_UPDATE_CONTACT` → `{contactId, properties:{jobtitle, company}}` — blank fields only.
+- `HUBSPOT_MERGE_CONTACTS` → `{primaryObjectId, objectIdToMerge}`.
+- BCC: `hubspot_bcc_addresses` returns the logging address **only** when `hubspot_bcc_enabled` AND at least
+  one recipient is outside the org domains. Internal-only mail is never BCC'd. Verified across both flags.
+
+**3 defects found and fixed (`5df79e9`, suite 591 → 595):**
+1. **Note filed onto a fuzzy-matched contact (the serious one).** `stage_meeting_note` matched on exact
+   email, then fell back to `contacts[0]`. HubSpot free-text search is loose — `enrich_prebrief_from_hubspot`
+   in the same file already guards against it, citing "Mark" → "Karen Brown" via `andrew.brown@markel.com`.
+   So a meeting note could land on a stranger's record silently. Now refuses, lists near matches, asks for
+   the address on the right record.
+2. **A failed lookup reported as `contact_not_found`** ("No HubSpot contact for X") — a believable wrong
+   answer. Now reports `lookup_failed` with the exception type.
+3. **`applied` count lied** — enrichment reported `applied: 1` when the apply-time blank-only re-check
+   correctly wrote nothing. Now reports `applied` vs `skipped`.
+4. **Merges applied a whole batch on one approval**, though the staging message promises each merge gets its
+   own and HubSpot merges are permanent. Now requires `merge_pair="<primary>:<duplicate>"`; a bare approval
+   refuses and writes nothing.
+
+**⚠️ STRUCTURAL FINDING — the HubSpot write approval is model-supplied, and this gates step 2.**
+Unlike the scheduling path (proposals table + typed `approve #N` + `decision_source` audit), the HubSpot
+note path's approval IS an argument the model passes: `lexi_hubspot_meeting_note(confirm="true")` flows
+straight into `assert_kory_approved_write(approved=confirm)`. Same for `owner_ack`, which is the entire
+other-owner guard. Nothing external verifies Kory actually said yes. Given the 5 logged Hermes
+hallucinations ("already sent/done" with no tool result), a hallucinating gateway could both write to the
+CRM and acknowledge a colleague-ownership prompt on its own. **Today the only real protection is
+`LEXI_HUBSPOT_LIVE_WRITES_ENABLED=false`** — which is exactly the flag step 2 proposes to flip. This is the
+same class the plan already flagged for the email channel in D-4 ("`confirm_send` / `owner_ack` are
+arguments the model supplies rather than external gates"). Recommendation: route HubSpot writes through the
+same staged-approval + typed-command path as sends before enabling live writes, or accept the risk
+knowingly and scope the flip to a single disposable contact.
+
+**Behaviours confirmed correct, no change:** approval gate refuses `confirm=false`; other-owner contact
+returns `owner_confirmation_required` naming the owner; unassigned contacts are writable without ack
+(deliberate — nobody to confirm with); DNC contacts are excluded from outreach candidates and outreach
+batches; enrichment never overwrites a populated field, at propose time and again at apply time.
+
+**Open for Kory (no code):** should a note be writable onto a **Do Not Contact** record? DNC is checked in
+every outreach path but not in the note path. Notes are record-keeping rather than contact, so as-is looks
+right — but it is a ruling, not an accident.
+
+**Blocked / next:** steps 2–4 need box access (SSH is currently refused by the local permission classifier,
+including `safety_posture_summary()` and `.env` reads) and a disposable contact created in Kory's REAL
+HubSpot. `5df79e9` is committed but **not deployed**.
+
 ---
 
 ## RUN 1 RESULTS — 2026-07-26 (sends CLOSED)
