@@ -877,14 +877,16 @@ def lexi_register_teams_conversation(
 @mcp.tool()
 def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     """MANDATORY router for Lexi commands. If Kory's message starts with (or is)
-    approve / reject / discard / send / draft / show draft / pending / inbound /
-    today / unanswered / help — with or without #N and a reason — call this tool
-    FIRST with the message text verbatim. NEVER answer these from your own memory
-    or a calendar read: the queue and proposal state live in Lexi's database and
-    this tool is the only authority. If the result has handled=true, relay its
-    message; only if handled=false may you respond conversationally.
+    approve / reject / discard / cancel / send / draft / show draft / pending /
+    inbound / today / unanswered / help — with or without #N and a reason — call
+    this tool FIRST with the message text verbatim. NEVER answer these from your
+    own memory or a calendar read: the queue and proposal state live in Lexi's
+    database and this tool is the only authority. If the result has handled=true,
+    relay its message; only if handled=false may you respond conversationally.
     Examples that MUST route here: 'reject #6487 — test complete',
-    'approve #6481', 'pending', 'show draft #6449', 'send'.
+    'approve #6481', 'pending', 'show draft #6449', 'send',
+    'cancel meeting #6481 — recipient request' (cancels a BOOKED meeting —
+    executed proposals included; never tell Kory to cancel manually).
 
     If an approve call TIMES OUT or errors without a clear result, the send may
     still be executing in the background. NEVER tell Kory to approve again — a
