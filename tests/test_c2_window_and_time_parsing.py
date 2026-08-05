@@ -213,11 +213,32 @@ class TestRetryAcceptsEscalatedStatus:
             calls["reached_db"] = str(exc) == "stop-before-db"
         assert calls.get("reached_db"), "needs_kory must pass the status gate"
 
-    def test_unrelated_status_still_rejected(self, monkeypatch):
+    def test_rejected_passes_the_status_gate(self, monkeypatch):
+        """'reject #N' then 'redo it' must route through the real pipeline —
+        when the gate refused rejected proposals, Hermes hand-composed an
+        unstaged draft in chat with no id and no approval path (2026-08-05)."""
         from app.agents import inbound_reply as ir
 
         monkeypatch.setattr(
             ir, "_fetch_proposal_bundle", lambda pid: {"status": "rejected"}
+        )
+
+        def _no_db(*a, **k):
+            raise RuntimeError("stop-before-db")
+
+        monkeypatch.setattr(ir, "get_lexi_connection", _no_db)
+        reached = False
+        try:
+            ir.retry_scheduling_with_guidance(1, "redo in my voice")
+        except RuntimeError as exc:
+            reached = str(exc) == "stop-before-db"
+        assert reached, "rejected must pass the status gate"
+
+    def test_already_sent_status_still_rejected(self, monkeypatch):
+        from app.agents import inbound_reply as ir
+
+        monkeypatch.setattr(
+            ir, "_fetch_proposal_bundle", lambda pid: {"status": "offer_sent"}
         )
         out = ir.retry_scheduling_with_guidance(1, "anything")
         assert out["ok"] is False

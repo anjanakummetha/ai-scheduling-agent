@@ -190,11 +190,16 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
     # (heidi_escalation._mark_needs_kory) — omitting it here meant the retry
     # tool rejected every proposal the escalation flow produced, so Kory's
     # guidance could never be applied end-to-end (live I-2 defect).
+    # "rejected" is allowed on purpose: "reject #N" discards a draft, and the
+    # natural next ask is "redo it (differently)". Without it the retry tool
+    # refused and Hermes hand-composed an unstaged draft in chat — no #id, no
+    # approval path (live defect, coffee thread re-draft 2026-08-05).
     if bundle["status"] not in {
         NEEDS_SCHEDULING_GUIDANCE,
         AWAITING_REPLY_PROMPT,
         PENDING_APPROVAL,
         "needs_kory",
+        "rejected",
     }:
         return {
             "ok": False,

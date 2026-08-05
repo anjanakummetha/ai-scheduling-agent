@@ -193,9 +193,13 @@ def lexi_escalate_to_heidi(proposal_id: str, reason: str = "") -> str:
 def lexi_retry_scheduling(proposal_id: str, guidance: str) -> str:
     """THE tool to run whenever Kory answers a scheduling escalation with guidance —
     "retry scheduling", "lunch is fine / approved for this one", "offer next week
-    instead", "make an exception", "try Friday". Call it IMMEDIATELY with Kory's own
-    words as `guidance`; the deterministic engine re-searches the calendar honoring
-    them. Do NOT answer from your own calendar reading instead of calling this — the
+    instead", "make an exception", "try Friday" — AND whenever Kory wants a rejected
+    or discarded draft redone ("redo it", "re-draft that", "start fresh on that
+    thread"): rejected proposals are valid input, pass the redo request as `guidance`.
+    Call it IMMEDIATELY with Kory's own words as `guidance`; the deterministic engine
+    re-searches the calendar honoring them. Do NOT answer from your own calendar
+    reading and NEVER compose the email yourself in chat instead of calling this —
+    a chat-composed draft has no proposal id and can never be approved or sent; the
     engine is the authority on which slots are valid. Reply to Kory with kory_message
     only — one or two plain sentences."""
     try:
