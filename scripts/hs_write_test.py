@@ -62,6 +62,47 @@ def banner(title):
     print(f"\n{'=' * 70}\n{title}\n{'=' * 70}")
 
 
+def read_contact_by_id(contact_id, *, archived=False):
+    """Direct by-id read — returns (record_or_None, errored).
+
+    hubspot_manager.contacts_by_ids() looks like a by-id read but is implemented
+    over the SEARCH api, so it inherits the same index lag and reports a record
+    created seconds ago as missing. HUBSPOT_READ_CONTACT hits the object
+    endpoint and is consistent immediately after a write.
+
+    `errored` is returned separately so a failed call is never mistaken for
+    "the record isn't there" — that conflation is what made the first run's
+    archive check weaker than it looked.
+    """
+    try:
+        result = execute_tool(
+            "HUBSPOT_READ_CONTACT",
+            {
+                "contactId": str(contact_id),
+                "archived": archived,
+                "properties": ["email", "firstname", "lastname", "hubspot_owner_id",
+                               "hs_lead_status"],
+            },
+            role="hubspot",
+        )
+    except Exception:
+        # A 404 for a live read on an archived contact surfaces as an exception.
+        return None, True
+    data = result.get("data") or {}
+    if not data.get("id"):
+        return None, False
+    props = data.get("properties") or {}
+    first = props.get("firstname") or ""
+    last = props.get("lastname") or ""
+    return {
+        "id": data.get("id"),
+        "email": props.get("email"),
+        "name": f"{first} {last}".strip(),
+        "hubspot_owner_id": props.get("hubspot_owner_id"),
+        "hs_lead_status": props.get("hs_lead_status"),
+    }, False
+
+
 CONTACT_ID = ""
 
 
@@ -79,15 +120,21 @@ def cleanup():
         # ARCHIVE, never the GDPR delete: GDPR erases permanently and blacklists
         # the address from ever being re-added to this portal.
         execute_tool("HUBSPOT_ARCHIVE_CONTACT", {"contactId": CONTACT_ID}, role="hubspot")
-        # Verify by id, not by search: the search index lags writes by seconds, so
-        # an empty search result would "confirm" the archive even if it failed.
-        still = hs.contacts_by_ids([CONTACT_ID])
-        if still:
-            print(f"  ⚠️  archive call returned but contact {CONTACT_ID} still reads back "
-                  f"— delete it by hand in HubSpot.")
+        # Positive proof, both directions: gone from the live view AND present in
+        # the archived view. Absence from the live view alone is not evidence —
+        # a failed call looks identical, and a search-based check would also be
+        # fooled by index lag.
+        live, _ = read_contact_by_id(CONTACT_ID, archived=False)
+        binned, _ = read_contact_by_id(CONTACT_ID, archived=True)
+        if live:
+            print(f"  ⚠️  archive returned but contact {CONTACT_ID} is STILL LIVE "
+                  f"({live.get('email')}) — delete it by hand in HubSpot.")
+        elif binned:
+            print(f"  ✅ archived contact {CONTACT_ID} — gone from the shared portal, "
+                  "confirmed present in the recycle bin (restorable 90 days).")
         else:
-            print(f"  ✅ archived contact {CONTACT_ID} — no longer in the shared portal.")
-            print("  It sits in HubSpot's recycle bin, restorable for 90 days.")
+            print(f"  ⚠️  contact {CONTACT_ID} reads as neither live nor archived. "
+                  "Check it by hand in HubSpot.")
     except Exception as exc:
         print(f"  ⚠️  ARCHIVE FAILED: {type(exc).__name__}: {exc}")
         print(f"  DELETE CONTACT {CONTACT_ID} ({TEST_EMAIL}) BY HAND in HubSpot.")
@@ -128,9 +175,14 @@ try:
     if not CONTACT_ID:
         raise RuntimeError("no contact id after create — stopping before any write")
 
-    # Read the canonical record back BY ID rather than by search, for the same
-    # index-lag reason, and check the scope guard against that.
-    record = (hs.contacts_by_ids([CONTACT_ID]) or [{}])[0]
+    # Read the canonical record back with the direct by-id endpoint and check the
+    # scope guard against that.
+    record, read_failed = read_contact_by_id(CONTACT_ID)
+    if read_failed or record is None:
+        raise RuntimeError(
+            f"could not read contact {CONTACT_ID} back by id "
+            f"({'call failed' if read_failed else 'no record'}) — no writes attempted"
+        )
     print(f"\n  TEST CONTACT id={CONTACT_ID} email={record.get('email')} "
           f"name={record.get('name')!r} owner={record.get('hubspot_owner_id')}")
 
