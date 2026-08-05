@@ -1342,12 +1342,22 @@ def stage_meeting_note(
     if meeting_subject.strip():
         body = f"Meeting: {meeting_subject.strip()}\n\n{text}"
 
-    # The address decides the record. HubSpot's free-text search is loose — a
-    # query for one person routinely returns others (the prebrief path guards the
-    # same way) — so taking the first hit would file this meeting's notes onto a
-    # stranger's record, silently and unrecoverably.
+    # The address decides the record, so ask by address: an exact EQ filter on
+    # email. Free-text query was doing this job, which was wrong twice over — it
+    # is loose (a query for one person routinely returns others, which is why the
+    # exact-match loop below exists), and it is backed by a different, slower
+    # index, so a contact that is definitely there reads as contact_not_found for
+    # a while after it is created. The filter index is consistent immediately.
+    #
+    # The loose query is still worth running, but only when the address matched
+    # nothing: then its hits become the "did you mean?" list for Kory.
     try:
-        found = search_contacts(limit=5, query=email)
+        found = search_contacts(
+            limit=5,
+            filters=[{"propertyName": "email", "operator": "EQ", "value": email.strip()}],
+        )
+        if not (found.get("contacts") or []):
+            found = search_contacts(limit=5, query=email)
     except Exception as exc:
         # A failed lookup must never read as "that person isn't in HubSpot".
         return {

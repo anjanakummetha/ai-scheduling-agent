@@ -203,13 +203,21 @@ try:
     # stage_meeting_note resolves its target by SEARCH, and HubSpot's search index
     # trails writes by seconds. Without this wait, 2b reports contact_not_found on
     # a record that demonstrably exists — testing the index, not the note path.
+    # Poll the SAME lookup the note path uses. Polling find_test_contact() instead
+    # reported "indexed after 1 attempt" while the note path still could not see
+    # the record — they were querying two different indexes.
     searchable = None
     for attempt in range(1, 13):
-        searchable = find_test_contact()
+        hits = hs.search_contacts(
+            limit=5, filters=[{"propertyName": "email", "operator": "EQ", "value": TEST_EMAIL}]
+        ).get("contacts") or []
+        searchable = next(
+            (c for c in hits if (c.get("email") or "").lower() == TEST_EMAIL.lower()), None
+        )
         if searchable:
-            print(f"  indexed after {attempt} attempt(s)")
+            print(f"  resolvable by the note path's lookup after {attempt} attempt(s)")
             break
-        print(f"  not indexed yet (attempt {attempt}/12) — waiting 5s")
+        print(f"  not resolvable yet (attempt {attempt}/12) — waiting 5s")
         time.sleep(5)
 
     if not searchable:

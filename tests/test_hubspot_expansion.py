@@ -521,3 +521,63 @@ def test_meeting_note_sends_the_schema_shaped_payload(mock_search, _blocked, moc
     assert args["hs_timestamp"]
     assert args["associations"][0]["to"]["id"] == "777"
     assert "contactId" not in args
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_meeting_note_looks_up_by_exact_address_first(mock_search, _blocked, mock_tool, tmp_path, monkeypatch):
+    """Resolve by EQ filter on email, not free-text query.
+
+    Free-text search is loose AND sits behind a slower index, so a contact that
+    verifiably exists reported contact_not_found. The address is what decides the
+    record, so it is what gets asked.
+    """
+    monkeypatch.setenv("LEXI_DATABASE_PATH", str(tmp_path / "lexi.db"))
+    from scripts.init_lexi_db import init_lexi_db
+
+    init_lexi_db(tmp_path / "lexi.db")
+    mock_tool.return_value = {"data": {"id": "note-1"}}
+    mock_search.return_value = {
+        "contacts": [
+            {"id": "42", "email": "exact@person.com", "name": "Exact Person",
+             "hubspot_owner_id": "159133511"}
+        ]
+    }
+
+    out = stage_meeting_note(email="exact@person.com", note="Note.", approved=True)
+    assert out["ok"] is True
+
+    first_call = mock_search.call_args_list[0]
+    assert first_call.kwargs.get("filters") == [
+        {"propertyName": "email", "operator": "EQ", "value": "exact@person.com"}
+    ], "the first lookup must be an exact address filter"
+    assert "query" not in first_call.kwargs
+    # Matched on the address, so no need to fall back to the loose search.
+    assert mock_search.call_count == 1
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_meeting_note_falls_back_to_loose_search_only_for_suggestions(
+    mock_search, _blocked, mock_tool, tmp_path, monkeypatch
+):
+    """No exact match: run the loose query purely to offer near matches, write nothing."""
+    monkeypatch.setenv("LEXI_DATABASE_PATH", str(tmp_path / "lexi.db"))
+    from scripts.init_lexi_db import init_lexi_db
+
+    init_lexi_db(tmp_path / "lexi.db")
+    mock_search.side_effect = [
+        {"contacts": []},  # exact filter: nobody has this address
+        {"contacts": [{"id": "9", "email": "someone.else@co.com", "name": "Someone Else"}]},
+    ]
+
+    out = stage_meeting_note(email="nobody@nowhere.com", note="Note.", approved=True)
+    assert out["ok"] is False
+    assert out["error_code"] == "contact_not_found"
+    assert mock_search.call_count == 2
+    assert mock_search.call_args_list[1].kwargs.get("query") == "nobody@nowhere.com"
+    # The loose hit is offered as a suggestion, never written to.
+    assert out["near_matches"][0]["email"] == "someone.else@co.com"
+    mock_tool.assert_not_called()
