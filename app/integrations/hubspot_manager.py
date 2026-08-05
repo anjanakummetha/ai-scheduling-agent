@@ -1306,34 +1306,70 @@ def stage_meeting_note(
     if meeting_subject.strip():
         body = f"Meeting: {meeting_subject.strip()}\n\n{text}"
 
-    contact_id = None
-    matched: dict[str, Any] | None = None
+    # The address decides the record. HubSpot's free-text search is loose — a
+    # query for one person routinely returns others (the prebrief path guards the
+    # same way) — so taking the first hit would file this meeting's notes onto a
+    # stranger's record, silently and unrecoverably.
     try:
         found = search_contacts(limit=5, query=email)
-        for contact in found.get("contacts") or []:
-            if (contact.get("email") or "").lower() == email.lower():
-                matched = contact
-                break
-        if matched is None and found.get("contacts"):
-            matched = found["contacts"][0]
-        if matched:
-            blocked = assert_contact_writable(matched, owner_ack=owner_ack)
-            if blocked:
-                return blocked
-            contact_id = matched.get("id")
-    except Exception:
-        contact_id = None
+    except Exception as exc:
+        # A failed lookup must never read as "that person isn't in HubSpot".
+        return {
+            "ok": False,
+            "error_code": "lookup_failed",
+            "error": f"HubSpot lookup failed for {email}: {type(exc).__name__}: {exc}",
+            "kory_message": (
+                f"I couldn't reach HubSpot to look up **{email}** ({type(exc).__name__}), "
+                "so I haven't staged anything. Worth retrying in a moment."
+            ),
+        }
 
-    if not contact_id:
-        # Staging a note against no contact would report success now and create
-        # an orphan note the moment writes are enabled.
+    candidates = found.get("contacts") or []
+    matched: dict[str, Any] | None = None
+    for contact in candidates:
+        if (contact.get("email") or "").strip().lower() == email.strip().lower():
+            matched = contact
+            break
+
+    if matched is None:
+        near = [c for c in candidates if (c.get("email") or "").strip()]
+        lines = [
+            f"No HubSpot contact has the address **{email}**, so there's nothing to attach a note to."
+        ]
+        if near:
+            lines.append("\nThe closest matches were:")
+            for contact in near[:5]:
+                lines.append(f"• {contact.get('name') or 'Unnamed'} — {contact.get('email')}")
+            lines.append(
+                "\nIf one of those is the right person, give me the address on their record "
+                "and I'll file it there. I won't guess between them."
+            )
+        else:
+            lines.append(" Add them in HubSpot first, or give me the address on their record.")
         return {
             "ok": False,
             "error_code": "contact_not_found",
             "error": f"No HubSpot contact for {email} — nothing staged.",
+            "near_matches": [
+                {"id": c.get("id"), "name": c.get("name"), "email": c.get("email")} for c in near[:5]
+            ],
+            "kory_message": "\n".join(lines),
+        }
+
+    blocked = assert_contact_writable(matched, owner_ack=owner_ack)
+    if blocked:
+        return blocked
+    contact_id = matched.get("id")
+
+    if not contact_id:
+        # A matched record with no id would stage an un-appliable note.
+        return {
+            "ok": False,
+            "error_code": "contact_not_found",
+            "error": f"HubSpot returned a match for {email} with no record id — nothing staged.",
             "kory_message": (
-                f"No HubSpot contact matches **{email}**, so there's nothing to attach a note to. "
-                "Add them in HubSpot first, or give me the address on their contact record."
+                f"HubSpot matched **{email}** but returned no record id, so I can't attach a note. "
+                "Nothing was staged."
             ),
         }
 
@@ -1597,7 +1633,9 @@ def propose_outreach_batch(
     }
 
 
-def execute_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str, Any]:
+def execute_hubspot_batch(
+    *, batch_id: str, approved: bool = False, merge_pair: str = ""
+) -> dict[str, Any]:
     """Apply staged batch only after approval; still blocked when live writes disabled."""
     assert_kory_approved_write(approved=approved, action="HubSpot batch update")
     batch = _load_hubspot_batch(batch_id)
@@ -1634,8 +1672,40 @@ def execute_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str,
                 "Re-run it to see the current state."
             ],
         }
+    skipped = 0
     if batch_type == "duplicate_merge":
-        for row in payload.get("pairs", []):
+        # A HubSpot merge cannot be undone, and the staging message promises Kory
+        # that each one gets its own approval. Applying a whole batch on a single
+        # "approved" would break that promise irreversibly, so a merge has to name
+        # the exact pair it means.
+        pairs = payload.get("pairs", [])
+        wanted = str(merge_pair or "").strip()
+        if not wanted:
+            return {
+                "ok": False,
+                "batch_id": batch_id,
+                "applied": 0,
+                "errors": [
+                    f"This batch holds {len(pairs)} merge pair(s). HubSpot merges are "
+                    "permanent, so they are applied one at a time: re-call with "
+                    "merge_pair='<primary_id>:<duplicate_id>' naming the pair to merge."
+                ],
+                "pairs": pairs,
+            }
+        chosen = [
+            row
+            for row in pairs
+            if f"{row.get('primary_id')}:{row.get('duplicate_id')}" == wanted
+        ]
+        if not chosen:
+            return {
+                "ok": False,
+                "batch_id": batch_id,
+                "applied": 0,
+                "errors": [f"No staged merge pair matches '{wanted}' in batch {batch_id}."],
+                "pairs": pairs,
+            }
+        for row in chosen:
             try:
                 _apply_merge_row(row)
                 applied += 1
@@ -1644,8 +1714,11 @@ def execute_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str,
     elif batch_type in {"field_enrichment", "lead_source_fill"}:
         for row in payload.get("proposals", []):
             try:
-                _apply_field_fill(row)
-                applied += 1
+                if _apply_field_fill(row):
+                    applied += 1
+                else:
+                    # Field filled in by hand since staging — his value wins.
+                    skipped += 1
             except Exception as exc:
                 errors.append(str(exc))
     elif batch_type == "meeting_note":
@@ -1664,6 +1737,7 @@ def execute_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str,
     return {
         "ok": not errors,
         "applied": applied,
+        "skipped": skipped,
         "errors": errors,
         "batch_id": batch_id,
     }
@@ -1680,17 +1754,20 @@ def _apply_merge_row(row: dict[str, Any]) -> None:
     )
 
 
-def _apply_field_fill(row: dict[str, Any]) -> None:
+def _apply_field_fill(row: dict[str, Any]) -> bool:
     """Write proposed fields, re-checking at apply time that they are still blank.
 
     A batch can sit staged for days; if Kory filled the field himself in the
     meantime, his value wins. Blank-only is enforced here as well as at proposal
     time so a stale batch can never overwrite real data.
+
+    Returns True only when HubSpot was actually written to, so the caller's
+    "applied" count can't report work that was correctly skipped.
     """
     contact_id = row.get("contact_id")
     props = row.get("proposed_fields") or {}
     if not contact_id or not props:
-        return
+        return False
     current = contacts_by_ids([str(contact_id)])
     if current:
         live = current[0]
@@ -1700,11 +1777,12 @@ def _apply_field_fill(row: dict[str, Any]) -> None:
             if not str(live.get(key) or "").strip() or is_placeholder(live.get(key), field=key)
         }
     if not props:
-        return
+        return False
     execute_hubspot_tool(
         HUBSPOT_UPDATE_CONTACT,
         {"contactId": contact_id, "properties": props},
     )
+    return True
 
 
 def _draft_outreach_email(*, name: str, goal: str) -> dict[str, str]:

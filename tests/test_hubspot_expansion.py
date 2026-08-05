@@ -354,3 +354,113 @@ def test_execute_batch_blocked(mock_blocked, tmp_path, monkeypatch):
     out = execute_hubspot_batch(batch_id=batch_id, approved=True)
     assert out["dry_run"] is True
     assert out["writes_blocked"] is True
+
+
+# --- write-path review fixes (HubSpot write-test plan, step 1) --------------
+
+
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_meeting_note_never_files_onto_a_fuzzy_match(mock_search):
+    """HubSpot free-text search is loose: a query for one person returns others.
+
+    The old code took contacts[0] when no address matched, which filed a
+    meeting's notes onto a stranger's record — silently, and unrecoverably.
+    """
+    mock_search.return_value = {
+        "contacts": [
+            {"id": "WRONG", "email": "someone.else@corp.com", "name": "Someone Else"}
+        ]
+    }
+    out = stage_meeting_note(email="anjana@gmail.com", note="Call notes", approved=True)
+    assert out["ok"] is False
+    assert out["error_code"] == "contact_not_found"
+    assert out["near_matches"][0]["email"] == "someone.else@corp.com"
+    assert "someone.else@corp.com" in out["kory_message"]
+    assert "won't guess" in out["kory_message"]
+
+
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_meeting_note_reports_a_failed_lookup_as_a_failure(mock_search):
+    """A failed search must never read as 'that person isn't in HubSpot'."""
+    mock_search.side_effect = RuntimeError("composio exploded")
+    out = stage_meeting_note(email="d@x.com", note="Call notes", approved=True)
+    assert out["ok"] is False
+    assert out["error_code"] == "lookup_failed"
+    assert "RuntimeError" in out["error"]
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.contacts_by_ids")
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_enrichment_applied_count_excludes_skipped_rows(
+    _blocked, mock_by_ids, mock_tool, tmp_path, monkeypatch
+):
+    """'applied: 1' while writing nothing is the silent-wrong-answer class."""
+    monkeypatch.setenv("LEXI_DATABASE_PATH", str(tmp_path / "lexi.db"))
+    import importlib
+    import app.config
+    import app.storage.lexi_db as lexi_db
+
+    importlib.reload(app.config)
+    importlib.reload(lexi_db)
+    from scripts.init_lexi_db import init_lexi_db
+    from app.integrations.hubspot_manager import _stage_hubspot_batch
+
+    init_lexi_db(tmp_path / "lexi.db")
+    # Kory filled the title in by hand after the batch was staged: his value wins.
+    mock_by_ids.return_value = [{"id": "1", "jobtitle": "Chief Financial Officer"}]
+    batch_id = _stage_hubspot_batch(
+        batch_type="field_enrichment",
+        payload={"proposals": [{"contact_id": "1", "proposed_fields": {"jobtitle": "VP Finance"}}]},
+    )
+    out = execute_hubspot_batch(batch_id=batch_id, approved=True)
+    assert out["applied"] == 0
+    assert out["skipped"] == 1
+    mock_tool.assert_not_called()
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_merges_are_one_at_a_time_and_must_name_the_pair(
+    _blocked, mock_tool, tmp_path, monkeypatch
+):
+    """HubSpot merges are permanent; one approval must not apply a whole batch."""
+    monkeypatch.setenv("LEXI_DATABASE_PATH", str(tmp_path / "lexi.db"))
+    import importlib
+    import app.config
+    import app.storage.lexi_db as lexi_db
+
+    importlib.reload(app.config)
+    importlib.reload(lexi_db)
+    from scripts.init_lexi_db import init_lexi_db
+    from app.integrations.hubspot_manager import _stage_hubspot_batch
+
+    init_lexi_db(tmp_path / "lexi.db")
+    batch_id = _stage_hubspot_batch(
+        batch_type="duplicate_merge",
+        payload={
+            "pairs": [
+                {"primary_id": "1", "duplicate_id": "2"},
+                {"primary_id": "3", "duplicate_id": "4"},
+            ]
+        },
+    )
+    # Bare approval refuses and writes nothing.
+    out = execute_hubspot_batch(batch_id=batch_id, approved=True)
+    assert out["ok"] is False
+    assert out["applied"] == 0
+    mock_tool.assert_not_called()
+
+    # Naming one pair merges exactly that pair.
+    out = execute_hubspot_batch(batch_id=batch_id, approved=True, merge_pair="3:4")
+    assert out["ok"] is True
+    assert out["applied"] == 1
+    assert mock_tool.call_count == 1
+    tool, args = mock_tool.call_args[0]
+    assert tool == "HUBSPOT_MERGE_CONTACTS"
+    assert args == {"primaryObjectId": "3", "objectIdToMerge": "4"}
+
+    # An unknown pair is refused rather than guessed at.
+    out = execute_hubspot_batch(batch_id=batch_id, approved=True, merge_pair="9:9")
+    assert out["ok"] is False
+    assert mock_tool.call_count == 1
