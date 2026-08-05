@@ -648,6 +648,10 @@ def _update_proposal_for_approval(
     from app.agents.inbound_reply import _finalize_draft
 
     drafted = _finalize_draft(schedule.drafted_reply, voice_mode=voice_mode)
+    # NO COALESCE on the note: a clean fresh schedule must CLEAR a stale
+    # warning, or Kory sees yesterday's "no availability for Thursday" on top
+    # of a draft that offers exactly Thursday (live O-4, #6481 — same lesson
+    # as hermes_orchestrator._persist_proposal_draft, drifted copy).
     note = (schedule.scheduling_note or "").strip() or None
     conn.execute(
         """
@@ -657,7 +661,7 @@ def _update_proposal_for_approval(
             drafted_reply = ?,
             confidence_score = ?,
             recipient_timezone = COALESCE(?, recipient_timezone),
-            scheduling_note = COALESCE(?, scheduling_note),
+            scheduling_note = ?,
             updated_at = datetime('now')
         WHERE id = ?
         """,

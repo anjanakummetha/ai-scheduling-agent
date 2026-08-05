@@ -180,3 +180,38 @@ def test_travel_shift_produces_a_note(monkeypatch):
     note = result.scheduling_note()
     assert "Tuesday afternoon or Wednesday next week" in note
     assert "after travel" in note
+
+
+def test_update_for_approval_clears_stale_note(tmp_path):
+    """Live O-4 #6481: yesterday's travel-shift note ('no availability for
+    Thursday...') survived a clean redo that offered exactly Thursday —
+    COALESCE kept the stale warning when the fresh note was empty."""
+    import sqlite3
+
+    from app.agents import scheduler_agent as sa
+
+    db = tmp_path / "t.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE proposals (id INTEGER PRIMARY KEY, status TEXT, "
+        "proposed_slots TEXT, drafted_reply TEXT, confidence_score REAL, "
+        "recipient_timezone TEXT, scheduling_note TEXT, updated_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO proposals (id, status, scheduling_note) "
+        "VALUES (1, 'pending_triage', 'no availability for Thursday — stale')"
+    )
+    conn.commit()
+
+    schedule = sa.ScheduleResult(
+        slots=[{"start": "2026-08-20T14:00:00-06:00", "end": "2026-08-20T14:30:00-06:00"}],
+        drafted_reply="Hi Anjana,\n\nThursday works.\n\nThank you,\nLexi Knightly",
+        confidence_score=0.9,
+        scheduling_note="",
+    )
+    sa._update_proposal_for_approval(conn, 1, schedule, voice_mode="lexi")
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT scheduling_note FROM proposals WHERE id=1").fetchone()
+    conn.close()
+    assert row["scheduling_note"] is None
