@@ -46,6 +46,25 @@ def try_handle_recipient_slot_reply(raw_email: dict[str, Any]) -> dict[str, Any]
         return None
 
     if recipient_times_rejected(body):
+        from app.scheduling.inbound_availability import (
+            body_looks_like_inbound_availability,
+            extract_inbound_time_candidates,
+        )
+
+        if body_looks_like_inbound_availability(body) and extract_inbound_time_candidates(
+            body
+        ):
+            # "None of those work — could we do Monday at 1 instead?" is a
+            # COUNTER-PROPOSAL, not a plain rejection: hand it to the
+            # inbound-time path so the proposed time is calendar-validated
+            # (and a busy time escalates to Kory instead of a blind re-offer).
+            return {
+                "skipped": False,
+                "action": "offer_reply_unparsed",
+                "proposal_id": proposal.get("proposal_id"),
+                "thread_id": message_id,
+                "reason": "Rejected offered times and proposed a new one.",
+            }
         result = mark_recipient_reoffer_request(
             int(proposal["proposal_id"]),
             reply_body=body,

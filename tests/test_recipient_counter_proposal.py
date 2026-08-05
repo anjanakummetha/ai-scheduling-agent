@@ -1,0 +1,113 @@
+"""Live H-4: 'None of those quite work — could we do Monday, August 17 at
+1:00 PM ET instead?' was matched to the Aug 10 slot and nearly booked a time
+the recipient explicitly declined."""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+from app.scheduling.recipient_slot import (
+    match_recipient_slot_choice,
+    recipient_times_rejected,
+)
+
+SLOTS = [
+    {"start": "2026-08-10T10:00:00-06:00", "end": "2026-08-10T10:30:00-06:00"},
+    {"start": "2026-08-17T10:00:00-06:00", "end": "2026-08-17T10:30:00-06:00"},
+    {"start": "2026-08-19T09:00:00-06:00", "end": "2026-08-19T09:30:00-06:00"},
+]
+
+LIVE_COUNTER = (
+    "Hi Lexi,\n\nNone of those quite work for me. Could we do Monday, "
+    "August 17 at 1:00 PM ET (11:00 AM MT) instead?\n\nThanks,\nAnjana"
+)
+
+
+def test_live_counter_proposal_is_not_a_slot_pick():
+    assert match_recipient_slot_choice(LIVE_COUNTER, SLOTS) is None
+
+
+def test_live_counter_proposal_reads_as_rejection():
+    assert recipient_times_rejected(LIVE_COUNTER)
+    assert recipient_times_rejected("Those times don't quite work for me.")
+    assert recipient_times_rejected("None of them work, sorry.")
+
+
+def test_bare_weekday_pick_still_works_when_unambiguous():
+    slots = [SLOTS[0], SLOTS[2]]  # one Monday, one Wednesday
+    chosen = match_recipient_slot_choice("Monday works great for me!", slots)
+    assert chosen is SLOTS[0]
+
+
+def test_bare_weekday_is_refused_when_two_slots_share_the_day():
+    # Two Mondays offered — "Monday works" cannot disambiguate.
+    assert match_recipient_slot_choice("Monday works for me!", SLOTS) is None
+
+
+def test_exact_date_with_contradicting_time_is_not_a_pick():
+    text = "Monday, August 10 at 3:00 PM works for me"  # slot is 10:00 MT / 12 ET
+    assert match_recipient_slot_choice(text, [SLOTS[0]]) is None
+
+
+def test_exact_date_with_matching_et_time_is_a_pick():
+    text = "Monday, August 10 at 12:00 PM ET works for me"
+    assert match_recipient_slot_choice(text, [SLOTS[0]]) is SLOTS[0]
+
+
+def test_rejection_with_counter_time_routes_to_inbound_time_path():
+    from app.agents import offer_reply as orp
+
+    proposal = {
+        "proposal_id": 6861,
+        "sender": "anjana@example.com",
+        "proposed_slots": (
+            '[{"start": "2026-08-10T10:00:00-06:00", "end": "2026-08-10T10:30:00-06:00"}]'
+        ),
+    }
+    raw = {
+        "conversation_id": "conv-h4",
+        "message_id": "m1",
+        "sender": "anjana@example.com",
+        "subject": "Re: [TEST] Quick catch-up? — LT-H4",
+        "raw_body": LIVE_COUNTER,
+    }
+    with (
+        patch.object(orp, "_find_offer_sent_proposal", return_value=proposal),
+        patch.object(orp, "mark_recipient_reoffer_request") as reoffer,
+    ):
+        out = orp.try_handle_recipient_slot_reply(raw)
+    assert out is not None
+    assert out["action"] == "offer_reply_unparsed"
+    reoffer.assert_not_called()
+
+
+def test_plain_rejection_still_reoffers():
+    from app.agents import offer_reply as orp
+
+    proposal = {
+        "proposal_id": 6861,
+        "sender": "anjana@example.com",
+        "proposed_slots": (
+            '[{"start": "2026-08-10T10:00:00-06:00", "end": "2026-08-10T10:30:00-06:00"}]'
+        ),
+    }
+    raw = {
+        "conversation_id": "conv-h4",
+        "message_id": "m1",
+        "sender": "anjana@example.com",
+        "subject": "Re: [TEST] Quick catch-up? — LT-H4",
+        "raw_body": "Sorry, none of those times work for me. What else do you have?",
+    }
+    with (
+        patch.object(orp, "_find_offer_sent_proposal", return_value=proposal),
+        patch.object(
+            orp,
+            "mark_recipient_reoffer_request",
+            return_value={"ok": True, "status": "pending_reoffer"},
+        ) as reoffer,
+        patch("app.bot.teams_publisher.schedule_teams_reoffer_prompt_push"),
+    ):
+        out = orp.try_handle_recipient_slot_reply(raw)
+    assert out is not None
+    assert out["action"] == "recipient_reoffer_request"
+    reoffer.assert_called_once()
