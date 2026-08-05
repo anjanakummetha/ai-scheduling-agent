@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from app.config import settings
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
+
+# Recipient asking to MOVE a booked meeting (checked before cancel — "can't make
+# Monday, can we find another time" is a reschedule, not a cancellation).
+_RESCHEDULE_RE = re.compile(
+    r"(?i)\b(re-?schedul\w+|move (?:our|the|this|it)|different (?:time|day|slot)"
+    r"|another (?:time|day|slot)|push (?:it|this|back|to)|can'?t make|cannot make"
+    r"|something came up|need to (?:change|move)|no longer works?|won'?t work)\b"
+)
+_CANCEL_RE = re.compile(
+    r"(?i)\b(cancel\w*|call (?:it|this) off|scrap (?:it|the meeting)"
+    r"|don'?t need (?:the|this) (?:meeting|call) (?:anymore|any more))\b"
+)
 
 LEXI_INVOLVED_STATUSES = (
     "offer_sent",
@@ -197,14 +210,49 @@ def _handle_generic_lexi_followup(
     is_delegation = bool(proposal.get("is_delegation"))
     notify_statuses = {
         "pending_approval",
-            "offer_sent",
+        "offer_sent",
         "pending_invite",
         "pending_reoffer",
+        "executed",
     }
     if status not in notify_statuses:
         return None
-    if not is_delegation and status not in {"offer_sent", "pending_invite", "pending_reoffer"}:
+    if not is_delegation and status not in {
+        "offer_sent",
+        "pending_invite",
+        "pending_reoffer",
+        "executed",
+    }:
         return None
+
+    if status == "executed":
+        # The meeting is BOOKED — a reply here is the highest-stakes follow-up
+        # (live E-7: it used to be dropped in total silence).
+        if _CANCEL_RE.search(body) and not _RESCHEDULE_RE.search(body):
+            sender = str(proposal.get("sender") or "them")
+            subject = str(proposal.get("subject") or "(no subject)")
+            preview = body.strip().split("\n")[0][:120]
+            summary = (
+                f"**{subject}** — {sender} wants to CANCEL the booked meeting:\n"
+                f"\"{preview}\"\n\n"
+                "I have NOT touched the calendar — tell me if you want the "
+                "meeting cancelled."
+            )
+            _notify_kory_followup(
+                int(proposal["proposal_id"]), summary=summary, kind="cancel_request"
+            )
+            return {
+                "ok": True,
+                "action": "lexi_thread_followup",
+                "proposal_id": proposal.get("proposal_id"),
+                "status": status,
+                "message": summary,
+            }
+        if _RESCHEDULE_RE.search(body):
+            rescheduled = _reschedule_booked_meeting(proposal, followup_body=body)
+            if rescheduled is not None:
+                return rescheduled
+        # Anything else on a booked thread: fall through to the generic ping.
 
     if status == "pending_approval":
         # The offer has NOT gone out yet and the sender just changed the ask
@@ -299,6 +347,87 @@ def _reschedule_unsent_offer(
     # Rescheduling failed (e.g. nothing fits the new ask) — fall through to the
     # notify branch so Kory still hears about the reply.
     return None
+
+
+def _reschedule_booked_meeting(
+    proposal: dict[str, Any],
+    *,
+    followup_body: str,
+) -> dict[str, Any] | None:
+    """Recipient asked to move a BOOKED meeting — regenerate a reschedule offer.
+
+    The existing invite stays on the calendar untouched; invite dispatch removes
+    it (via proposals.invite_event_id) only once the NEW time is confirmed, so a
+    dead-end reschedule never costs Kory the original meeting.
+    """
+    proposal_id = int(proposal["proposal_id"])
+    addition = (followup_body or "").strip()
+    if not addition:
+        return None
+
+    with get_lexi_connection() as conn:
+        row = conn.execute(
+            "SELECT raw_body FROM email_threads WHERE thread_id = "
+            "(SELECT thread_id FROM proposals WHERE id = ?)",
+            (proposal_id,),
+        ).fetchone()
+        base = str(row["raw_body"] or "") if row else ""
+        if addition not in base:
+            merged = f"{base}\n\n[Sender follow-up]: {addition}".strip()
+            conn.execute(
+                "UPDATE email_threads SET raw_body = ? WHERE thread_id = "
+                "(SELECT thread_id FROM proposals WHERE id = ?)",
+                (merged, proposal_id),
+            )
+        conn.execute(
+            """
+            UPDATE proposals
+            SET status = 'pending_triage', drafted_reply = NULL,
+                proposed_slots = NULL, recipient_selected_slot = NULL,
+                teams_approval_notified_at = NULL, updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (proposal_id,),
+        )
+        conn.commit()
+
+    from app.agents.scheduler_agent import process_proposal_schedule
+
+    if process_proposal_schedule(proposal_id):
+        from app.bot.teams_publisher import schedule_teams_approval_push
+
+        schedule_teams_approval_push(proposal_id, force=True)
+        logger.info(
+            "Reschedule offer regenerated for booked proposal %s.", proposal_id
+        )
+        return {
+            "ok": True,
+            "action": "lexi_thread_followup",
+            "proposal_id": proposal_id,
+            "status": "pending_approval",
+            "rescheduled": True,
+            "message": (
+                "Recipient asked to move the booked meeting — new offer drafted. "
+                "The current invite stays until a new time is confirmed."
+            ),
+        }
+    # Regeneration failed (e.g. nothing fits) — fall back to a Kory ping so the
+    # ask is never silent.
+    sender = str(proposal.get("sender") or "them")
+    subject = str(proposal.get("subject") or "(no subject)")
+    summary = (
+        f"**{subject}** — {sender} asked to move the booked meeting, but I "
+        "couldn't draft new times automatically. The original invite is "
+        "unchanged — tell me how you'd like to handle it."
+    )
+    _notify_kory_followup(proposal_id, summary=summary, kind="reschedule_failed")
+    return {
+        "ok": False,
+        "action": "lexi_thread_followup",
+        "proposal_id": proposal_id,
+        "status": str(proposal.get("status") or ""),
+        "message": summary,
+    }
 
 
 def _notify_kory_followup(proposal_id: int, *, summary: str, kind: str) -> None:

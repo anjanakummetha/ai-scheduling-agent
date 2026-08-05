@@ -566,6 +566,47 @@ def execute_lexi_approval(
                             result=result,
                         )
                         result.holds_released = released
+                        if confirmed_id:
+                            prior_invite = str(
+                                proposal.get("invite_event_id") or ""
+                            ).strip()
+                            if prior_invite and prior_invite != confirmed_id:
+                                # Reschedule: the new invite replaces the original
+                                # meeting — remove the old event only now that the
+                                # replacement exists.
+                                try:
+                                    from app.integrations.outlook_calendar import (
+                                        delete_calendar_event,
+                                    )
+
+                                    delete_error = delete_calendar_event(prior_invite)
+                                except Exception as exc:  # noqa: BLE001
+                                    delete_error = f"{type(exc).__name__}: {exc}"
+                                _insert_audit_log(
+                                    conn,
+                                    step_name="reschedule_released_previous_invite",
+                                    reference_id=str(proposal_id),
+                                    log_level="INFO" if not delete_error else "ERROR",
+                                    message=(
+                                        "Previous invite removed after reschedule."
+                                        if not delete_error
+                                        else f"Could not remove previous invite: {delete_error}"
+                                    ),
+                                    payload={
+                                        "proposal_id": proposal_id,
+                                        "previous_event_id": prior_invite,
+                                        "new_event_id": confirmed_id,
+                                    },
+                                )
+                                if delete_error:
+                                    result.warnings = (result.warnings or []) + [
+                                        "New invite sent, but the ORIGINAL meeting "
+                                        f"could not be removed: {delete_error}"
+                                    ]
+                            conn.execute(
+                                "UPDATE proposals SET invite_event_id = ? WHERE id = ?",
+                                (confirmed_id, proposal_id),
+                            )
 
                     _set_proposal_status(conn, proposal_id, STATUS_EXECUTED)
                     result.status = STATUS_EXECUTED
@@ -741,6 +782,7 @@ def _fetch_proposal_bundle(conn: sqlite3.Connection, proposal_id: int) -> dict[s
                 p.recipient_selected_slot,
                 p.reply_message_id,
                 p.scheduling_note,
+                p.invite_event_id,
                 e.subject,
             e.sender,
             e.raw_body,

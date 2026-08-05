@@ -265,6 +265,12 @@ def _migrate_proposal_kory_guidance(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE proposals ADD COLUMN scheduling_note TEXT")
 
 
+def _migrate_proposal_invite_event(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()}
+    if "invite_event_id" not in columns:
+        conn.execute("ALTER TABLE proposals ADD COLUMN invite_event_id TEXT")
+
+
 def _migrate_approval_feedback(conn: sqlite3.Connection) -> None:
     from app.storage.learning_log import ensure_approval_feedback_table
 
@@ -292,6 +298,7 @@ def init_lexi_db(db_path: Path = DB_PATH) -> None:
         _migrate_proposal_teams_notify(conn)
         _migrate_proposal_reply_message_id(conn)
         _migrate_proposal_kory_guidance(conn)
+        _migrate_proposal_invite_event(conn)
         _migrate_kory_memory(conn)
         _migrate_recipient_profiles(conn)
         _migrate_approval_feedback(conn)
