@@ -264,12 +264,21 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
         }
 
     if _SEND_ONLY_RE.match(normalized):
-        pending = get_lexi_pending_queue()
+        from app.agents.comms_agent import get_lexi_invite_queue
+
+        # Bare `send` must see invites too (live D-4: one pending_invite and
+        # zero drafts left `send` unresolved and Hermes asked for a number).
+        pending = list(get_lexi_pending_queue()) + list(get_lexi_invite_queue())
         if len(pending) == 1:
             return {
                 "action": "approve",
                 "proposal_id": pending[0].proposal_id,
                 "option": 1,
+            }
+        if not pending:
+            return {
+                "action": "unresolved",
+                "message": "Nothing is waiting to send right now.",
             }
         if len(pending) > 1:
             ids = ", ".join(f"#{p.proposal_id}" for p in pending[:10])

@@ -486,3 +486,33 @@ class TestInvitePromptIsDecisionShaped:
                 conn.execute("DELETE FROM proposals WHERE id = 99005")
                 conn.execute("DELETE FROM email_threads WHERE thread_id = 'lt-h10-p'")
                 conn.commit()
+
+
+class TestBareSendSeesInvites:
+    def test_bare_send_resolves_single_pending_invite(self):
+        """Live D-4: one pending invite + zero drafts left `send` unresolved."""
+        from app.bot import teams_text as tt
+
+        class _Invite:
+            proposal_id = 7041
+
+        with (
+            patch.object(tt, "get_lexi_pending_queue", return_value=[]),
+            patch(
+                "app.agents.comms_agent.get_lexi_invite_queue",
+                return_value=[_Invite()],
+            ),
+        ):
+            out = tt.parse_teams_command("send")
+        assert out == {"action": "approve", "proposal_id": 7041, "option": 1}
+
+    def test_bare_send_with_nothing_pending_says_so(self):
+        from app.bot import teams_text as tt
+
+        with (
+            patch.object(tt, "get_lexi_pending_queue", return_value=[]),
+            patch("app.agents.comms_agent.get_lexi_invite_queue", return_value=[]),
+        ):
+            out = tt.parse_teams_command("send")
+        assert out["action"] == "unresolved"
+        assert "Nothing is waiting" in out["message"]
