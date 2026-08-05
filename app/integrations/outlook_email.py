@@ -688,7 +688,7 @@ def forward_message_from_lexi_mailbox(
     comment: str = "",
     cc_emails: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Forward a thread message from Lexi's mailbox (e.g. escalate to Heidi)."""
+    """Forward a thread message from Lexi's mailbox."""
     if not message_id or not to_email:
         return {"forwarded": False, "reason": "missing message_id or recipient"}
     if settings.lexi_dry_run:

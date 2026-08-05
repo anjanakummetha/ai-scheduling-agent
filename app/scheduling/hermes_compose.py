@@ -460,7 +460,7 @@ def _hermes_kory_guidance_compose(packet: dict[str, Any]) -> str:
         "Only suggest moving one of Kory's own meetings as a last resort, phrased as a question, "
         "and never for anything marked DO NOT MOVE, his training sessions, or his executive "
         "coach.\n"
-        "You are writing directly to Kory — issues route to Kory only. NEVER mention Heidi or "
+        "You are writing directly to Kory — issues route to Kory only. NEVER suggest "
         "any other assistant/colleague, and never claim anyone has been flagged, notified, or "
         "escalated.\n"
         "2-4 sentences. Plain text. No markdown headers."

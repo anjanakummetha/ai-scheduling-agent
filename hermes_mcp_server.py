@@ -179,15 +179,17 @@ def lexi_get_scheduling_context(proposal_id: str) -> str:
 
 
 @mcp.tool()
-def lexi_escalate_to_heidi(proposal_id: str, reason: str = "") -> str:
-    """Email Heidi when scheduling cannot be completed (issue + briefing). Staged when LEXI_DRY_RUN=true."""
+def lexi_escalate_to_kory(proposal_id: str, reason: str = "") -> str:
+    """Notify Kory in Teams when scheduling cannot be completed. Kory is the
+    ONLY escalation target — never offer to flag, forward, or hand off an issue
+    to anyone else."""
     try:
         pid = int(proposal_id)
     except ValueError:
         return _error("proposal_id must be an integer string.", code="validation_error")
     return _wrap(
-        "lexi_escalate_to_heidi",
-        lexi.escalate_to_heidi_action,
+        "lexi_escalate_to_kory",
+        lexi.escalate_to_kory_action,
         proposal_id=pid,
         reason=(reason or "").strip(),
     )

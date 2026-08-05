@@ -124,30 +124,14 @@ def test_midnight_artifact_is_rejected():
     assert all(6 <= int(c["start"][11:13]) <= 21 for c in candidates)
 
 
-# ── Bug 4: no Heidi mention in Kory-facing text while escalation is disabled ────
-def test_scrub_removes_heidi_when_disabled():
-    os.environ.pop("LEXI_HEIDI_ESCALATION_ENABLED", None)
-    import app.scheduling.heidi_escalation as he
+# ── Bug 4: Kory-facing text never suggests handing off to anyone else ────────
+def test_scrub_removes_third_party_handoff():
+    from app.scheduling.kory_escalation import _scrub_third_party_mentions
 
-    reload(he)
     text = "The times didn't fit. Heidi has been flagged. Reply to retry."
-    scrubbed = he._scrub_third_party_mentions(text)
+    scrubbed = _scrub_third_party_mentions(text)
     assert "heidi" not in scrubbed.lower()
-    assert "didn't fit" in scrubbed
-    assert "retry" in scrubbed
-
-
-def test_scrub_keeps_heidi_when_enabled():
-    os.environ["LEXI_HEIDI_ESCALATION_ENABLED"] = "true"
-    import app.scheduling.heidi_escalation as he
-
-    reload(he)
-    try:
-        text = "Heidi has been emailed to take over."
-        assert he._scrub_third_party_mentions(text) == text
-    finally:
-        os.environ.pop("LEXI_HEIDI_ESCALATION_ENABLED", None)
-        reload(he)
+    assert "reply to retry" in scrubbed.lower()
 
 
 # ── Bug 1: a sent offer is not left in the re-sendable pending state ────────────

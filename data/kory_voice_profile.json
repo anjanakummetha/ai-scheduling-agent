@@ -1,23 +1,8 @@
 {
-  "tone_hints": [
-    "Typical reply length: ~507 characters.",
-    "Common greeting: \"Hi Lily Evans,\"."
-  ],
-  "example_snippets": [
-    "Hi Lily Evans,\nFinancial management is a cornerstone of any successful business.\nKeep a close eye on your budget and expenses.\nRegularly review your financial statements to track performance.\nConsider consulting with a financial advisor for expert guidance.\nInvesting wisely can lead to growth and stability.\nMake informed decisions to secure your business's future.\n\nBest regards Kory IconfoundWMG",
-    "Hi Anna Morrow,\nUnderstanding your market is key to making informed decisions.\nConduct regular research to stay updated on trends and competitors.\nThis knowledge can help you identify opportunities and threats.\nConsider using surveys or feedback forms to gather insights from customers.\nListening to their needs can guide your business strategy.\nStay proactive, and you'll be better prepared for changes.\n\nBest regards Kory IconfoundWMG",
-    "Hi Esmeralda Graham,\nTime management is crucial for success in business.\nPrioritize your tasks and set realistic deadlines.\nUsing tools like calendars and to-do lists can help keep you organized.\nDon't forget to allocate time for breaks to recharge.\nBalancing work and rest can lead to better performance.\nStay focused on your goals, and you'll see progress.\n\nBest regards Kory IconfoundWMG",
-    "Hi Elena Herrera,\nEffective communication is vital for any business.\nMake sure to clearly convey your ideas and expectations.\nEncourage open dialogue within your team to foster collaboration.\nRegular check-ins can help address any misunderstandings early.\nAlso, consider using various communication tools to suit different needs.\nThis can enhance overall productivity and team morale.\n\nBest regards Kory IconfoundWMG",
-    "Jess Rolfson,\nI got your info from the YPO Construction Network directory.\u00a0I am a lifelong specialty contractor and fellow YPOer (Rocky Mountains). I took a small family business and built a national environmental services platform (EIS Holdings). We sold the business in 2021, and I left the CEO role in early 2024. Since that time, I launched Iconic Founders Group, which supports blue-collar industry founders through the transaction/exit process\u2026"
-  ],
-  "greeting_samples": [
-    "Hi Lily Evans,",
-    "Hi Anna Morrow,",
-    "Hi Esmeralda Graham,",
-    "Hi Elena Herrera,",
-    "Hi Juliana,"
-  ],
+  "tone_hints": [],
+  "example_snippets": [],
+  "greeting_samples": [],
   "closing_counts": {},
-  "built_at_epoch": 1784660612.0821152,
-  "sample_count": 27
+  "built_at_epoch": 1785898135.10511,
+  "sample_count": 0
 }

@@ -734,7 +734,7 @@ def schedule_teams_scheduling_guidance_push(
     summary: str,
     force: bool = False,
 ) -> None:
-    """Fire-and-forget Teams text when scheduling blocked (Heidi escalation ping)."""
+    """Fire-and-forget Teams text when scheduling is blocked and needs Kory."""
     if not teams_push_allowed():
         _log_teams_push_suppressed(proposal_id, "scheduling_guidance")
         return

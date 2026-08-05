@@ -679,10 +679,10 @@ def inbox_review_action(*, hours: int = 48) -> dict[str, Any]:
     return build_inbox_review(hours=hours)
 
 
-def escalate_to_heidi_action(*, proposal_id: int, reason: str = "") -> dict[str, Any]:
-    from app.scheduling.heidi_escalation import escalate_to_heidi
+def escalate_to_kory_action(*, proposal_id: int, reason: str = "") -> dict[str, Any]:
+    from app.scheduling.kory_escalation import escalate_to_kory
 
-    return escalate_to_heidi(proposal_id, reason=reason)
+    return escalate_to_kory(proposal_id, reason=reason)
 
 
 def begin_draft_reply_action(*, proposal_id: int, voice_mode: str = "") -> dict[str, Any]:

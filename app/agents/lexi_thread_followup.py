@@ -15,7 +15,6 @@ LEXI_INVOLVED_STATUSES = (
     "pending_invite",
     "pending_reoffer",
     "pending_approval",
-    "needs_heidi",
     "executed",
     "awaiting_reply_prompt",
 )
@@ -198,8 +197,7 @@ def _handle_generic_lexi_followup(
     is_delegation = bool(proposal.get("is_delegation"))
     notify_statuses = {
         "pending_approval",
-        "needs_heidi",
-        "offer_sent",
+            "offer_sent",
         "pending_invite",
         "pending_reoffer",
     }

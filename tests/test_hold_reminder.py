@@ -1,11 +1,10 @@
-"""Hold reminder staging and Heidi CC behavior."""
+"""Hold reminder staging behavior."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.scheduling.heidi_escalation import _kory_cc_for_heidi
 from app.scheduling.hold_reminder import (
     HOLD_REMINDER_PREFIX,
     compose_hold_reminder_draft,
@@ -86,20 +85,3 @@ def test_process_due_hold_reminders_stages_draft(mock_notify, tmp_path, monkeypa
     assert row["status"] == "pending_approval"
     assert str(row["scheduling_note"]).startswith(HOLD_REMINDER_PREFIX)
     assert "circling back" in str(row["drafted_reply"]).lower()
-
-
-@patch("app.integrations.outlook_email.settings")
-@patch("app.scheduling.heidi_escalation.settings")
-def test_heidi_cc_includes_kory(mock_heidi_settings, mock_settings) -> None:
-    # Heidi CC resolves Kory's real address; gated only by heidi_escalation_cc_kory,
-    # independent of the Lexi-outbound cc_kory_enabled toggle.
-    mock_settings.kory_cc_email = "Kory.Mitchell@iconicfounders.com"
-    mock_heidi_settings.heidi_escalation_cc_kory = True
-    cc = _kory_cc_for_heidi()
-    assert any("kory.mitchell@iconicfounders.com" == addr for addr in cc)
-
-
-@patch("app.scheduling.heidi_escalation.settings")
-def test_heidi_cc_skipped_when_disabled(mock_heidi_settings) -> None:
-    mock_heidi_settings.heidi_escalation_cc_kory = False
-    assert _kory_cc_for_heidi() == []

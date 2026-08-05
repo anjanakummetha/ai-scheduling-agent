@@ -273,9 +273,6 @@ class Settings:
     cc_kory_enabled: bool = field(default_factory=resolve_cc_kory_enabled)
     hubspot_bcc_address: str = field(default_factory=resolve_hubspot_bcc_address)
     hubspot_bcc_enabled: bool = field(default_factory=resolve_hubspot_bcc_enabled)
-    heidi_escalation_cc_kory: bool = os.getenv(
-        "HEIDI_ESCALATION_CC_KORY", "true"
-    ).lower() in {"1", "true", "yes"}
 
 
 settings = Settings()
@@ -342,7 +339,6 @@ def safety_posture_summary() -> dict[str, object]:
         "LEXI_ASANA_LIVE_WRITES_ENABLED": settings.asana_live_writes_enabled,
         "LEXI_HUBSPOT_LIVE_WRITES_ENABLED": settings.hubspot_live_writes_enabled,
         "LEXI_OUTREACH_LIVE_SENDS_ENABLED": settings.outreach_live_sends_enabled,
-        "LEXI_HEIDI_ESCALATION_ENABLED": _bool_env("LEXI_HEIDI_ESCALATION_ENABLED", False),
     }
 
 

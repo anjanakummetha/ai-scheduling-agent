@@ -139,7 +139,7 @@ def verify_slots(
 def phase_safety(results: list[dict]) -> None:
     print("\n=== Phase 0: Safety gates ===")
     from app.safety.outbound_guard import (
-        heidi_email_allowed,
+        escalation_email_allowed,
         outbound_writes_allowed,
         teams_push_allowed,
     )
@@ -164,7 +164,7 @@ def phase_safety(results: list[dict]) -> None:
         phase="safety",
         case_id="escalation_staged",
         name="Escalation emails staged (not sent)",
-        passed=not heidi_email_allowed() or settings.lexi_dry_run,
+        passed=not escalation_email_allowed() or settings.lexi_dry_run,
     )
 
 

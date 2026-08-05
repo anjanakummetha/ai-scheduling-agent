@@ -36,8 +36,9 @@ def teams_push_allowed() -> bool:
     return True
 
 
-def heidi_email_allowed() -> bool:
-    """Heidi escalations respect dry-run (stage only)."""
+def escalation_email_allowed() -> bool:
+    """Escalation emails respect dry-run (stage only). Unused since the
+    escalation path became Teams-to-Kory only; kept for the dry-run script."""
     return outbound_writes_allowed()
 
 

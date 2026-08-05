@@ -17,10 +17,10 @@ Two repos, one box:
 **Phase 0 preflight — 8/8 ✅. Group A (ingestion/triage/notify/dedupe) — 5/5 ✅. Group B (delegation) — 4/4 ✅.**
 Roughly 17 of ~60 tests done. Sends stayed CLOSED throughout; **approve has still never been tapped.**
 
-**Next: Group C** (slot proposal accuracy) — the largest untested group, pure draft inspection, and the direct beneficiary of the window work below. Then S, L, O-draft, I, J/K, G. Full remaining outline is in the test plan.
+**Next: § REFINED REMAINING-RUN PLAN (v2) in the test plan** — start at **R-1/T0** (flip `LEXI_TEAMS_TEXT_ONLY=true`, deploy, verify typed `approve #N` routing + S-1 refusal live while closed), then the merged R-2 threads (C/G/I/J/K/L/O on ~11 emails), Phase 2 flip, R-4 minimal-send chains. The old group-by-group ordering is superseded.
 
 ### Three blockers still gating Phase 3
-1. **Teams card buttons are dead.** Now *the* blocker — every approve/confirm/edit in Groups D/E/H is a card tap. Unchanged. Agreed direction: `LEXI_TEAMS_TEXT_ONLY=true` + execution-backed confirmations. **Not implemented.**
+1. **Teams card buttons are dead.** Resolution chosen 2026-08-03: **retire the card pipeline, go text-only** (R-0 in the test plan). The text path is already fully built — `approve/reject/show draft/send` execute via `_run_approval` (`app/teams/commands.py:178`), text pushes exist (`teams_publisher.py:368`), edits go through `lexi_update_proposal_draft`, and `LEXI_TEAMS_TEXT_ONLY` is the code default (`config.py:263`) — prod just pins it `false`. Remaining work is the flag flip + one live routing/execution-backed-confirmation check (T0), not a build.
 2. **A plain "Reply" is invisible.** Mail goes out from lexi@, so a normal Reply lands only in Lexi's mailbox, which nothing ingests (`LEXI_POLL_LEXI_MAILBOX=false`, deliberately — a Lexi-mailbox trigger reintroduces the Graph-id 404s fixed in `17e9043`). Guests must Reply All; they won't. Affects every Group H test.
 3. **Stale conclusions without calling a tool.** SOUL.md rules added; never stress-tested on the scheduling path.
 

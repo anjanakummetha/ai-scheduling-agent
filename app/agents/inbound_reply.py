@@ -155,14 +155,14 @@ def _set_needs_scheduling_guidance(
 
 
 def notify_kory_scheduling_blocked(proposal_id: int, *, reason: str = "") -> None:
-    """Blocked scheduling — escalate to Heidi first (optional Kory Teams ping if enabled)."""
-    from app.scheduling.heidi_escalation import escalate_to_heidi
+    """Blocked scheduling — escalate to Kory in Teams."""
+    from app.scheduling.kory_escalation import escalate_to_kory
 
     bundle = _fetch_proposal_bundle(proposal_id) or {}
     intent = str(bundle.get("intent_classification") or "")
     failure = _latest_scheduler_failure(proposal_id)
     failure_text = (reason or "").strip() or humanize_scheduler_failure(failure, intent=intent)
-    escalate_to_heidi(proposal_id, reason=failure_text, failure_error=failure_text)
+    escalate_to_kory(proposal_id, reason=failure_text, failure_error=failure_text)
 
 
 def _extract_suggested_guidance(reason: str) -> str | None:
@@ -187,7 +187,7 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
         else:
             return {"ok": False, "error": "guidance cannot be empty."}
     # "needs_kory" is what the escalation path actually writes
-    # (heidi_escalation._mark_needs_kory) — omitting it here meant the retry
+    # (kory_escalation._mark_needs_kory) — omitting it here meant the retry
     # tool rejected every proposal the escalation flow produced, so Kory's
     # guidance could never be applied end-to-end (live I-2 defect).
     # "rejected" is allowed on purpose: "reject #N" discards a draft, and the
@@ -236,11 +236,11 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
             "kory_message": "I found times — review the card when you can.",
         }
 
-    from app.scheduling.heidi_escalation import escalate_to_heidi
+    from app.scheduling.kory_escalation import escalate_to_kory
 
     failure = _latest_scheduler_failure(proposal_id)
     summary = humanize_scheduler_failure(failure, intent=str(bundle.get("intent_classification") or ""))
-    return escalate_to_heidi(proposal_id, reason=summary, failure_error=summary)
+    return escalate_to_kory(proposal_id, reason=summary, failure_error=summary)
 
 def _general_reply_system_prompt(
     *,
@@ -377,7 +377,7 @@ def begin_delegation_draft(proposal_id: int) -> dict[str, Any]:
     """Auto-draft after Kory CCs Lexi / delegates (skips awaiting_reply_prompt gate)."""
     import logging
 
-    from app.scheduling.heidi_escalation import escalate_to_heidi
+    from app.scheduling.kory_escalation import escalate_to_kory
     from app.scheduling.hermes_task import run_delegation_scheduling_task
 
     logger = logging.getLogger(__name__)
@@ -423,7 +423,7 @@ def begin_delegation_draft(proposal_id: int) -> dict[str, Any]:
         return _attach_draft_verification(result, proposal_id)
     except Exception as exc:
         logger.exception("Delegation draft failed for proposal %s", proposal_id)
-        return escalate_to_heidi(
+        return escalate_to_kory(
             proposal_id,
             failure_error=f"{type(exc).__name__}: {exc}",
         )

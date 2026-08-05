@@ -101,23 +101,3 @@ def test_teams_suppressed_when_dry_run(mock_settings) -> None:
     mock_settings.lexi_suppress_teams_push = False
     assert outbound_writes_allowed() is False
     assert teams_push_allowed() is False
-
-
-@patch("app.integrations.outlook_email.send_outbound_email")
-def test_escalate_to_heidi_stages_when_dry_run(mock_send) -> None:
-    from app.scheduling.heidi_escalation import compose_heidi_briefing
-
-    briefing = compose_heidi_briefing(
-        {
-            "ok": True,
-            "subject": "TEST — intro",
-            "sender": "guest@example.com",
-            "meeting_type_label": "Intro call",
-            "latest_inbound_body": "Can we meet next week?",
-            "scheduling_rules_summary": "30 minutes virtual",
-        },
-        failure_error="No slots next week",
-    )
-    assert "Anjana" in briefing
-    assert "guest@example.com" in briefing
-    assert "No slots" in briefing

@@ -150,9 +150,9 @@ def orchestrate_proposal_scheduling(
         return outcome
 
     if not outcome.get("ok"):
-        from app.scheduling.heidi_escalation import escalate_to_heidi
+        from app.scheduling.kory_escalation import escalate_to_kory
 
-        return escalate_to_heidi(
+        return escalate_to_kory(
             proposal_id,
             failure_error=str(outcome.get("error") or outcome.get("kory_message") or "scheduling_failed"),
         )
@@ -215,7 +215,7 @@ def _persist_proposal_draft(
 
 def _kory_failure_message(result: ScheduleFromContextResult) -> str:
     if result.path == "inbound_availability" and result.status == "inbound_times_invalid":
-        return result.failure_message or "Their proposed times don't work — Heidi can help."
+        return result.failure_message or "Their proposed times don't work — reply here with how you'd like to handle it."
     if result.status == "calendar_unavailable":
         return "I couldn't read the calendar right now — try again shortly."
     if result.status == "insufficient_slots":

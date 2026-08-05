@@ -428,7 +428,7 @@ def _handle_inbound_stream_locked(raw_email: dict[str, Any]) -> dict[str, Any]:
         ):
             schedule_teams_approval_push(proposal_id)
         elif (
-            final_status in {NEEDS_SCHEDULING_GUIDANCE, "needs_heidi"}
+            final_status in {NEEDS_SCHEDULING_GUIDANCE, "needs_kory"}
             and settings.lexi_teams_enabled
         ):
             logger.info(

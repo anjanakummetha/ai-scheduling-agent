@@ -599,9 +599,9 @@ def execute_lexi_approval(
                 and not result.email_sent
                 and result.errors
             ):
-                from app.scheduling.heidi_escalation import escalate_to_heidi
+                from app.scheduling.kory_escalation import escalate_to_kory
 
-                esc = escalate_to_heidi(
+                esc = escalate_to_kory(
                     proposal_id,
                     failure_error="; ".join(result.errors),
                     reason="Offer email send failed after Kory approval.",
