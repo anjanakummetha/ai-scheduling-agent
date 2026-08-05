@@ -78,6 +78,8 @@ def test_expanded_window_is_surfaced_not_silently_accepted() -> None:
     assert report.ok
     assert not report.window_verified
     assert any("no availability for week of August 10" in w for w in report.warnings)
-    assert "week of August 17" in " ".join(report.warnings)
+    # The offering label names the ACTUAL slot dates, not the ladder rung that
+    # was searched (which can disagree with where the slots landed).
+    assert "offering August 18 and August 26 instead" in " ".join(report.warnings)
     assert "match requested window" not in report.summary()
     assert "week of August 10" in report.rules_status_line()

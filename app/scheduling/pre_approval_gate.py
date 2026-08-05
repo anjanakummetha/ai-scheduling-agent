@@ -19,6 +19,28 @@ from app.scheduling.slot_engine import infer_meeting_format
 MIN_SLOT_OPTIONS = 2
 
 
+def offered_dates_label(slots: list[dict[str, Any]] | None) -> str:
+    """Human label for the offered slot dates ("August 26" / "August 26 and
+    September 2"), straight from the slots themselves — the only source that
+    can't disagree with what Kory is shown."""
+    from datetime import datetime
+
+    days: list[str] = []
+    for slot in slots or []:
+        try:
+            start = datetime.fromisoformat(str(slot["start"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        label = f"{start.strftime('%B')} {start.day}"
+        if label not in days:
+            days.append(label)
+    if not days:
+        return ""
+    if len(days) == 1:
+        return days[0]
+    return ", ".join(days[:-1]) + f" and {days[-1]}"
+
+
 @dataclass
 class PreApprovalReport:
     ok: bool
@@ -164,12 +186,31 @@ def verify_before_kory_approval(
         # answer, but it is a deviation from what the sender asked for, so it
         # must reach Kory's card instead of passing as a clean match.
         requested = original_window_label or (effective_window.label if effective_window else "")
-        offering = expanded_window_label or ""
+        # Name the dates actually offered — the ladder's rung label says which
+        # window it SEARCHED, not where the surviving slots landed (live defect:
+        # note said "week of August 18", slots were Aug 26 – Sep 8). A trailing
+        # parenthetical reason on the label ("(after travel)") is disclosure,
+        # not a date claim — keep it.
+        offering = offered_dates_label(slots)
+        if offering and expanded_window_label:
+            import re as _re
+
+            reason = _re.search(r"\(([^)]+)\)\s*$", expanded_window_label)
+            if reason:
+                offering = f"{offering} ({reason.group(1)})"
+        offering = offering or expanded_window_label or ""
         report.window_verified = False
         if requested:
             report.window_label = requested
+            # Labels like "in the next few weeks" carry their own preposition —
+            # "no availability for in ..." is word salad.
+            lead = (
+                f"no availability {requested}"
+                if requested.lower().startswith(("in ", "over ", "during "))
+                else f"no availability for {requested}"
+            )
             report.warnings.append(
-                f"no availability for {requested}"
+                lead
                 + (f" — offering {offering} instead" if offering else " — offering the next open times")
             )
     elif effective_window:

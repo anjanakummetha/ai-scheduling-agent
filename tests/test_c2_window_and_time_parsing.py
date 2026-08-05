@@ -489,3 +489,43 @@ class TestGuidanceSlotMinimumClassifier:
         )
         assert report.ok is False
         assert any("at least 2" in c for c in report.checks)
+
+
+class TestGateExpansionWarningNamesRealDates:
+    """Live defect 2026-08-05 (second sighting): the gate's window-expansion
+    warning — which outranks the diagnostics-based note — still said 'week of
+    August 18' while the offered slots were Aug 26 / Sep 2 / Sep 8."""
+
+    def test_warning_uses_slot_dates_and_clean_grammar(self):
+        from app.scheduling.pre_approval_gate import verify_before_kory_approval
+
+        report = verify_before_kory_approval(
+            slots=[
+                {"start": "2026-08-26T09:30:00-06:00", "end": "2026-08-26T10:30:00-06:00"},
+                {"start": "2026-09-02T09:30:00-06:00", "end": "2026-09-02T10:30:00-06:00"},
+            ],
+            intent="coffee",
+            subject="coffee",
+            body="coffee",
+            calendar_context={"status": "available", "busy_events": []},
+            window_expanded=True,
+            original_window_label="in the next few weeks",
+            expanded_window_label="week of August 18",
+        )
+        warning = "; ".join(report.warnings)
+        assert "August 26 and September 2" in warning
+        assert "August 18" not in warning
+        assert "for in the" not in warning
+        assert "no availability in the next few weeks" in warning
+
+    def test_offered_dates_label_shapes(self):
+        from app.scheduling.pre_approval_gate import offered_dates_label
+
+        one = [{"start": "2026-08-26T09:30:00-06:00", "end": "2026-08-26T10:30:00-06:00"}]
+        three = one + [
+            {"start": "2026-09-02T09:30:00-06:00", "end": "2026-09-02T10:30:00-06:00"},
+            {"start": "2026-09-08T08:30:00-06:00", "end": "2026-09-08T09:30:00-06:00"},
+        ]
+        assert offered_dates_label(one) == "August 26"
+        assert offered_dates_label(three) == "August 26, September 2 and September 8"
+        assert offered_dates_label([]) == ""

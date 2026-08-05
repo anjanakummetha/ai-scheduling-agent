@@ -109,24 +109,9 @@ class ScheduleFromContextResult:
         return ""
 
     def _offered_dates_label(self) -> str:
-        """Human label for the offered slot dates ("August 26" /
-        "August 26 and September 2"), straight from the slots themselves."""
-        from datetime import datetime
+        from app.scheduling.pre_approval_gate import offered_dates_label
 
-        days: list[str] = []
-        for slot in self.slots:
-            try:
-                start = datetime.fromisoformat(str(slot["start"]).replace("Z", "+00:00"))
-            except (KeyError, TypeError, ValueError):
-                continue
-            label = f"{start.strftime('%B')} {start.day}"
-            if label not in days:
-                days.append(label)
-        if not days:
-            return ""
-        if len(days) == 1:
-            return days[0]
-        return ", ".join(days[:-1]) + f" and {days[-1]}"
+        return offered_dates_label(self.slots)
 
 
 def merge_scheduling_body(body: str, kory_scheduling_guidance: str = "") -> str:
