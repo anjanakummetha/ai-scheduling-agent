@@ -692,6 +692,21 @@ services on any env change — which `scripts/deploy_lexi.sh` already does. Same
    - **Before turning the flag on, do one of:** run `--precreate`, or have Kory check the portal's
      email-logging settings. Turning it on today logs nothing, silently.
 
+**1b. Lexi's own mailbox has NO ingress — mail sent only to lexi@ is never seen.** Found 2026-08-05
+   while setting up E-6. There is exactly ONE active Composio `OUTLOOK_MESSAGE_TRIGGER`, and it is on
+   **Kory's** connection; `LEXI_POLL_LEXI_MAILBOX` is unset, so the 5-minute backup poll scans only
+   Kory's `inbox` + `sentitems` (`orchestrator.py:_lexi_mailbox_poll_enabled`). A message addressed
+   solely to `lexi@iconicfounders.com` therefore lands in her mailbox and is never ingested — no
+   proposal, no Teams card, no error anywhere.
+   - **Why existing flows work:** Lexi CCs Kory on her outbound (`cc_kory_enabled=true`), so replies
+     land in Kory's inbox and are picked up there. Every working thread runs through Kory's mailbox.
+   - **Possibly by design** — Anjana has said she wants "email Lexi an instruction" steered toward
+     chat instead. But the failure is silent, which is the part worth fixing: either enable
+     `LEXI_POLL_LEXI_MAILBOX=true`, register a trigger on `ca_4BTJ6d0O8sSZ` (the Lexi connection), or
+     auto-reply to direct mail explaining to CC her on a note to Kory instead.
+   - **Testing implication:** any live scheduling test must email **Kory** with Lexi CC'd. Emailing
+     Lexi alone tests nothing and looks like a hang.
+
 **2. `cc_emails` silently dropped on the `kory` channel.** `send_outbound_email` applies `cc_emails`
    only when `channel == "lexi"`. A caller passing CCs on the Kory channel gets them discarded with no
    error. Not fixed — outside the scope of the HubSpot work, and it needs a decision about whether the
