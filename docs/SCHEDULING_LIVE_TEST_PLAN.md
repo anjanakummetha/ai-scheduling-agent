@@ -637,6 +637,38 @@ permanently AND blacklist the address from ever being re-added to the portal.
 
 ---
 
+### RUN 11 — M-3 log sweep + M-4 budget — 2026-08-05 ✅ COMPLETE (one real finding)
+
+**Stability: good.** 7 error/warning lines in 24h on `lexi-hermes`. Both units active. Watchdog firing
+every ~5 min and finishing cleanly with no restarts triggered. Daily SQLite backup succeeded (79M).
+Worker health `ok`, heartbeat fresh, `db_writable: true`.
+
+**M-4 budget: comfortable.** Composio 14,153 / 200,000 month-to-date = **7.1%**, 92 calls today, no
+alarm. Confirms the earlier reading; no action needed.
+
+**⚠️ M-3 finding — the MCP server hangs long enough to time out user-facing Teams commands.**
+Eight 120s MCP timeouts over 7 days, on `lexi_find_slots`, `lexi_start_scheduling` and
+`lexi_handle_teams_command`, each followed by a keepalive failure and a forced reconnect. By hour:
+2 on Aug-04T08, 4 on Aug-05T01, 2 on Aug-05T03.
+- **Not deploy artifacts.** Ten service restarts during the Aug-05 23:00–00:30 deploy window produced
+  **zero** timeouts, and the Aug-05T03:59 hang had no restart anywhere near it. These are genuine
+  hangs during real scheduling work.
+- **Impact:** Kory types a command in Teams, waits two minutes, and gets an error.
+- **Not yet diagnosed.** Likely candidates: the MCP server shares its process with the embedded Lexi
+  worker (`LEXI_EMBED_WORKER=true`), so a blocking call can stall the event loop; or stacked Composio
+  retries on a slow calendar read. Worth a look before Phase 4.
+
+**Banked mystery from RUN 8 — RESOLVED (not a bug).** Stale UAT-era card copy ("Invite send is
+disabled — UAT safety") appeared while `writes_allowed=True` at check time. `_teams_writes_allowed()`
+reads the **frozen `settings` singleton, resolved at process import**, so a service not restarted
+after an env change still believes the old posture and the card honestly reflects that belief. This
+is not a card defect: the real write gates read the same stale `settings`, so making the card consult
+the live environment would only make it *disagree* with the gates. The fix is restarting both
+services on any env change — which `scripts/deploy_lexi.sh` already does. Same family as the
+"restart both or `api_v1.py` serves stale code" rule.
+
+---
+
 ### OPEN ISSUES — logged 2026-08-05, not being worked
 
 **1. HubSpot BCC does not log. Step 3 PARKED.** `LEXI_HUBSPOT_BCC_ENABLED` stays `false`.
