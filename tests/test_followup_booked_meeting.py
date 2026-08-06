@@ -157,6 +157,10 @@ def test_reschedule_dispatch_removes_previous_invite():
         with (
             _patch.object(ca, "_confirm_selected_hold", return_value=("evt-new-invite", [])),
             _patch.object(ca, "_release_unused_holds", return_value=0),
+            # The confirm-time conflict re-check fails closed, so without a
+            # calendar it refuses to book. This test is about reschedule
+            # semantics, so give it a clear calendar.
+            _patch.object(ca, "_confirm_time_conflict", return_value=None),
             _patch(
                 "app.integrations.outlook_calendar.delete_calendar_event",
                 side_effect=fake_delete,

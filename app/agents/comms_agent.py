@@ -656,6 +656,36 @@ def execute_lexi_approval(
                         selected = _resolve_selected_slot(proposal, selected_slot)
 
                     if selected:
+                        # The calendar is authoritative at the moment of booking,
+                        # not at the moment of offering. Something can land on the
+                        # slot between the offer going out and this confirmation —
+                        # so re-check here, before anything is deleted or released.
+                        clash = _confirm_time_conflict(proposal, selected)
+                        if clash:
+                            # Deliberately no confirm and NO hold release: the holds
+                            # are the only thing still protecting this slot, and
+                            # releasing them would hand it away while Kory decides.
+                            result.status = PENDING_APPROVAL
+                            result.ok = False
+                            result.holds_confirmed = 0
+                            result.errors.append(clash["error"])
+                            result.warnings = (result.warnings or []) + [clash["kory_message"]]
+                            _insert_audit_log(
+                                conn,
+                                step_name="confirm_blocked_by_conflict",
+                                reference_id=str(proposal_id),
+                                log_level="ERROR",
+                                message=clash["error"],
+                                payload={
+                                    "proposal_id": proposal_id,
+                                    "slot": selected,
+                                    "conflicting_events": clash["conflicting_events"],
+                                },
+                            )
+                            conn.execute("RELEASE SAVEPOINT lexi_execution")
+                            conn.commit()
+                            return result
+
                         confirmed_id, hold_errors = _confirm_selected_hold(
                             conn,
                             proposal_id=proposal_id,
@@ -1045,6 +1075,78 @@ def _resolve_selected_slot(proposal: dict[str, Any], selected_slot: str) -> dict
 
 def _normalize_slot_token(value: str) -> str:
     return re.sub(r"\s+", "", value.strip().lower())
+
+
+def _confirm_time_conflict(
+    proposal: dict[str, Any], selected_slot: dict[str, str]
+) -> dict[str, Any] | None:
+    """Re-check the chosen slot against the calendar at the moment of booking.
+
+    The calendar is authoritative when the invite is created, not when the offer
+    was composed — anything can land on the slot in between. Returns None when the
+    slot is still free, or a description of the clash when it is not.
+
+    Lexi's own holds for this proposal are excluded: they sit on the calendar as
+    busy blocks precisely to protect this slot, so counting them would make every
+    confirmation look like a conflict with itself.
+
+    Fails CLOSED. If the calendar cannot be read we refuse to confirm, because the
+    whole point of this check is to not double-book Kory, and "I could not look"
+    is not evidence that the slot is free.
+    """
+    from app.integrations.outlook_calendar import has_conflict
+
+    start = str(selected_slot.get("start") or "").strip()
+    end = str(selected_slot.get("end") or "").strip()
+    if not start or not end:
+        return None  # nothing to check against; the confirm path handles bad slots
+
+    own_hold_ids = [
+        str(hold.get("event_id") or "").strip()
+        for hold in (proposal.get("holds") or [])
+        if str(hold.get("event_id") or "").strip()
+    ]
+
+    try:
+        conflict, events, _ = has_conflict(
+            {"start": start, "end": end}, ignore_event_ids=own_hold_ids
+        )
+    except Exception as exc:  # noqa: BLE001 — see fail-closed note above
+        return {
+            "error": (
+                f"Could not re-check the calendar before confirming: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+            "kory_message": (
+                "I couldn't check your calendar just now, so I haven't sent the invite — "
+                "I won't book a slot I can't verify is still free. The holds are still in "
+                "place. Worth trying again in a moment."
+            ),
+            "conflicting_events": [],
+        }
+
+    if not conflict:
+        return None
+
+    labels = []
+    for event in events[:3]:
+        subject = str(event.get("subject") or "Untitled").strip()
+        when = str((event.get("start") or {}).get("dateTime") or "").strip()
+        labels.append(f"**{subject}**" + (f" ({when})" if when else ""))
+    joined = ", ".join(labels) if labels else "something new"
+
+    return {
+        "error": (
+            f"Slot {start} is no longer free — {len(events)} conflicting event(s) "
+            "appeared after the offer was sent. Invite not created."
+        ),
+        "kory_message": (
+            f"Heads up — {joined} landed on your calendar after I offered that time, "
+            "so I have **not** sent the invite and nothing is double-booked. Your holds "
+            "are still in place. Do you want me to keep this slot anyway, or offer new times?"
+        ),
+        "conflicting_events": events[:5],
+    }
 
 
 def _confirm_selected_hold(
