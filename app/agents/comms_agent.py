@@ -1140,10 +1140,17 @@ def _confirm_time_conflict(
             f"Slot {start} is no longer free — {len(events)} conflicting event(s) "
             "appeared after the offer was sent. Invite not created."
         ),
+        # Only offer what actually works. There is deliberately no override flag —
+        # that would be another model-supplied boolean Hermes could set by itself,
+        # on the one guard standing between a stale offer and a double-booking.
+        # Clearing the clash and re-approving resolves it and leaves the calendar
+        # honest, so that is what gets offered.
         "kory_message": (
             f"Heads up — {joined} landed on your calendar after I offered that time, "
             "so I have **not** sent the invite and nothing is double-booked. Your holds "
-            "are still in place. Do you want me to keep this slot anyway, or offer new times?"
+            "are still in place.\n\n"
+            "Want that time anyway? Clear the conflicting event and tell me to send it "
+            "again. Otherwise say the word and I'll offer new times."
         ),
         "conflicting_events": events[:5],
     }

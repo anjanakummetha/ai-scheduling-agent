@@ -637,6 +637,37 @@ permanently AND blacklist the address from ever being re-added to the portal.
 
 ---
 
+### RUN 12 — E-6 conflict-at-confirm, LIVE — 2026-08-06 ✅ PASSED (guard written same session)
+
+**The guard did not exist.** `has_conflict` appeared zero times in `comms_agent.py`; the confirm path
+deleted the tentative hold and created the invite with no re-check. Running E-6 as written would not
+have tested anything — it would have produced a real double-booking on Kory's calendar. Implemented
+in `a597756` before the live run.
+
+**Live run, proposal 7163** (`[TEST] E6 conflict`, anjanakummetha@gmail.com → Kory, CC Lexi):
+offer sent 01:09:26, 3 holds placed 01:09:39, `E6 conflict test` manually booked over the Aug-19
+09:00 slot, recipient chose that slot 01:18:25, invite approved in Teams 01:18:48.
+
+**Result — refused, correctly:**
+- `invite_event_id` = **none**. Nothing booked. Calendar on Aug 19 09:00 shows only Lexi's own
+  `HOLD: Intro call w/ Anjanakummetha (option 2)` and the manual `E6 conflict test` — no meeting.
+- **All 3 holds still `live`**, including the contested one. The slot stayed protected while Kory
+  decides; releasing them would have handed it away. This is why the check sits in the caller,
+  ahead of `_release_unused_holds` (which releases everything when there is no confirmed id).
+- `confirm_blocked_by_conflict` audit row written; status stayed `pending_invite`, so recoverable.
+- **Hold exclusion verified by the count:** the audit says "**1** conflicting event(s)" while *two*
+  busy events sat on that slot. Lexi's own hold was correctly ignored. Had exclusion been broken it
+  would have said 2 — and would then have refused every clean booking too, which is the failure mode
+  this live run existed to catch.
+
+**Defect found in the fix itself, corrected.** The first version's message offered to "keep this slot
+anyway". There is no override — `execute_lexi_approval` has no force flag — so that answer would have
+looped Kory through the same refusal forever. An override was deliberately NOT added: it would be
+another model-supplied boolean Hermes could set unilaterally, on the one guard between a stale offer
+and a double-booking (same weakness as the HubSpot `confirm` argument). The message now offers the
+resolution that actually works and keeps the calendar honest: clear the conflicting event, then
+re-approve.
+
 ### RUN 11 — M-3 log sweep + M-4 budget — 2026-08-05 ✅ COMPLETE (one real finding)
 
 **Stability: good.** 7 error/warning lines in 24h on `lexi-hermes`. Both units active. Watchdog firing

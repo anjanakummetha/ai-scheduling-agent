@@ -40,6 +40,10 @@ def test_conflict_blocks_the_confirm():
     # Kory is told plainly that nothing was booked, and asked what to do.
     assert "have **not** sent the invite" in clash["kory_message"]
     assert "Board call" in clash["kory_message"]
+    # Only offer resolutions that exist. There is no override flag, so promising
+    # to "keep the slot anyway" would loop Kory through the same refusal forever.
+    assert "Clear the conflicting event" in clash["kory_message"]
+    assert "keep this slot anyway" not in clash["kory_message"]
     assert clash["conflicting_events"] == [intruder]
 
 
