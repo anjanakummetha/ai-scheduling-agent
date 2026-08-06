@@ -637,6 +637,35 @@ permanently AND blacklist the address from ever being re-added to the portal.
 
 ---
 
+### RUN 13 — MCP 120s hangs ROOT-CAUSED and FIXED — 2026-08-06 (`17b8b62`)
+
+**Cause:** `mcp.server.fastmcp` calls sync tools **inline on the event loop** —
+`func_metadata.call_fn_with_arg_validation` does `return fn(...)` with no thread offload. All 87
+tools in `hermes_mcp_server.py` were plain `def` doing blocking work (Composio HTTP, LLM calls,
+SQLite), so **every tool call froze the entire MCP server for its duration**: other calls queued
+behind it and the keepalive stopped answering. Exactly the logged signature — 120s tool timeout at
+03:59:16, "keepalive failed, triggering reconnect" at 04:00:22.
+
+**Measured, not assumed.** With the old registration a 0.5s blocking tool let the event loop tick
+**0 times**. With the fix it ticks freely.
+
+**A wrong theory worth recording:** stacked Composio retries (3 attempts x 30s timeout + backoff
+≈ 106s against a 120s budget) fitted the numbers neatly. It was wrong — **zero** Composio retry
+warnings in seven days. Plausible arithmetic is not evidence.
+
+**Fix:** `_tool` wraps each registration in an async function that runs the body via
+`anyio.to_thread.run_sync`. `functools.wraps` preserves the original signature (what FastMCP reads to
+build the input schema) while `iscoroutinefunction` sees the async wrapper and awaits it.
+**MCP contract verified byte-identical: same 86 tools, zero schema diffs.**
+
+**Side benefit:** `teams_publisher`'s `asyncio.run` fallbacks now take their deterministic path
+(no running loop in a worker thread) instead of deferring work onto a loop that the tool was itself
+blocking.
+
+**Still to confirm:** the timeouts were intermittent (8 in 7 days, clustered in active-testing
+windows), so absence over the next few days of real use is the actual proof. Watch with:
+`journalctl -u lexi-hermes --since '-7 days' | grep -c 'timed out after 120'`.
+
 ### RUN 12 — E-6 conflict-at-confirm, LIVE — 2026-08-06 ✅ PASSED (guard written same session)
 
 **The guard did not exist.** `has_conflict` appeared zero times in `comms_agent.py`; the confirm path
