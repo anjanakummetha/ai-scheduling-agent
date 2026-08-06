@@ -637,6 +637,57 @@ permanently AND blacklist the address from ever being re-added to the portal.
 
 ---
 
+### RUN 14 — E-3 / E-4 hold lifecycle, LIVE — 2026-08-06 ✅ BOTH PASSED
+
+Proposal 7181 (`[TEST] E3 expiry`). Offer sent 01:55:04, 3 holds placed with real Outlook event ids.
+Compressed the 3-day wait with SQL rather than waiting: backdate `created_at` for E-3, then push
+`expires_at` into the past for E-4. Backdating `created_at` alone keeps the two tests separate —
+`expires_at` stays future so the reminder cannot be confounded by a release.
+
+**E-3 ✅** — reminder staged within one 30s cycle (`hold_reminder_staged`, 01:59:45). Status →
+`pending_approval`, draft composed with the correct three slots and Lexi's voice/sign-off, Teams card
+delivered and confirmed by Anjana. Critically: **all 3 holds still `live` and the only send row was the
+original offer** — the reminder comes BEFORE release and sends nothing on its own, which is the
+notification-before-action requirement.
+
+**E-4 ✅** — released ~95s after expiry. 3 `hold_lifecycle` audit rows, `released_expired: 3`,
+`OUTLOOK_DELETE_CALENDAR_EVENT` HTTP 200 each, no delete failures. **Verified against Outlook: 0 HOLD
+events remaining** across Aug 10 / 17 / 19 (they were all present beforehand). DB and calendar agree.
+
+**Minor copy defect:** the reminder card tells Kory *"No reply after 3 days"*, but the reminder fires at
+`created + min(reminder_after_days=3, release_hold_after_days-1=2)` = **2 days**. He is told 3, it is 2.
+
+---
+
+### ⚠️ CORRECTIONS to RUN 11 and RUN 13 — I swept the wrong log source
+
+**The application writes NO logs to the journal.** `journalctl -u lexi-hermes` contains only systemd
+lines and Hermes's startup banner — grep for `app.*|Composio|orchestrator` over 24h returns **0**.
+The real logs are files: **`/home/lexi/AI_Scheduling_Agent/logs/lexi.log`** (~139k lines, actively
+written) plus `~/.hermes/logs/{gateway,errors,agent,mcp-stderr}.log`.
+
+**RUN 11's M-3 sweep is therefore void.** "7 error lines in 24h, stability good" described the journal,
+not the application. Against the real log: **32 ERROR lines** and **24 Composio retry warnings**
+(20 `OUTLOOK_LIST_MESSAGES`, 2 `OUTLOOK_GET_MESSAGE`, 2 `OUTLOOK_GET_CALENDAR_VIEW`). M-3 needs redoing
+against `logs/lexi.log`. The M-4 budget figure was from the health endpoint and stands.
+
+**RUN 13's dismissal of the retry theory was a non-observation.** I wrote "zero Composio retry warnings
+in seven days" as evidence that retries were not implicated. There were no such warnings *in the
+journal because no application logging goes there at all*. There are 24 in the real log, and a live
+`OUTLOOK_GET_CALENDAR_VIEW` observed here timed out twice (~30s each) before succeeding.
+- The event-loop fix still stands on its own independent evidence: a 0.5s blocking tool let the loop
+  tick **0** times before, and freely after. That was measured directly, not inferred from logs.
+- But it is now likely BOTH factors: slow/retrying Composio calls make a tool take 60-90s+, and sync
+  tools then froze the loop for that whole time. **The fix stops one tool's slowness from taking down
+  the keepalive and every other call — it does NOT make the underlying call faster.** A single
+  `lexi_find_slots` doing several retrying calendar reads can still exceed the 120s MCP budget.
+- Follow-up worth doing: a per-tool deadline that abandons retries once the remaining MCP budget is
+  spent, rather than discovering it at 120s.
+
+**New issue — `outlook_poll` failures.** 4 occurrences, two of them minutes apart at 02:04:48
+(folder=inbox) and 02:06:22 (folder=sentitems), both httpx connection-pool errors reaching
+`app.orchestrator`. Inbound mail ingress depends on this poll as webhook backup, so it deserves a look.
+
 ### CLEANUP — 2026-08-06
 
 - **Tuesday-8:30 memory fact REMOVED.** `no_meetings_before_9am_tuesdays` was a K-1/K-2 test artifact
