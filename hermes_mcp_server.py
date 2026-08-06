@@ -10,9 +10,12 @@ Run with:
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 from typing import Any
+
+import anyio
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -126,6 +129,29 @@ def _wrap(action: str, fn, **kwargs: Any) -> str:
         return _error(f"{action} failed: {type(exc).__name__}: {exc}", code="exception")
 
 
+def _tool(fn):
+    """Register a tool whose body runs OFF the event loop.
+
+    mcp.server.fastmcp calls sync tools directly on the event loop —
+    func_metadata.call_fn_with_arg_validation does `return fn(...)` with no
+    thread offload. Every tool here blocks: Composio HTTP, LLM calls, SQLite.
+    So a single slow tool freezes the whole server for its duration — other
+    tool calls queue behind it and the keepalive stops answering. That is the
+    logged signature: a 120s tool timeout followed by "keepalive failed,
+    triggering reconnect".
+
+    functools.wraps keeps the original signature, which is what FastMCP reads to
+    build the input schema, while iscoroutinefunction sees the async wrapper and
+    so awaits it instead of calling it inline.
+    """
+
+    @functools.wraps(fn)
+    async def _run(*args: Any, **kwargs: Any) -> Any:
+        return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+
+    return mcp.tool()(_run)
+
+
 def _campaign_tool(fn):
     """Register an outreach-campaign tool only while the feature is switched on.
 
@@ -136,19 +162,19 @@ def _campaign_tool(fn):
     """
     from app.scheduling.outreach_campaign import campaigns_paused
 
-    return fn if campaigns_paused() else mcp.tool()(fn)
+    return fn if campaigns_paused() else _tool(fn)
 
 
 # ── Conversational assistant (Hermes drives dialogue; tools execute) ─────────
 
 
-@mcp.tool()
+@_tool
 def lexi_get_inbound_reply_queue() -> str:
     """New inbound emails awaiting Kory's yes/no on whether to draft a reply."""
     return _wrap("lexi_get_inbound_reply_queue", lexi.get_inbound_reply_queue_action)
 
 
-@mcp.tool()
+@_tool
 def lexi_draft_reply_for_email(subject_contains: str, voice_mode: str = "kory") -> str:
     """Kory asked in chat to draft a reply (no CC Lexi). Finds email by subject fragment, slots + card.
 
@@ -162,7 +188,7 @@ def lexi_draft_reply_for_email(subject_contains: str, voice_mode: str = "kory") 
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_begin_draft_reply(proposal_id: str, voice_mode: str = "kory") -> str:
     """After Kory says yes (or chat draft): draft reply. voice_mode: kory | lexi. Quote kory_message to Kory."""
     try:
@@ -177,7 +203,7 @@ def lexi_begin_draft_reply(proposal_id: str, voice_mode: str = "kory") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_get_scheduling_context(proposal_id: str) -> str:
     """Facts packet for a proposal: thread, meeting type, slots, rules, voice — for Hermes compose."""
     try:
@@ -191,7 +217,7 @@ def lexi_get_scheduling_context(proposal_id: str) -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_escalate_to_kory(proposal_id: str, reason: str = "") -> str:
     """Notify Kory in Teams when scheduling cannot be completed. Kory is the
     ONLY escalation target — never offer to flag, forward, or hand off an issue
@@ -208,7 +234,7 @@ def lexi_escalate_to_kory(proposal_id: str, reason: str = "") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_retry_scheduling(proposal_id: str, guidance: str) -> str:
     """THE tool to run whenever Kory answers a scheduling escalation with guidance —
     "retry scheduling", "lunch is fine / approved for this one", "offer next week
@@ -235,7 +261,7 @@ def lexi_retry_scheduling(proposal_id: str, guidance: str) -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_begin_reoffer(proposal_id: str) -> str:
     """After recipient declined offered times: find new slots and stage approval card."""
     try:
@@ -245,7 +271,7 @@ def lexi_begin_reoffer(proposal_id: str) -> str:
     return _wrap("lexi_begin_reoffer", lexi.begin_reoffer_action, proposal_id=pid)
 
 
-@mcp.tool()
+@_tool
 def lexi_recipient_timezone(sender_email: str = "", body: str = "") -> str:
     """Detect recipient timezone from domain, body cues, or email headers (never assumes)."""
     return _wrap(
@@ -256,7 +282,7 @@ def lexi_recipient_timezone(sender_email: str = "", body: str = "") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_decline_inbound_reply(proposal_id: str, reason: str = "") -> str:
     """Kory declined to draft a reply for this inbound email."""
     try:
@@ -271,7 +297,7 @@ def lexi_decline_inbound_reply(proposal_id: str, reason: str = "") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_update_proposal_draft(proposal_id: str, drafted_reply: str) -> str:
     """Apply Kory's edits to a staged draft before send."""
     try:
@@ -286,7 +312,7 @@ def lexi_update_proposal_draft(proposal_id: str, drafted_reply: str) -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_list_calendars(role: str = "read") -> str:
     """List Outlook calendars by name (read=Kory, write=pilot/production mailbox).
 
@@ -295,7 +321,7 @@ def lexi_list_calendars(role: str = "read") -> str:
     return _wrap("lexi_list_calendars", lexi.list_calendars, role=role)
 
 
-@mcp.tool()
+@_tool
 def lexi_add_conflict_calendar(calendar_name: str) -> str:
     """Add an Outlook calendar to Lexi's busy/free conflict list (updates config/calendars.yaml).
 
@@ -309,13 +335,13 @@ def lexi_add_conflict_calendar(calendar_name: str) -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_preview_scheduling_email() -> str:
     """Show an example scheduling reply with correct Kory formatting (TZ + sign-off)."""
     return _wrap("lexi_preview_scheduling_email", lexi.preview_scheduling_email_example)
 
 
-@mcp.tool()
+@_tool
 def lexi_get_system_status() -> str:
     """Lexi runtime status (internal). Tell Kory only the kory_brief field — never outlook_timezone or connection IDs."""
     from app.worker.runner import is_worker_running
@@ -332,7 +358,7 @@ def lexi_get_system_status() -> str:
     return _wrap("lexi_get_system_status", _status)
 
 
-@mcp.tool()
+@_tool
 def lexi_inbox_review(hours: str = "48") -> str:
     """48-hour inbox activity summary + open action items for Kory. Trigger: Kory says 'inbox review'."""
     try:
@@ -342,7 +368,7 @@ def lexi_inbox_review(hours: str = "48") -> str:
     return _wrap("lexi_inbox_review", lexi.inbox_review_action, hours=window)
 
 
-@mcp.tool()
+@_tool
 def lexi_unanswered_brief(hours: str = "72") -> str:
     """Emails Kory may still need to reply to. Teams shortcut: `unanswered`."""
     try:
@@ -352,13 +378,13 @@ def lexi_unanswered_brief(hours: str = "72") -> str:
     return _wrap("lexi_unanswered_brief", lexi.unanswered_brief_action, hours=window)
 
 
-@mcp.tool()
+@_tool
 def lexi_today_calendar() -> str:
     """Today's calendar for Kory. Teams shortcut: `today`."""
     return _wrap("lexi_today_calendar", lexi.today_calendar_brief_action)
 
 
-@mcp.tool()
+@_tool
 def lexi_prebrief(include_research: str = "false") -> str:
     """List today's meetings so Kory can choose one to be briefed on. Fast.
 
@@ -369,7 +395,7 @@ def lexi_prebrief(include_research: str = "false") -> str:
     return _wrap("lexi_prebrief", lexi.prebrief_action)
 
 
-@mcp.tool()
+@_tool
 def lexi_meeting_brief(meeting: str) -> str:
     """Full pre-call brief on EVERY external attendee of one meeting.
 
@@ -384,7 +410,7 @@ def lexi_meeting_brief(meeting: str) -> str:
     return _wrap("lexi_meeting_brief", lexi.meeting_brief_action, meeting=meeting)
 
 
-@mcp.tool()
+@_tool
 def lexi_precall_brief(person: str) -> str:
     """Full pre-call brief on ONE person, by name or email address.
 
@@ -400,7 +426,7 @@ def lexi_precall_brief(person: str) -> str:
     return _wrap("lexi_precall_brief", lexi.precall_brief_action, person=person)
 
 
-@mcp.tool()
+@_tool
 def lexi_today() -> str:
     """The current date and time in Kory's timezone (America/Denver).
 
@@ -425,7 +451,7 @@ def lexi_today() -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_list_asana_projects() -> str:
     """Every Asana project Lexi can read for Kory (reads span all of them).
 
@@ -435,13 +461,13 @@ def lexi_list_asana_projects() -> str:
     return _wrap("lexi_list_asana_projects", lexi.list_asana_projects_action)
 
 
-@mcp.tool()
+@_tool
 def lexi_list_asana_boards() -> str:
     """Boards (sections) available for new tasks — General, Personal, YPO, etc."""
     return _wrap("lexi_list_asana_boards", lexi.list_asana_boards_action)
 
 
-@mcp.tool()
+@_tool
 def lexi_list_asana_tasks(bucket: str = "due_today", who: str = "kory") -> str:
     """List Asana tasks: overdue | due_today | upcoming | all | completed (read-only).
 
@@ -457,7 +483,7 @@ def lexi_list_asana_tasks(bucket: str = "due_today", who: str = "kory") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_create_asana_task(
     title: str,
     notes: str = "",
@@ -478,7 +504,7 @@ def lexi_create_asana_task(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_complete_asana_task(task_gid: str, confirm: str = "false",
     owner_ack: str = "false",
 ) -> str:
@@ -493,7 +519,7 @@ def lexi_complete_asana_task(task_gid: str, confirm: str = "false",
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_update_asana_task(
     task_gid: str,
     title: str = "",
@@ -516,7 +542,7 @@ def lexi_update_asana_task(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_delete_asana_task(task_gid: str, confirm: str = "false",
     owner_ack: str = "false",
 ) -> str:
@@ -531,13 +557,13 @@ def lexi_delete_asana_task(task_gid: str, confirm: str = "false",
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_search_asana_tasks(query: str) -> str:
     """Search Asana tasks by name across NON-IFG + related projects (read-only)."""
     return _wrap("lexi_search_asana_tasks", lexi.search_asana_tasks_action, query=query)
 
 
-@mcp.tool()
+@_tool
 def lexi_move_asana_task(
     task_gid: str,
     section_gid: str = "",
@@ -556,7 +582,7 @@ def lexi_move_asana_task(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_comment_asana_task(task_gid: str, comment: str, confirm: str = "false",
     owner_ack: str = "false",
 ) -> str:
@@ -572,13 +598,13 @@ def lexi_comment_asana_task(task_gid: str, comment: str, confirm: str = "false",
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_status() -> str:
     """HubSpot connection status (read-only sample)."""
     return _wrap("lexi_hubspot_status", lexi.hubspot_status_action)
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_cleanup_proposals(inactive_days: str = "180") -> str:
     """CRM health report for Kory's contacts: where the book is thin. Read-only."""
     try:
@@ -588,14 +614,14 @@ def lexi_hubspot_cleanup_proposals(inactive_days: str = "180") -> str:
     return _wrap("lexi_hubspot_cleanup_proposals", lexi.hubspot_cleanup_proposals_action, inactive_days=days)
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_health_report(all_owners: str = "false") -> str:
     """Where Kory's CRM is incomplete — counts are portal-wide, not a sample. Read-only."""
     every = all_owners.strip().lower() in {"1", "true", "yes"}
     return _wrap("lexi_hubspot_health_report", lexi.hubspot_health_report_action, all_owners=every)
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_find_contacts(
     company: str = "",
     quiet_days: str = "0",
@@ -630,13 +656,13 @@ def lexi_hubspot_find_contacts(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_compare_books() -> str:
     """Compare Kory's contact book against the other IFG owners. Read-only."""
     return _wrap("lexi_hubspot_compare_books", lexi.hubspot_compare_books_action)
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_recent_changes(days: str = "7") -> str:
     """What changed in HubSpot lately: new contacts and deal stage movements. Read-only."""
     try:
@@ -656,7 +682,7 @@ def lexi_hubspot_outreach_batch(goal: str = "", limit: str = "10") -> str:
     return _wrap("lexi_hubspot_outreach_batch", lexi.hubspot_outreach_batch_action, goal=goal, limit=n)
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_duplicate_merges(limit: str = "50") -> str:
     """Propose duplicate contact merges — staged only; HubSpot writes blocked for now."""
     try:
@@ -666,7 +692,7 @@ def lexi_hubspot_duplicate_merges(limit: str = "50") -> str:
     return _wrap("lexi_hubspot_duplicate_merges", lexi.hubspot_duplicate_merges_action, limit=n)
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_enrich_contacts(limit: str = "25") -> str:
     """Propose job title/company fills from Kory's own email signatures.
 
@@ -680,7 +706,7 @@ def lexi_hubspot_enrich_contacts(limit: str = "25") -> str:
     return _wrap("lexi_hubspot_enrich_contacts", lexi.hubspot_enrichment_action, limit=n)
 
 
-@mcp.tool()
+@_tool
 def lexi_lookup_person(name: str = "", email: str = "") -> str:
     """Who is this person? Use for ANY question about a specific individual.
 
@@ -703,7 +729,7 @@ def lexi_lookup_person(name: str = "", email: str = "") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_prebrief_enrich(email: str = "", name: str = "") -> str:
     """Alias of lexi_lookup_person, kept for existing prebrief shortcuts."""
     return _wrap(
@@ -714,7 +740,7 @@ def lexi_hubspot_prebrief_enrich(email: str = "", name: str = "") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_meeting_note(
     email: str,
     note: str,
@@ -741,7 +767,7 @@ def lexi_hubspot_meeting_note(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_outreach_candidates(
     goal: str = "",
     lifecycle: str = "",
@@ -761,7 +787,7 @@ def lexi_hubspot_outreach_candidates(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_hubspot_deals_snapshot(limit: str = "8") -> str:
     """Open HubSpot deals for CEO briefing (read-only)."""
     try:
@@ -863,7 +889,7 @@ def lexi_remove_outreach_recipient(campaign_id: str, email: str) -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_register_teams_conversation(
     conversation_id: str,
     service_url: str = "",
@@ -887,7 +913,7 @@ def lexi_register_teams_conversation(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     """MANDATORY router for Lexi commands. If Kory's message starts with (or is)
     approve / reject / discard / cancel / send / draft / show draft / pending /
@@ -919,7 +945,7 @@ def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     return json.dumps(_chat_text_breaks({"ok": result.get("ok", False), **result}), default=str)
 
 
-@mcp.tool()
+@_tool
 def lexi_handle_teams_card_submit(payload_json: str, authorized_by: str = "kory") -> str:
     """Process an editable approval Adaptive Card submit (draft edits + Send/Discard/Save).
 
@@ -937,7 +963,7 @@ def lexi_handle_teams_card_submit(payload_json: str, authorized_by: str = "kory"
     return json.dumps(_chat_text_breaks({"ok": result.get("ok", False), **result}), default=str)
 
 
-@mcp.tool()
+@_tool
 def lexi_get_calendar_availability(days: str = "0") -> str:
     """Quick busy/free read (internal). For day-by-day week summaries use lexi_summarize_calendar_window."""
     try:
@@ -947,7 +973,7 @@ def lexi_get_calendar_availability(days: str = "0") -> str:
     return _wrap("lexi_get_calendar_availability", lexi.get_calendar_availability, days=window)
 
 
-@mcp.tool()
+@_tool
 def lexi_summarize_calendar_window(query: str) -> str:
     """Day-by-day calendar summary from live Master + work Calendar (read-only).
 
@@ -957,7 +983,7 @@ def lexi_summarize_calendar_window(query: str) -> str:
     return _wrap("lexi_summarize_calendar_window", lexi.summarize_calendar_window, query=query.strip())
 
 
-@mcp.tool()
+@_tool
 def lexi_check_time_slot(start_iso: str, end_iso: str) -> str:
     """Check if a start/end ISO interval conflicts with Kory's calendar."""
     return _wrap(
@@ -968,7 +994,7 @@ def lexi_check_time_slot(start_iso: str, end_iso: str) -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_place_calendar_hold(
     title: str,
     start_iso: str,
@@ -999,7 +1025,7 @@ def lexi_place_calendar_hold(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_draft_outbound_email(
     to_email: str,
     subject: str,
@@ -1027,7 +1053,7 @@ def lexi_draft_outbound_email(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_send_outbound_email(
     to_email: str,
     subject: str,
@@ -1054,7 +1080,7 @@ def lexi_send_outbound_email(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_create_reservation_reminder(
     meeting_subject: str,
     time_slot: str = "",
@@ -1087,7 +1113,7 @@ def lexi_create_reservation_reminder(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_search_inbox(query: str = "", top: str = "10") -> str:
     """Search Kory's Outlook inbox (read-only). Use before drafting replies."""
     try:
@@ -1097,13 +1123,13 @@ def lexi_search_inbox(query: str = "", top: str = "10") -> str:
     return _wrap("lexi_search_inbox", lexi.search_inbox, query=query, top=limit)
 
 
-@mcp.tool()
+@_tool
 def lexi_get_thread(message_id: str) -> str:
     """Fetch a single Kory inbox message by Outlook message id."""
     return _wrap("lexi_get_thread", lexi.get_email_thread, message_id=message_id)
 
 
-@mcp.tool()
+@_tool
 def lexi_find_slots(
     subject: str,
     body: str,
@@ -1128,7 +1154,7 @@ def lexi_find_slots(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_preview_schedule(
     subject: str,
     body: str,
@@ -1148,7 +1174,7 @@ def lexi_preview_schedule(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_propose_schedule(
     subject: str,
     body: str,
@@ -1166,7 +1192,7 @@ def lexi_propose_schedule(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_validate_slots(slots_json: str, intent: str = "") -> str:
     """Validate ISO slots against Kory rules AND the live calendar."""
     try:
@@ -1183,7 +1209,7 @@ def lexi_validate_slots(slots_json: str, intent: str = "") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_validate_scheduling_cases(preset: str = "", cases_json: str = "[]") -> str:
     """MANDATORY for 'validate these slots' chat asks — live calendar + Kory rules per slot.
 
@@ -1206,13 +1232,13 @@ def lexi_validate_scheduling_cases(preset: str = "", cases_json: str = "[]") -> 
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_get_scheduling_session(session_id: str) -> str:
     """Load a multi-turn Hermes scheduling session."""
     return _wrap("lexi_get_scheduling_session", lexi.get_scheduling_session, session_id=session_id)
 
 
-@mcp.tool()
+@_tool
 def lexi_upsert_scheduling_session(
     session_id: str = "",
     channel: str = "hermes",
@@ -1236,7 +1262,7 @@ def lexi_upsert_scheduling_session(
     return _wrap("lexi_upsert_scheduling_session", lexi.upsert_scheduling_session, **kwargs)
 
 
-@mcp.tool()
+@_tool
 def lexi_start_scheduling(
     recipient_email: str,
     subject: str,
@@ -1291,7 +1317,7 @@ def lexi_start_scheduling(
 # ── Outlook scheduling actions (Composio SDK behind Lexi — not Composio MCP) ──
 
 
-@mcp.tool()
+@_tool
 def lexi_execute_outlook_action(
     slug: str,
     arguments_json: str = "{}",
@@ -1310,13 +1336,13 @@ def lexi_execute_outlook_action(
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_accept_calendar_invite(event_id: str) -> str:
     """Accept a calendar invite on Kory's calendar (read-only UAT: dry-run blocked)."""
     return _wrap("lexi_accept_calendar_invite", lexi.accept_calendar_invite_action, event_id=event_id)
 
 
-@mcp.tool()
+@_tool
 def lexi_decline_calendar_invite(event_id: str, comment: str = "") -> str:
     """Decline a calendar invite (blocked in read-only UAT)."""
     return _wrap(
@@ -1327,13 +1353,13 @@ def lexi_decline_calendar_invite(event_id: str, comment: str = "") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_find_meeting_times(payload_json: str) -> str:
     """Find meeting times (internal). Tell Kory only whether times exist — never mention Outlook API or engine details."""
     return _wrap("lexi_find_meeting_times", lexi.find_meeting_times_action, payload_json=payload_json)
 
 
-@mcp.tool()
+@_tool
 def lexi_get_thread_context(conversation_id: str, exclude_message_id: str = "") -> str:
     """Load prior messages in an Outlook conversation for accurate replies."""
     return _wrap(
@@ -1344,7 +1370,7 @@ def lexi_get_thread_context(conversation_id: str, exclude_message_id: str = "") 
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_remember_kory_fact(fact_key: str, fact_value: str) -> str:
     """Save an explicit long-term preference Kory stated (not chat thread memory)."""
     return _wrap(
@@ -1355,7 +1381,7 @@ def lexi_remember_kory_fact(fact_key: str, fact_value: str) -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_list_kory_memory() -> str:
     """List saved Kory facts (long-term memory)."""
     return _wrap("lexi_list_kory_memory", lexi.list_kory_memory_action)
@@ -1364,13 +1390,13 @@ def lexi_list_kory_memory() -> str:
 # ── Composio Search (web, travel, maps — read-only; uses COMPOSIO_API_KEY) ───
 
 
-@mcp.tool()
+@_tool
 def lexi_web_search(query: str) -> str:
     """Search the web for venues, restaurants, travel info, research. Read-only."""
     return _wrap("lexi_web_search", lexi.web_search_action, query=query)
 
 
-@mcp.tool()
+@_tool
 def lexi_search_flights(query: str = "", payload_json: str = "{}") -> str:
     """Search flights. Use query='Denver to NYC March 15' or JSON with departure_id/arrival_id/outbound_date."""
     return _wrap(
@@ -1381,25 +1407,25 @@ def lexi_search_flights(query: str = "", payload_json: str = "{}") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_search_hotels(payload_json: str) -> str:
     """Search hotels. JSON: q, check_in_date, check_out_date, adults (required: q)."""
     return _wrap("lexi_search_hotels", lexi.search_hotels_action, payload_json=payload_json)
 
 
-@mcp.tool()
+@_tool
 def lexi_search_maps(query: str) -> str:
     """Google Maps search for venues, restaurants, addresses near a location."""
     return _wrap("lexi_search_maps", lexi.search_maps_action, query=query)
 
 
-@mcp.tool()
+@_tool
 def lexi_search_news(query: str) -> str:
     """News search for context on meetings, companies, events."""
     return _wrap("lexi_search_news", lexi.search_news_action, query=query)
 
 
-@mcp.tool()
+@_tool
 def lexi_fetch_url_content(url: str, max_characters: int = 8000) -> str:
     """Fetch readable text from a public URL (docs, venue pages, articles)."""
     return _wrap(
@@ -1410,7 +1436,7 @@ def lexi_fetch_url_content(url: str, max_characters: int = 8000) -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_execute_search_action(slug: str, arguments_json: str = "{}") -> str:
     """Run any allowlisted COMPOSIO_SEARCH_* slug (events, TripAdvisor, shopping, etc.)."""
     return _wrap(
@@ -1421,13 +1447,13 @@ def lexi_execute_search_action(slug: str, arguments_json: str = "{}") -> str:
     )
 
 
-@mcp.tool()
+@_tool
 def lexi_get_family_calendar_status() -> str:
     """Check if family Google calendar (Do Not Move blocks) is configured for weekend scheduling."""
     return _wrap("lexi_get_family_calendar_status", lexi.get_family_calendar_status_action)
 
 
-@mcp.tool()
+@_tool
 def lexi_research_person(
     name: str,
     company: str = "",
@@ -1449,7 +1475,7 @@ def lexi_research_person(
 # ── Inbound email approval queue (existing Teams / dashboard flow) ────────────
 
 
-@mcp.tool()
+@_tool
 def get_lexi_pending_queue_tool() -> str:
     """Return Lexi proposals awaiting CEO approval (pending_approval) from inbound email."""
     try:
@@ -1472,13 +1498,13 @@ def get_lexi_pending_queue_tool() -> str:
         )
 
 
-@mcp.tool()
+@_tool
 def get_pending_decisions() -> str:
     """Alias for get_lexi_pending_queue_tool."""
     return get_lexi_pending_queue_tool()
 
 
-@mcp.tool()
+@_tool
 def execute_lexi_approval_tool(
     proposal_id: str,
     decision: str,
@@ -1534,7 +1560,7 @@ def execute_lexi_approval_tool(
         )
 
 
-@mcp.tool()
+@_tool
 def approve_decision(
     decision_id: str,
     selected_slot: str = "",
@@ -1566,7 +1592,7 @@ def approve_decision(
     )
 
 
-@mcp.tool()
+@_tool
 def modify_and_approve_decision(
     decision_id: str,
     new_time: str,
@@ -1584,7 +1610,7 @@ def modify_and_approve_decision(
     )
 
 
-@mcp.tool()
+@_tool
 def reject_decision(decision_id: str, reason: str, authorized_by: str = "kory") -> str:
     """Reject a pending inbound proposal."""
     return execute_lexi_approval_tool(

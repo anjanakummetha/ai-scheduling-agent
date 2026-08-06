@@ -164,13 +164,19 @@ class TestMcpResultNormalization:
         assert payload["message"] == "Bad\n\nthing"
 
     def test_teams_command_tool_normalizes_message(self):
+        import asyncio
+
         import hermes_mcp_server as mcp_mod
 
         with patch(
             "app.teams.commands.handle_teams_command",
             return_value={"ok": True, "handled": True, "message": "One\nTwo"},
         ):
-            payload = json.loads(mcp_mod.lexi_handle_teams_command("pending"))
+            # Tools are async now: their bodies run on a worker thread so a
+            # blocking call cannot freeze the MCP event loop.
+            payload = json.loads(
+                asyncio.run(mcp_mod.lexi_handle_teams_command("pending"))
+            )
         assert payload["message"] == "One\n\nTwo"
 
 
