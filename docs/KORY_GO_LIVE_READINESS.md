@@ -5,11 +5,12 @@ someone who was not in the session.
 
 ---
 
-## The headline: "all capabilities" is not the current state
+## Posture at go-live
 
-Three capability groups are **switched off** right now. Nothing is broken about them being
-off — it is a deliberate posture — but if Kory expects them tomorrow he will find they do
-nothing. **This needs a decision before he starts.**
+Reads and writes are ON for both HubSpot and Asana (Anjana's call, 2026-08-06 — she tested
+Asana writes; HubSpot writes were tested in-session, see below). Two things are deliberately
+scrapped for now and **Kory has already been told** they do nothing: emailing Lexi directly,
+and outreach campaigns.
 
 | Capability | State | Why |
 |---|---|---|
@@ -19,10 +20,11 @@ nothing. **This needs a decision before he starts.**
 | HubSpot **reads** (lookups, pre-briefs, deals, health) | **ON** | Proven live |
 | Asana **reads** | **ON** | Proven 2026-07-28 |
 | Morning briefing email | **ON** | Sends 4:45 AM MT; content not yet eyeballed by a human |
-| **HubSpot writes** (meeting notes) | **OFF** | Works — proven 2026-08-05 — but see risk below |
+| **HubSpot writes** (meeting notes) | **ON** | Live-tested 2026-08-05, all 4 guardrails pass |
+| **Asana writes** | **ON** | Anjana tested these |
 | **HubSpot BCC logging** | **OFF** | Does not work. Parked, see OPEN ISSUES #1 |
-| **Asana writes** | **OFF** | Never live-tested against Kory's real account |
-| **Outreach campaigns** | **OFF** | Deliberately parked |
+| **Outreach campaigns** | **OFF** | Scrapped for now; Kory informed |
+| **Emailing lexi@ directly** | **N/A** | No ingress watches that mailbox; Kory informed |
 
 ---
 
@@ -46,8 +48,8 @@ nothing. **This needs a decision before he starts.**
 ## Known rough edges Kory may hit
 
 1. **Emailing `lexi@iconicfounders.com` directly does nothing.** No trigger and no poll watches
-   that mailbox; every working flow runs through Kory's. If he wants Lexi to act on something,
-   he should use Teams chat, or CC her on a mail to himself. Silent no-op otherwise.
+   that mailbox; every working flow runs through Kory's. Teams chat, or CC her on a mail to
+   Kory. Kory has been told. (Scrapped rather than fixed for now.)
 2. **Inbound mail can lag up to ~5 minutes.** The webhook occasionally drops a message because
    Microsoft Graph 404s on a just-arrived id (its own error says to retry later); the 5-minute
    backup poll recovers it. 14 such drops in 48h. Delay, not loss — verified that proposals
@@ -74,9 +76,13 @@ other-owner guard. Nothing independently verifies Kory said yes — unlike sched
 proposals table, a typed `approve #N`, and an audited `decision_source`. Hermes has a logged
 history of claiming things were done that were not. With the flag off, that risk is zero.
 
-**Recommendation:** leave it OFF for Kory's first day and let him exercise scheduling, which has
-a real approval chain. Turn HubSpot writes on afterwards, ideally behind a typed approval rather
-than a model-supplied boolean.
+**Decision (Anjana, 2026-08-06): ON.** Both HubSpot and Asana writes are enabled. The residual
+risk above is accepted and stands as a design item — worth replacing the model-supplied boolean
+with a typed approval, as scheduling already has, rather than leaving it as the only thing
+between Hermes and a CRM write.
+
+**Rollback:** `cp .env.bak.20260805-222013 .env` then `systemctl restart lexi-hermes lexi-api`,
+or set the two `*_LIVE_WRITES_ENABLED` flags back to `false` and restart both.
 
 ---
 
@@ -89,7 +95,8 @@ than a model-supplied boolean.
 - Timers: watchdog (5 min), backup (hourly), morning briefing (4:45 AM MT) all firing
 - Test suite: **615 passing**
 - Posture: `LEXI_DRY_RUN=false`, `LEXI_REQUIRE_KORY_APPROVAL=true`,
-  `LEXI_AUTO_EXECUTE_ENABLED=false`, all write flags off as tabled above
+  `LEXI_AUTO_EXECUTE_ENABLED=false`, `LEXI_HUBSPOT_LIVE_WRITES_ENABLED=true`,
+  `LEXI_ASANA_LIVE_WRITES_ENABLED=true`, outreach flags false
 
 ## If something goes wrong tomorrow
 
