@@ -57,14 +57,26 @@ def compose_hold_reminder_draft(
     return body
 
 
-def _reminder_due_at(created_at: str, expires_at: str | None) -> datetime | None:
-    """When to stage a hold reminder (default: 1 day before hold release)."""
+def effective_reminder_days() -> int:
+    """Days after hold creation when the reminder actually fires.
+
+    Not simply `reminder_after_days`: the reminder has to land BEFORE the release,
+    so it is clamped to one day short of it. With both rules at 3 that means the
+    reminder fires at 2 days, not 3. Kory's Teams card quotes this number, and
+    quoting the unclamped rule told him "no reply after 3 days" for something
+    that triggers at 2.
+    """
     reminder_days = int(kory_rules.HOLD_RULES.get("reminder_after_days", 3))
     release_days = int(kory_rules.HOLD_RULES.get("release_hold_after_days", 3))
+    return min(reminder_days, max(1, release_days - 1))
+
+
+def _reminder_due_at(created_at: str, expires_at: str | None) -> datetime | None:
+    """When to stage a hold reminder (default: 1 day before hold release)."""
     created = _parse_iso(created_at)
     expires = _parse_iso(expires_at)
     if created:
-        return created + timedelta(days=min(reminder_days, max(1, release_days - 1)))
+        return created + timedelta(days=effective_reminder_days())
     if expires:
         return expires - timedelta(days=1)
     return None

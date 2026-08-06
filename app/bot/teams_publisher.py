@@ -829,6 +829,8 @@ async def push_hold_reminder_for_proposal_id(proposal_id: int) -> None:
     if not note.startswith(HOLD_REMINDER_PREFIX):
         return
 
+    from app.scheduling.hold_reminder import effective_reminder_days as _effective_reminder_days
+
     subject = str(row["subject"] or "(no subject)")
     sender = str(row["sender"] or "unknown")
     preview = str(row["drafted_reply"] or "")[:400]
@@ -836,7 +838,10 @@ async def push_hold_reminder_for_proposal_id(proposal_id: int) -> None:
         f"**Lexi — hold reminder draft (approve to send)**\n"
         f"**{subject}**\n"
         f"From {sender}\n\n"
-        f"No reply after {kory_rules.HOLD_RULES.get('reminder_after_days', 3)} days — "
+        # The effective threshold, not the raw rule: the reminder is clamped to
+        # land before the release, so quoting reminder_after_days told Kory
+        # "3 days" for something that fires at 2.
+        f"No reply after {_effective_reminder_days()} days — "
         f"review the reminder below and tap **Send** when ready.\n\n"
         f"{preview}"
     )

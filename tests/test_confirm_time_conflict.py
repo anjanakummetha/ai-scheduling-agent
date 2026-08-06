@@ -128,3 +128,20 @@ def test_conflict_leaves_the_holds_in_place():
     # hand the slot away while Kory is still deciding.
     mock_confirm.assert_not_called()
     mock_release.assert_not_called()
+
+
+def test_reminder_card_quotes_the_threshold_that_actually_fires():
+    """Kory's card said 'no reply after 3 days' for a reminder that fires at 2.
+
+    The reminder is clamped to land before the release (release_days - 1), so the
+    raw reminder_after_days rule is not what triggers it.
+    """
+    from app.scheduling.hold_reminder import _reminder_due_at, effective_reminder_days
+
+    days = effective_reminder_days()
+    assert days == 2, f"expected the clamped threshold, got {days}"
+
+    created = "2026-08-01T00:00:00+00:00"
+    due = _reminder_due_at(created, "2026-08-04T00:00:00+00:00")
+    assert due is not None
+    assert due.day == 3, "the quoted number must match when it actually fires"
