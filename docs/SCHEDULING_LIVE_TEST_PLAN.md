@@ -585,6 +585,105 @@ Thread #7041 ran the REAL production flow end-to-end: Anjana emailed Kory alone 
 
 Remaining before Phase 4: box-side E-3/E-4 (expiry sweeps via SQL backdate), E-6 (conflict-at-confirm, safety-critical), M-1/M-2 (4:45 AM briefing "⏳ Waiting on you" + overnight), M-3 (log sweep incl. stale-card mystery), M-4 (budget). Cleanup list: delete Aug 10 + Aug 24 test meetings (Aug 24 shows declined; Aug 10's proposal lacks invite_event_id — delete via calendar directly), reject #6481/#6244, delete #6235 stale offer thread, remove Tuesday-8:30 memory fact, sweep [TEST] emails. Suite 591.
 
+### RUN 10 — HubSpot write test LIVE, steps 2 & 4 — 2026-08-05 ✅ PASSED; step 3 (BCC) ⏸ PARKED
+
+Run against the real portal via `scripts/hs_write_test.py`, with
+`LEXI_HUBSPOT_LIVE_WRITES_ENABLED=true` overridden **for that one process only** — the live
+`lexi-hermes`/`lexi-api` services kept writes OFF throughout, so there was never a window in which the
+gateway could write to the CRM unsupervised. Prefer this over the flag-flip-and-restart the plan
+originally described.
+
+**Steps 2 & 4 passed clean.**
+- **2b/2c** — meeting note written for real, then read back off the note object: correct
+  `hs_note_body` (with the `Meeting: <subject>` prefix), `hs_timestamp` set, owned by Kory, correctly
+  associated to the contact.
+- **4a** unknown address → `contact_not_found`, nothing written. **4b** `approved=False` →
+  `PermissionError`. **4c** fuzzy address → refused, no write. **4d** contact owned by another
+  employee (Brent Rumpf, owner `159291600`, the departed employee) → `owner_confirmation_required`.
+  **4e** DNC informational only — the ruling for Kory is still open.
+- Cleanup verified: note deleted, contact archived, **zero residue** in the portal. Posture unchanged.
+
+**⚠️ The headline bug: `HUBSPOT_CREATE_NOTE` was malformed and the feature had never worked**
+(`b84f301`). Both call sites sent `{"contactId": ..., "body": ...}`. Neither key exists in that tool's
+schema, and its one required field `hs_timestamp` was never sent. Every meeting note would have been
+rejected or filed empty and attached to nobody.
+
+**Why RUN 9 could not have caught it:** stubbing `execute_hubspot_tool` captures the arguments we
+MEANT to send and never compares them against what the tool actually accepts. A payload can review as
+perfect and be unsendable. **Validate shapes against
+`get_composio().tools.get_raw_composio_tools(toolkits=[...])[slug].input_parameters`, never against
+the vendor's REST docs** — Composio's schemas differ per tool, inconsistently.
+
+**Composio schema gotchas, all verified live:**
+| Tool | Shape |
+|---|---|
+| `HUBSPOT_CREATE_CONTACT` | **Flat** top-level fields. Silently ignores a nested `properties` object and creates a blank record. |
+| `HUBSPOT_UPDATE_CONTACT` | **Does** take nested `properties` — `_apply_field_fill` was already right. |
+| `HUBSPOT_MERGE_CONTACTS` | `primaryObjectId` / `objectIdToMerge` — already right. |
+| `HUBSPOT_CREATE_NOTE` | `hs_note_body`, `hs_timestamp` (**required**), `associations` w/ type id 202. No `contactId`. |
+| `HUBSPOT_READ_CONTACT` | The only true by-id read. Takes `archived`. |
+| `HUBSPOT_LIST_CONTACT_NOTES` | Returns association **stubs only** — ids, no bodies. Read the objects separately. |
+
+**Two different search indexes.** Property filters (`EQ` on email) are consistent immediately;
+free-text `query` lags minutes for new records. `stage_meeting_note` used `query`, so a contact that
+verifiably existed returned `contact_not_found`. Now resolves by EQ filter first, falling back to the
+loose query only to build the "did you mean?" list (`dea13c4`). Note `hubspot_manager.contacts_by_ids()`
+is implemented over SEARCH despite its name, so it inherits the lag.
+
+**HubSpot is ONE portal shared by all of IFG** — `hubspot_owner_id` is a property, not a partition.
+Any test record is company-visible until removed, so `hs_write_test.py` archives inside `try/finally`.
+Use `HUBSPOT_ARCHIVE_CONTACT` (recycle bin, 90 days), **never** the GDPR delete variants: those erase
+permanently AND blacklist the address from ever being re-added to the portal.
+
+---
+
+### OPEN ISSUES — logged 2026-08-05, not being worked
+
+**1. HubSpot BCC does not log. Step 3 PARKED.** `LEXI_HUBSPOT_BCC_ENABLED` stays `false`.
+   - **Fixed already (`8570656`):** the BCC was applied to **none** of Lexi's mail.
+     `_send_lexi_html_via_draft` returns from `send_outbound_email` before the BCC block, and the
+     draft never set `bcc_recipients` though `OUTLOOK_CREATE_DRAFT` accepts it. The HTML signature is
+     enabled in production, so that draft path is the one Lexi's mail actually takes. Both paths now
+     share `outbound_bcc_addresses()`.
+   - **Still open:** HubSpot logs nothing even when the BCC does go out. The test from Kory's mailbox
+     took the plain-text branch, carried the BCC, and he IS one of the 8 HubSpot users — still nothing
+     logged after 4 minutes, no bounce.
+   - **Ruled out:** wrong parameter key (`OUTLOOK_SEND_EMAIL` really takes `bcc_emails`); BCC not
+     delivered (`scripts/bcc_delivery_check.py` BCC'd Lexi's own mailbox — arrived in 20s); sender
+     identity; non-external recipient; bad address bouncing.
+   - **Leading hypothesis, UNTESTED:** the portal's *"create and associate contacts for email
+     addresses"* setting is off. Both tests emailed an address HubSpot had never seen; with that off,
+     mail to an unknown address logs nothing while mail to a KNOWN contact logs fine.
+     **`scripts/hs_bcc_test.py --precreate` was built to settle this in one run and was not run.**
+   - The 8 HubSpot users: Rick Brisse (rbrisse@huntscapeops.com), Kory, Heidi Heckler, Billing,
+     Jason Quesada, Sujash Barman, Natalie Asher, Matt Maley. **lexi@iconicfounders.com is not one.**
+   - **Before turning the flag on, do one of:** run `--precreate`, or have Kory check the portal's
+     email-logging settings. Turning it on today logs nothing, silently.
+
+**2. `cc_emails` silently dropped on the `kory` channel.** `send_outbound_email` applies `cc_emails`
+   only when `channel == "lexi"`. A caller passing CCs on the Kory channel gets them discarded with no
+   error. Not fixed — outside the scope of the HubSpot work, and it needs a decision about whether the
+   Kory channel should CC at all.
+
+**3. HubSpot write approval is model-supplied.** `lexi_hubspot_meeting_note(confirm=...)` flows
+   straight into `assert_kory_approved_write(approved=confirm)`, and `owner_ack` is the entire
+   other-owner guard. Nothing independently verifies Kory said yes — unlike the scheduling path's
+   proposals table + typed `approve #N` + audited `decision_source`. With Hermes's logged
+   hallucinations, `LEXI_HUBSPOT_LIVE_WRITES_ENABLED=false` is the real protection. Same class as D-4.
+   **Recommend a staged/typed approval for HubSpot writes before the flag goes on for real.**
+
+**4. Notes on Do Not Contact records — ruling needed from Kory.** DNC is enforced in every outreach
+   path but not the note path. Notes are record-keeping so as-is looks defensible, but it is his call.
+
+**5. Three blank contacts in the recycle bin.** Created before the flat-payload bug was found, all
+   archived and out of the live view, restorable/visible in HubSpot's recycle bin for 90 days. Nothing
+   identifiable on them.
+
+**6. Outreach campaigns parked** (`b5b36d6`) — `LEXI_OUTREACH_CAMPAIGNS_ENABLED=false`, the seven
+   campaign MCP tools are not registered. Deliberate scope decision, resume by flipping the flag.
+
+---
+
 ### RUN 9 — HubSpot write-test plan, STEP 1 (dry-run payload review) — 2026-08-06 ✅ COMPLETE
 
 Done entirely locally, zero network calls: a harness stubbed `execute_hubspot_tool` and drove every
