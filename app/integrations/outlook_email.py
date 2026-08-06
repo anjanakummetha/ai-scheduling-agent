@@ -488,6 +488,9 @@ def _send_lexi_html_via_draft(
             subject=subject,
             body=html_body,
             is_html=True,
+            # This path returns before send_outbound_email's BCC block, so without
+            # this it sends no BCC at all — and it is the path production uses.
+            bcc_emails=outbound_bcc_addresses(recipient),
         ),
         role=write_role,
     )
@@ -603,6 +606,27 @@ def _plain_email_list(emails: list[str]) -> list[str]:
     return [addr.strip().lower() for addr in emails if addr and "@" in addr]
 
 
+def outbound_bcc_addresses(recipient: str) -> list[str]:
+    """Every BCC an outbound message should carry: sandbox loopback + HubSpot logging.
+
+    Shared so the two send paths cannot drift. They already had: the HTML-signature
+    draft path skipped the BCC entirely, so with the signature enabled — which it is
+    in production — nothing Lexi sent was ever BCC'd to HubSpot.
+    """
+    bcc: list[str] = []
+    configured_target = (settings.sandbox_mailbox_email or "").strip().lower()
+    if (
+        settings.lexi_write_mode == "sandbox"
+        and configured_target
+        and recipient.strip().lower() != configured_target
+    ):
+        bcc.append(configured_target)
+    for addr in hubspot_bcc_addresses([recipient]):
+        if addr not in bcc:
+            bcc.append(addr)
+    return bcc
+
+
 def _build_outlook_draft_arguments(
     *,
     recipient: str,
@@ -610,8 +634,9 @@ def _build_outlook_draft_arguments(
     body: str,
     is_html: bool,
     cc_emails: list[str] | None = None,
+    bcc_emails: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Composio OUTLOOK_CREATE_DRAFT payload — plain-string recipients; omit empty CC."""
+    """Composio OUTLOOK_CREATE_DRAFT payload — plain-string recipients; omit empty CC/BCC."""
     to_list = _plain_email_list([recipient])
     if not to_list:
         raise ValueError("recipient must be a valid email address.")
@@ -625,6 +650,9 @@ def _build_outlook_draft_arguments(
     cc_list = _plain_email_list(merge_kory_cc_addresses(cc_emails))
     if cc_list:
         args["cc_recipients"] = cc_list
+    bcc_list = _plain_email_list(bcc_emails or [])
+    if bcc_list:
+        args["bcc_recipients"] = bcc_list
     return args
 
 
@@ -965,17 +993,9 @@ def send_outbound_email(
                 merged_cc.append(addr)
         if merged_cc:
             arguments["cc_emails"] = merged_cc
-    bcc: list[str] = []
-    if (
-        settings.lexi_write_mode == "sandbox"
-        and configured_target
-        and recipient.lower() != configured_target
-    ):
-        bcc.append(configured_target)
-    # HubSpot logging BCC (production, outsider recipients only).
-    for addr in hubspot_bcc_addresses([recipient]):
-        if addr not in bcc:
-            bcc.append(addr)
+    # Sandbox loopback + HubSpot logging BCC, shared with the draft path so the
+    # two cannot drift apart again.
+    bcc = outbound_bcc_addresses(recipient)
     if bcc:
         arguments["bcc_emails"] = bcc
 

@@ -39,6 +39,13 @@ CC_KORY = "--cc-kory" in sys.argv
 # the identical message from his mailbox isolates sender identity as the variable.
 # This sends a real email as Kory, so it is opt-in and never the default.
 FROM_KORY = "--from-kory" in sys.argv
+# Both earlier runs emailed an address HubSpot had never seen, and HubSpot only
+# creates a contact from BCC'd mail when that portal setting is on. With it off,
+# mail to an unknown address logs nothing — but mail to a KNOWN contact still
+# logs normally. --precreate makes the contact first so the two cases separate:
+# logged means BCC works and only auto-creation is off; still nothing means
+# logging itself is not working.
+PRECREATE = "--precreate" in sys.argv
 
 if os.getenv("LEXI_HUBSPOT_BCC_ENABLED", "").lower() not in {"1", "true", "yes"}:
     sys.exit("refusing to run: LEXI_HUBSPOT_BCC_ENABLED is not true for this process")
@@ -137,18 +144,51 @@ if not resolved_bcc:
         "the BCC only fires for recipients outside IFG. Nothing sent."
     )
 
-# A pre-existing contact would make "HubSpot created this" unprovable.
 existing = find_contact()
-if existing:
+if existing and not PRECREATE:
+    # Without --precreate the proof is "HubSpot created this", which a
+    # pre-existing record would make unprovable.
     sys.exit(
         f"a contact already exists for {TO_EMAIL} (id={existing.get('id')}). "
         "This test proves BCC logging by watching HubSpot create one, so it needs "
-        "a clean slate. Archive that contact first, or set BCC_TEST_TO to another "
-        "outside address."
+        "a clean slate. Archive that contact first, set BCC_TEST_TO to another "
+        "outside address, or pass --precreate to test logging onto a known contact."
     )
-print("  no existing contact for the recipient — clean baseline")
+print(f"  existing contact         : {existing.get('id') if existing else '(none — clean baseline)'}")
 
 try:
+    # ---------------------------------------------------------------- PRECREATE
+    if PRECREATE:
+        banner("STEP 3-pre — make the recipient a known contact first")
+        if existing:
+            CONTACT_ID = str(existing.get("id"))
+            print(f"  reusing existing contact {CONTACT_ID}")
+        else:
+            # Flat top-level fields: HUBSPOT_CREATE_CONTACT silently ignores a
+            # nested {"properties": {...}} and creates a blank record.
+            created = execute_tool(
+                "HUBSPOT_CREATE_CONTACT",
+                {
+                    "email": TO_EMAIL,
+                    "firstname": "LEXI TEST",
+                    "lastname": "DELETE ME",
+                    "hubspot_owner_id": hs.kory_owner_id(),
+                    "company": "LEXI TEST — safe to delete",
+                },
+                role="hubspot",
+            )
+            CONTACT_ID = str((created.get("data") or {}).get("id") or "")
+            print(f"  created contact {CONTACT_ID or '(FAILED)'}")
+            if not CONTACT_ID:
+                raise RuntimeError("could not create the contact — stopping before sending")
+        # HubSpot has to be able to match the address when the BCC copy lands.
+        for attempt in range(1, 7):
+            if find_contact():
+                print(f"  contact resolvable after {attempt} attempt(s)")
+                break
+            print(f"  not resolvable yet ({attempt}/6) — waiting 5s")
+            time.sleep(5)
+
     # ---------------------------------------------------------------- SEND
     banner("STEP 3a — send one real email with the HubSpot BCC applied")
     message_id, log_id = send_outbound_email(

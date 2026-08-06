@@ -581,3 +581,65 @@ def test_meeting_note_falls_back_to_loose_search_only_for_suggestions(
     # The loose hit is offered as a suggestion, never written to.
     assert out["near_matches"][0]["email"] == "someone.else@co.com"
     mock_tool.assert_not_called()
+
+
+def test_html_signature_path_still_carries_the_hubspot_bcc():
+    """The production send path must BCC HubSpot, not just the plain-text one.
+
+    _send_lexi_html_via_draft returns from send_outbound_email BEFORE the BCC
+    block, so while the HTML signature was enabled — which it is in production —
+    nothing Lexi sent carried the HubSpot logging BCC at all. This asserts on the
+    draft payload actually handed to Composio, which is what regressed.
+    """
+    from app.integrations import outlook_email as oe
+
+    sent: dict[str, object] = {}
+
+    def fake_execute(slug, args, role=None):
+        if slug == "OUTLOOK_CREATE_DRAFT":
+            sent.update(args)
+            return {"data": {"id": "draft-1"}}
+        return {"data": {"id": "draft-1", "status_code": 202}}
+
+    with patch.object(oe, "execute_tool", side_effect=fake_execute):
+        with patch.object(oe, "hubspot_bcc_addresses", return_value=["12345@bcc.hubspot.com"]):
+            with patch.object(oe, "_extract_draft_message_id", return_value="draft-1"):
+                oe._send_lexi_html_via_draft(
+                    recipient="someone@outside-company.com",
+                    subject="s",
+                    html_body="<p>b</p>",
+                    inline_attachment={
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": "logo.png",
+                        "contentType": "image/png",
+                        "contentBytes": "AA==",
+                        "contentId": "logo",
+                    },
+                    write_role="lexi",
+                )
+
+    # The sandbox loopback BCC rides along in test mode; what regressed is the
+    # HubSpot one, so assert on that specifically rather than the whole list.
+    assert "12345@bcc.hubspot.com" in (sent.get("bcc_recipients") or []), (
+        f"the HTML draft path sent no HubSpot BCC: {sent.get('bcc_recipients')!r}"
+    )
+
+
+def test_outbound_bcc_skips_internal_recipients():
+    """Internal-only mail is never logged to the CRM."""
+    from app.integrations import outlook_email as oe
+
+    with patch.object(oe, "hubspot_bcc_addresses", return_value=[]):
+        assert "bcc.hubspot.com" not in " ".join(
+            oe.outbound_bcc_addresses("kory.mitchell@iconicfounders.com")
+        )
+
+
+def test_draft_arguments_omit_bcc_when_there_is_none():
+    """No empty bcc_recipients key — Composio rejects some empty list fields."""
+    from app.integrations import outlook_email as oe
+
+    args = oe._build_outlook_draft_arguments(
+        recipient="someone@outside-company.com", subject="s", body="b", is_html=True
+    )
+    assert "bcc_recipients" not in args
