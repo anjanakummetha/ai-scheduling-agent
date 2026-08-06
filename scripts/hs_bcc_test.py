@@ -34,6 +34,11 @@ TO_EMAIL = os.getenv("BCC_TEST_TO", "anjanakummetha@gmail.com")
 CC_EMAIL = os.getenv("BCC_TEST_CC", "anjana.kummetha@iconicfounders.com").strip()
 KEEP = "--keep" in sys.argv
 CC_KORY = "--cc-kory" in sys.argv
+# Diagnostic: HubSpot's BCC address only logs mail whose SENDER is a HubSpot user
+# in the portal. lexi@iconicfounders.com is not one of the eight; Kory is. Sending
+# the identical message from his mailbox isolates sender identity as the variable.
+# This sends a real email as Kory, so it is opt-in and never the default.
+FROM_KORY = "--from-kory" in sys.argv
 
 if os.getenv("LEXI_HUBSPOT_BCC_ENABLED", "").lower() not in {"1", "true", "yes"}:
     sys.exit("refusing to run: LEXI_HUBSPOT_BCC_ENABLED is not true for this process")
@@ -51,15 +56,22 @@ from app.integrations.outlook_email import (  # noqa: E402
     send_outbound_email,
 )
 
+CHANNEL = "kory" if FROM_KORY else "lexi"
 STAMP = time.strftime("%Y%m%d-%H%M%S")
 SUBJECT = f"Lexi BCC logging test {STAMP}"
 BODY = (
-    "This is an automated test of Lexi's HubSpot logging BCC.\n\n"
+    "This is an automated test of Lexi's HubSpot logging BCC, run by Anjana.\n\n"
     f"Reference: {STAMP}\n\n"
-    "It confirms that mail Lexi sends to people outside IFG is recorded on the "
-    "right HubSpot contact. Nothing here needs a reply, and the test records are "
+    "It confirms that mail sent to people outside IFG is recorded on the right "
+    "HubSpot contact. Nothing here needs a reply, and the test records are "
     "removed automatically."
 )
+if FROM_KORY:
+    BODY += (
+        "\n\nSent from Kory's mailbox deliberately: the same test from Lexi's "
+        "mailbox logged nothing, and Lexi is not a HubSpot user. This isolates "
+        "whether sender identity is the reason."
+    )
 
 
 def banner(title):
@@ -108,9 +120,14 @@ banner("PRE-FLIGHT")
 print(f"  bcc_enabled (this process): {settings.hubspot_bcc_enabled}")
 print(f"  bcc_address              : {settings.hubspot_bcc_address}")
 print(f"  cc_kory_enabled          : {settings.cc_kory_enabled}")
-print(f"  lexi mailbox (sender)    : {settings.lexi_mailbox_email}")
+print(f"  send channel             : {CHANNEL}"
+      + ("  ← REAL EMAIL FROM KORY'S MAILBOX" if FROM_KORY else ""))
+print(f"  sender                   : "
+      f"{settings.kory_cc_email if FROM_KORY else settings.lexi_mailbox_email}")
 print(f"  recipient (To)           : {TO_EMAIL}")
-print(f"  cc                       : {CC_EMAIL or '(none)'}")
+# send_outbound_email only applies cc_emails on the lexi channel.
+print(f"  cc                       : "
+      f"{(CC_EMAIL or '(none)') if CHANNEL == 'lexi' else '(dropped — kory channel ignores cc)'}")
 
 resolved_bcc = hubspot_bcc_addresses([TO_EMAIL])
 print(f"  BCC that will be applied : {resolved_bcc or '(NONE)'}")
@@ -139,7 +156,7 @@ try:
         subject=SUBJECT,
         body=BODY,
         approved_send=True,
-        send_channel="lexi",
+        send_channel=CHANNEL,
         cc_emails=[CC_EMAIL] if CC_EMAIL else None,
     )
     print(f"  sent. message_id={message_id} composio_log_id={log_id}")
