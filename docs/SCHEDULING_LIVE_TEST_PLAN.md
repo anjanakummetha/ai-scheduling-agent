@@ -637,6 +637,18 @@ permanently AND blacklist the address from ever being re-added to the portal.
 
 ---
 
+### CLEANUP — 2026-08-06
+
+- **Tuesday-8:30 memory fact REMOVED.** `no_meetings_before_9am_tuesdays` was a K-1/K-2 test artifact
+  Anjana typed, never something Kory said, and it was reaching both `load_scheduling_preferences` and
+  the LLM's "KORY MEMORY (explicit facts — override defaults)" block. Note it was NOT enforced by the
+  validator: the key is not in `_KNOWN_KEYS`, so it fell through to `_apply_freeform_fact`, whose
+  regexes match counts (happy hours/week etc.) and not a weekday time rule. Real influence via the
+  model, no traceability through the rules — the worst of both. `kory_memory` is now empty, which is
+  the truthful state. Restore SQL is in the session transcript if ever wanted.
+- Still open from RUN 8: delete the Aug 10 + Aug 24 test meetings, reject #6481/#6244, delete #6235's
+  stale offer thread, sweep `[TEST]` emails.
+
 ### RUN 13 — MCP 120s hangs ROOT-CAUSED and FIXED — 2026-08-06 (`17b8b62`)
 
 **Cause:** `mcp.server.fastmcp` calls sync tools **inline on the event loop** —
@@ -661,6 +673,9 @@ build the input schema) while `iscoroutinefunction` sees the async wrapper and a
 **Side benefit:** `teams_publisher`'s `asyncio.run` fallbacks now take their deterministic path
 (no running loop in a worker thread) instead of deferring work onto a loop that the tool was itself
 blocking.
+
+**Verified live:** Teams smoke test after deploy — a tool call round-tripped through Hermes normally,
+so the async wrapper works end to end, not just in registration.
 
 **Still to confirm:** the timeouts were intermittent (8 in 7 days, clustered in active-testing
 windows), so absence over the next few days of real use is the actual proof. Watch with:
