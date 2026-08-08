@@ -1387,6 +1387,17 @@ def lexi_remember_kory_fact(fact_key: str, fact_value: str) -> str:
 
 
 @_tool
+def lexi_forget_kory_fact(fact: str) -> str:
+    """Remove a saved Kory fact when he says to forget/undo/remove a remembered rule.
+
+    Pass his words for which fact (a key, or any distinctive phrase from it).
+    Matches must be unique — on an ambiguous match it returns the candidates;
+    show them and ask which one. The result quotes what was deleted; confirm
+    that back to Kory."""
+    return _wrap("lexi_forget_kory_fact", lexi.forget_kory_fact_action, fact=fact)
+
+
+@_tool
 def lexi_list_kory_memory() -> str:
     """List saved Kory facts (long-term memory)."""
     return _wrap("lexi_list_kory_memory", lexi.list_kory_memory_action)

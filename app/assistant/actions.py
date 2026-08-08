@@ -864,6 +864,12 @@ def remember_kory_fact_action(fact_key: str, fact_value: str) -> dict[str, Any]:
     return upsert_fact(fact_key=fact_key, fact_value=fact_value, source="hermes")
 
 
+def forget_kory_fact_action(fact: str) -> dict[str, Any]:
+    from app.storage.kory_memory import delete_fact
+
+    return delete_fact(fact=fact)
+
+
 def list_kory_memory_action() -> dict[str, Any]:
     from app.storage.kory_memory import list_facts
 

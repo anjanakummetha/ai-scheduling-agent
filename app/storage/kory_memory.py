@@ -66,6 +66,66 @@ def upsert_fact(*, fact_key: str, fact_value: str, source: str = "teams") -> dic
     return {"ok": True, "id": fact_id, "fact_key": key, "fact_value": value}
 
 
+def delete_fact(*, fact: str) -> dict[str, Any]:
+    """Remove a stored fact by key, id, or unique substring of key/value.
+
+    Refuses ambiguity: deleting the wrong scheduling rule is worse than asking
+    Kory which one he meant. Returns the deleted fact so the confirmation can
+    quote exactly what was forgotten.
+    """
+    needle = fact.strip().lower()
+    if not needle:
+        return {"ok": False, "error": "Say which fact to forget."}
+
+    with get_lexi_connection() as conn:
+        ensure_kory_memory_table(conn)
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, fact_key, fact_value FROM kory_memory"
+            ).fetchall()
+        ]
+        exact = [
+            r for r in rows if r["id"] == fact.strip() or r["fact_key"] == needle
+        ]
+        matches = exact or [
+            r
+            for r in rows
+            if needle in r["fact_key"].lower() or needle in r["fact_value"].lower()
+        ]
+        if not matches:
+            return {
+                "ok": False,
+                "error": f"No stored fact matches {fact!r}.",
+                "facts": [
+                    {"fact_key": r["fact_key"], "fact_value": r["fact_value"]}
+                    for r in rows[:20]
+                ],
+            }
+        if len(matches) > 1:
+            return {
+                "ok": False,
+                "error": (
+                    f"{fact!r} matches {len(matches)} stored facts — which one? "
+                    + "; ".join(r["fact_key"] for r in matches[:5])
+                ),
+                "candidates": [
+                    {"fact_key": r["fact_key"], "fact_value": r["fact_value"]}
+                    for r in matches[:5]
+                ],
+            }
+        target = matches[0]
+        conn.execute("DELETE FROM kory_memory WHERE id = ?", (target["id"],))
+        conn.commit()
+    return {
+        "ok": True,
+        "deleted": {
+            "fact_key": target["fact_key"],
+            "fact_value": target["fact_value"],
+        },
+    }
+
+
 def list_facts(*, limit: int = 50) -> list[dict[str, Any]]:
     with get_lexi_connection() as conn:
         ensure_kory_memory_table(conn)
