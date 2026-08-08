@@ -48,13 +48,11 @@ doubled-cap max_tokens retry could run, in both `runAnthropicPrompt` and
 `runAnthropicResearch` (so attendee intel was silently degrading too).
 
 Fix committed in the dashboard repo, `a70f688` on `deploy-prep-phase1`
-(reorder: max_tokens retry before the empty guard, both paths); standalone
-build done locally. **Deploy was blocked by the permission classifier** — run
-manually from `CEO_Executive_Dashboard--main/`:
+(reorder: max_tokens retry before the empty guard, both paths). Built and
+**rsynced to `/opt/ceo-dashboard` 2026-08-08 (ownership restored to ceo)** —
+only the service restart is outstanding; the running process still serves the
+old code until then:
 
-    rsync -a .next/standalone/ root@srv1686061.hstgr.cloud:/opt/ceo-dashboard/
-    rsync -a .next/static/     root@srv1686061.hstgr.cloud:/opt/ceo-dashboard/.next/static/
-    rsync -a public/           root@srv1686061.hstgr.cloud:/opt/ceo-dashboard/public/
     ssh root@srv1686061.hstgr.cloud systemctl restart ceo-dashboard
 
 Then verify: POST `http://127.0.0.1:3000/api/hermes/briefing` with
@@ -65,19 +63,20 @@ Next timer run: 10:30 UTC daily.
 
 36 `outlook_poll` failures since go-live (~2–4/hr): 20 APITimeout, 10 `CommandConcurrencyLimitReached`, 4 `ErrorTooManyObjectsOpened`, 2 `ApplicationThrottled`. The poll is the **safety net** for webhook drops (Graph 404s just-arrived message ids, ~14/48h; recovery ≤5 min). If both degrade together, mail sits unseen longer.
 
-Proposed fix (not built): stagger the inbox / sentitems polls across cycles instead of same-cycle; consider skipping sentitems entirely — 86 of the 374 triaged messages were Kory's own outbound YPO mail (he runs YPO outreach by hand; Lexi triages every copy).
+**Fix BUILT 2026-08-08 (`ce73e7a`, pushed to origin/main): one Kory folder per poll cycle, alternating inbox/sentitems** — each folder still swept every ~10 min inside the 24h window; 4 new tests in `tests/test_outlook_poll_stagger.py`. **Not yet live: the `deploy_lexi.sh` run was blocked by the permission classifier** — run `ssh root@srv1686061.hstgr.cloud 'bash -s' < scripts/deploy_lexi.sh` from the repo root. Skipping sentitems entirely stays on the table if errors persist (86 of the first 374 triaged messages were Kory's own outbound YPO mail).
 
 ## 3. OPEN WORK LIST (rough order)
 
-1. **Deploy the briefing fix** (§2a) — Kory gets no briefing until this ships
+1. **Restart ceo-dashboard + run deploy_lexi.sh** (§2a, §2) — both fixes are staged on/for the box; only the two blocked commands remain (Anjana must run them)
 2. **M-2** — Anjana verifies morning-briefing content (08-06 send only; 08-07 never sent, see §2a)
-3. **Throttling fix** (§2) — now 75 outlook_poll errors since go-live (was 36)
-4. **Log + fix Kory's change requests** as they arrive
-5. **M-3 redo** against `logs/lexi.log` (the journalctl sweep was void)
-6. **Per-tool deadline** — the event-loop fix (`17b8b62`) stops one slow tool freezing the server, but a single tool doing 3×30s Composio retries can still blow the 120s MCP budget
-7. **HubSpot step 5** — Kory sign-off package (never built)
-8. **Design item (accepted risk, worth fixing not re-raising):** HubSpot/Asana write approval is a model-supplied boolean; scheduling's typed `approve #N` + audited `decision_source` is the pattern to copy
-9. **Cleanup leftovers:** delete Aug 10 (#7041) + declined Aug 24 (#6861) test meetings via calendar; sweep `[TEST]` emails + Lexi drafts. (#6235/#6481/#7181 already rejected; queue was 0 proposals / 0 holds / 0 memory facts at go-live.)
+3. **Verify both fixes after deploy** — briefing POST returns 200; outlook_poll error rate drops (was 75 since go-live)
+4. **Suite note:** 3 pre-existing failures on 08-08 (`test_api_v1` aged-asks ×2, `test_prebrief_attendees` future-date) — local-DB history from the Aug 5-6 sessions sits inside the tests' 24h-72h window; ages out on its own, real fix is isolating the suite from `data/lexi.db`
+5. **Log + fix Kory's change requests** as they arrive
+6. **M-3 redo** against `logs/lexi.log` (the journalctl sweep was void)
+7. **Per-tool deadline** — the event-loop fix (`17b8b62`) stops one slow tool freezing the server, but a single tool doing 3×30s Composio retries can still blow the 120s MCP budget
+8. **HubSpot step 5** — Kory sign-off package (never built)
+9. **Design item (accepted risk, worth fixing not re-raising):** HubSpot/Asana write approval is a model-supplied boolean; scheduling's typed `approve #N` + audited `decision_source` is the pattern to copy
+10. **Cleanup leftovers:** delete Aug 10 (#7041) + declined Aug 24 (#6861) test meetings via calendar; sweep `[TEST]` emails + Lexi drafts. (#6235/#6481/#7181 already rejected; queue was 0 proposals / 0 holds / 0 memory facts at go-live.)
 
 ## 4. HARD-WON FACTS (do not relearn)
 
