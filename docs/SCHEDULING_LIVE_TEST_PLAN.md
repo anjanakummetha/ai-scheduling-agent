@@ -1177,8 +1177,10 @@ disposable HubSpot contact. Cleanup verified zero residue (§ Residue below).
   offers could never send**. Now composes a fresh outbound email.
 
 ### Defects — OPEN (logged, not fixed)
-- **D5**: escalated (`needs_kory`) proposals cannot be rejected — no path to
-  close an escalated proposal except DB surgery (same gap the 08-06 cleanup hit).
+- **D5 — FIXED same day** (`c6f8f3f`): `needs_kory` / `needs_scheduling_guidance`
+  proposals are now rejectable via chat ("reject #N — reason"); rejection
+  releases holds and records an audited decision; terminal statuses still
+  refuse. Live-verified on prod with a throwaway escalated proposal.
 - **D6**: escalation says "reply YES to confirm" but the gateway agent has no
   linkage from a bare YES back to the escalation — it asks "what would you like
   to approve?".
