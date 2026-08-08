@@ -1,4 +1,4 @@
-# Lexi — Session Handoff (updated 2026-08-07)
+# Lexi — Session Handoff (updated 2026-08-08)
 
 **Resume phrase:** *"Kory is live; check what he's done, then continue the open work list."*
 
@@ -25,6 +25,42 @@ Two repos, one box:
 - Outreach campaigns — `LEXI_OUTREACH_CAMPAIGNS_ENABLED=false`, MCP tools unregistered
 - HubSpot BCC logging — genuinely broken HubSpot-side; Lexi-side bypass bug already fixed (`8570656`); next diagnostic is `scripts/hs_bcc_test.py --precreate` or Kory checking the portal's email-logging settings
 
+## 1b. KORY ACTIVITY CHECK (2026-08-08 03:55 UTC)
+
+Still **zero** Kory interactions: no Teams messages (gateway silent since its
+04:38 08-06 restart), no MCP CallToolRequests since the 01:54 08-06 pre-live
+tests, no approvals since the 02:15 08-06 cleanup. 742 emails triaged since
+go-live, all `no_reply_needed`. **Proposal 6218** (referral_or_intro,
+`awaiting_reply_prompt`) pinged Kory in Teams 08-06 17:15 (inbound reply on a
+time-blocked thread) and has been waiting ever since.
+
+## 2a. ACTIVE ISSUE — morning briefing DOWN since Aug 7 (fix built, deploy blocked)
+
+The 10:30 UTC `lexi-morning-briefing.timer` failed all 6 attempts on 08-07
+("Dashboard returned 500: Empty Anthropic response") — **Kory got no briefing
+email 08-07**, and will get none until the fix is deployed.
+
+Root cause (reproduced live with the exact prompt): Sonnet's adaptive thinking
+spends the entire 8192-token output budget before any text block is emitted —
+response is a lone `thinking` block with `stop_reason=max_tokens`. The
+dashboard's `cli.ts` threw "Empty Anthropic response" *before* its own
+doubled-cap max_tokens retry could run, in both `runAnthropicPrompt` and
+`runAnthropicResearch` (so attendee intel was silently degrading too).
+
+Fix committed in the dashboard repo, `a70f688` on `deploy-prep-phase1`
+(reorder: max_tokens retry before the empty guard, both paths); standalone
+build done locally. **Deploy was blocked by the permission classifier** — run
+manually from `CEO_Executive_Dashboard--main/`:
+
+    rsync -a .next/standalone/ root@srv1686061.hstgr.cloud:/opt/ceo-dashboard/
+    rsync -a .next/static/     root@srv1686061.hstgr.cloud:/opt/ceo-dashboard/.next/static/
+    rsync -a public/           root@srv1686061.hstgr.cloud:/opt/ceo-dashboard/public/
+    ssh root@srv1686061.hstgr.cloud systemctl restart ceo-dashboard
+
+Then verify: POST `http://127.0.0.1:3000/api/hermes/briefing` with
+`x-briefing-token` from the agent `.env` → expect 200 with `emailDraft`.
+Next timer run: 10:30 UTC daily.
+
 ## 2. ACTIVE ISSUE — Graph throttling the backup poll
 
 36 `outlook_poll` failures since go-live (~2–4/hr): 20 APITimeout, 10 `CommandConcurrencyLimitReached`, 4 `ErrorTooManyObjectsOpened`, 2 `ApplicationThrottled`. The poll is the **safety net** for webhook drops (Graph 404s just-arrived message ids, ~14/48h; recovery ≤5 min). If both degrade together, mail sits unseen longer.
@@ -33,14 +69,15 @@ Proposed fix (not built): stagger the inbox / sentitems polls across cycles inst
 
 ## 3. OPEN WORK LIST (rough order)
 
-1. **M-2** — Anjana verifies morning-briefing content (08-06 and 08-07 sends in Kory's inbox)
-2. **Throttling fix** (§2)
-3. **Log + fix Kory's change requests** as they arrive
-4. **M-3 redo** against `logs/lexi.log` (the journalctl sweep was void)
-5. **Per-tool deadline** — the event-loop fix (`17b8b62`) stops one slow tool freezing the server, but a single tool doing 3×30s Composio retries can still blow the 120s MCP budget
-6. **HubSpot step 5** — Kory sign-off package (never built)
-7. **Design item (accepted risk, worth fixing not re-raising):** HubSpot/Asana write approval is a model-supplied boolean; scheduling's typed `approve #N` + audited `decision_source` is the pattern to copy
-8. **Cleanup leftovers:** delete Aug 10 (#7041) + declined Aug 24 (#6861) test meetings via calendar; sweep `[TEST]` emails + Lexi drafts. (#6235/#6481/#7181 already rejected; queue was 0 proposals / 0 holds / 0 memory facts at go-live.)
+1. **Deploy the briefing fix** (§2a) — Kory gets no briefing until this ships
+2. **M-2** — Anjana verifies morning-briefing content (08-06 send only; 08-07 never sent, see §2a)
+3. **Throttling fix** (§2) — now 75 outlook_poll errors since go-live (was 36)
+4. **Log + fix Kory's change requests** as they arrive
+5. **M-3 redo** against `logs/lexi.log` (the journalctl sweep was void)
+6. **Per-tool deadline** — the event-loop fix (`17b8b62`) stops one slow tool freezing the server, but a single tool doing 3×30s Composio retries can still blow the 120s MCP budget
+7. **HubSpot step 5** — Kory sign-off package (never built)
+8. **Design item (accepted risk, worth fixing not re-raising):** HubSpot/Asana write approval is a model-supplied boolean; scheduling's typed `approve #N` + audited `decision_source` is the pattern to copy
+9. **Cleanup leftovers:** delete Aug 10 (#7041) + declined Aug 24 (#6861) test meetings via calendar; sweep `[TEST]` emails + Lexi drafts. (#6235/#6481/#7181 already rejected; queue was 0 proposals / 0 holds / 0 memory facts at go-live.)
 
 ## 4. HARD-WON FACTS (do not relearn)
 
