@@ -1201,6 +1201,26 @@ disposable HubSpot contact. Cleanup verified zero residue (§ Residue below).
   refuses ambiguity with candidates, quotes what was deleted. Live-verified
   remember→forget→list-empty.
 
+### Send-path analysis fixes (2026-08-08, `31b88de`) — M-series
+- **M1 FIXED**: `lexi_start_scheduling` takes `constraints=` (Kory's words
+  verbatim) threaded into the engine body — "mornings her time / next week /
+  Boston" now drive time-of-day, window, and timezone parsing (live diag:
+  time_of_day_window 08:00–12:00 applied, window_expanded=true, 39 vs 24
+  candidates). Previously the engine got only a canned context line and a
+  Boston-morning ask produced noon-ET slots.
+- **M2 FIXED**: modify-and-approve with a novel time no longer books a
+  zero-minute meeting — end==start (or missing end) inherits the proposal's
+  offered-slot duration, 30-min fallback. Live-verified via resolver.
+- **Refinements logged (open, engine semantics):** R1 — "mornings HER time"
+  applies the morning window in MT, not the recipient's timezone (≤2h blur
+  for ET). R2 — the outbound path calls the slot engine directly and skips
+  `verify_before_kory_approval`, so out-of-window offers ship without the
+  "no availability for <window> — offering <dates> instead" disclosure the
+  inbound path attaches (C-1/C-2 machinery). Also noted: offer email sends
+  ~13s before holds land (deliberate crash-safety ordering; E-6 confirm
+  re-check backstops it) and the hold-delete 404 warning on invite release
+  is benign double-delete noise.
+
 ### Post-sweep observation (2026-08-08 ~07:56 UTC) — stale card RESURFACED
 An Aug-5 UAT card ("[TEST] Quick catch-up? — LT-H4", "Invite send is disabled
 (UAT safety)") appeared in Kory's chat with a fresh timestamp during the
