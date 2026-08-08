@@ -122,8 +122,8 @@ Matt-on-coffees default, visible coffee buffer block, venue address verification
 
 ## 3. OPEN WORK LIST (rough order, refreshed post-sweep 2026-08-08)
 
-1. **M-2** — Anjana verifies morning-briefing content (08-06 send; 08-08 10:30 UTC send should also exist now — the thinking-outage fix is live)
-2. **Stagger full-day re-check** — 0 outlook_poll errors in the ~4h after the 04:30 deploy (was 2–4/hr); confirm after a full day
+1. **M-2** — Anjana verifies morning-briefing content. **Delivery is now proven fully automated:** the 08-08 10:30 UTC timer run completed SUCCESS and sent at 10:35:01 (first untouched timer send since the thinking fix). Only the content review remains.
+2. ~~Stagger full-day re-check~~ **DONE 2026-08-08 14:36 UTC**: 0 outlook_poll errors in the 10h since the 04:30 deploy (pre-fix baseline 2–4/hr, 40/day). Graph throttling issue CLOSED.
 3. **Activity-id persistence for Teams messages** (priority raised): stale Aug-5 cards are not just inert clutter — one RESURFACED with a fresh timestamp during the 07:56 restart resync (see RUN 15). Persist ids on send; update cards/messages to a decided/expired state on decision. Until built: any card in the chat is old — ignore; `pending` is the source of truth.
 4. **Log + fix Kory's change requests** as they arrive (he had still used nothing as of 08-08 ~08:00 UTC; proposal 6218 still waits)
 5. **M-3 redo** against `logs/lexi.log` (the journalctl sweep was void)
