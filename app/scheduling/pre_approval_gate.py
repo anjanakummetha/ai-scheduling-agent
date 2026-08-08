@@ -227,6 +227,13 @@ def verify_before_kory_approval(
             )
         report.window_verified = not outside
 
+    # Same cue derivation as the slot engine — without it the gate contradicted
+    # the engine: 6 AM slots offered FOR a Boston contact came back flagged
+    # "6 AM is only for East Coast contacts" (live R2 verification).
+    from app.scheduling.scheduling_window import _EAST_COAST_CUE
+
+    east_coast = bool(_EAST_COAST_CUE.search(f"{subject}\n{body}"))
+
     rule_check = ValidationResult(valid=True)
     for slot in slots:
         check = validate_proposal_slots(
@@ -234,6 +241,7 @@ def verify_before_kory_approval(
             intent=meeting_spec.type_key,
             meeting_format=fmt,
             urgent=bool(plan.urgency if plan else False),
+            east_coast=east_coast,
             busy_events=busy,
             batch_slots=[slot],
             # Guidance-aware, or this re-check blocks the exception Kory

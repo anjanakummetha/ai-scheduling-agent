@@ -581,9 +581,17 @@ def _outbound_disclosure_note(
             if warning not in notes:
                 notes.append(warning)
         if not gate.ok:
-            summary = gate.summary()
-            if summary and summary not in notes:
-                notes.append(summary)
+            summary = str(gate.summary() or "")
+            # "outside requested window" entries just restate the disclosure
+            # sentence above — keep only genuinely new problems.
+            parts = [
+                p.strip()
+                for p in summary.removeprefix("BLOCKED:").split(";")
+                if p.strip() and "outside requested window" not in p
+            ]
+            for part in parts:
+                if part not in notes:
+                    notes.append(part)
     except Exception:
         logger.debug("Outbound gate check failed; note carries window info only.", exc_info=True)
     return " ".join(notes).strip()

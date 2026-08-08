@@ -82,3 +82,34 @@ def test_outbound_note_never_raises_without_window():
         calendar_context={"status": "available", "busy_events": []},
     )
     assert isinstance(note, str)
+
+
+def test_gate_honors_east_coast_cue_like_the_engine():
+    """The gate re-validated without the cue, so 6 AM slots offered FOR a
+    Boston contact came back "only for East Coast contacts"."""
+    from app.scheduling.pre_approval_gate import verify_before_kory_approval
+
+    gate = verify_before_kory_approval(
+        slots=[{"start": "2026-08-18T06:00:00-06:00", "end": "2026-08-18T06:30:00-06:00"}],
+        calendar_context={"status": "available", "busy_events": []},
+        intent="meeting",
+        subject="[TEST] intro call",
+        body="mornings her time, she is in Boston (Eastern time)",
+    )
+    assert not any("only for East Coast" in v for v in (gate.summary() or "").split(";"))
+
+
+def test_note_drops_redundant_window_entries():
+    note = _outbound_disclosure_note(
+        subject="[TEST] intro call",
+        body="Outbound delegation by kory. mornings her time, she is in Boston (Eastern time), next week",
+        intent="meeting",
+        slots=[
+            {"start": "2026-08-18T06:00:00-06:00", "end": "2026-08-18T06:30:00-06:00"},
+            {"start": "2026-08-20T06:00:00-06:00", "end": "2026-08-20T06:30:00-06:00"},
+        ],
+        calendar_context={"status": "available", "busy_events": []},
+    )
+    assert "No availability for next week" in note
+    assert "outside requested window" not in note
+    assert "only for East Coast" not in note
