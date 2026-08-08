@@ -471,6 +471,10 @@ def _hermes_kory_guidance_compose(packet: dict[str, Any]) -> str:
         "You are writing directly to Kory — issues route to Kory only. NEVER suggest "
         "any other assistant/colleague, and never claim anyone has been flagged, notified, or "
         "escalated.\n"
+        "NEVER invite a bare yes/no reply (no \"reply YES to confirm\"): Kory's reply arrives "
+        "without this message's context, so a bare YES is unanswerable. A closing line with "
+        "exact reply commands is appended automatically — do not write your own reply "
+        "instructions.\n"
         "2-4 sentences. Plain text. No markdown headers."
     )
     client = get_hermes_client()

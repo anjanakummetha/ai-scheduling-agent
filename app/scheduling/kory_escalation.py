@@ -50,6 +50,7 @@ def escalate_to_kory(
             f"{detail}. Reply here with how you'd like to handle it."
         )
     summary = _scrub_third_party_mentions(summary)
+    summary = _with_actionable_footer(summary, proposal_id)
     if teams_push_allowed():
         from app.bot.teams_publisher import schedule_teams_scheduling_guidance_push
 
@@ -65,6 +66,20 @@ def escalate_to_kory(
         "kory_message": summary,
         "teams_pushed": teams_push_allowed(),
     }
+
+
+def _with_actionable_footer(summary: str, proposal_id: int) -> str:
+    """Escalations are proactive pushes — Kory's reply arrives WITHOUT this
+    message in the agent's context, so a bare "YES" is unanswerable (live D6).
+    Every escalation therefore ends with self-contained, #N-anchored replies."""
+    footer = (
+        f"How to respond: reply with guidance (e.g. \"try the week after\"), "
+        f"or \"reject #{proposal_id} — reason\" to drop it."
+    )
+    text = (summary or "").strip()
+    if f"#{proposal_id}" in text:
+        return text
+    return f"{text}\n\n{footer}"
 
 
 def _mark_needs_kory(proposal_id: int, summary: str) -> None:

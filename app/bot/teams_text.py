@@ -47,6 +47,13 @@ _OUTREACH_GET_RE = re.compile(r"^outreach\s+(camp-[a-z0-9]+)$", re.IGNORECASE)
 _APPROVE_OUTREACH_RE = re.compile(r"^approve\s+outreach\s+(camp-[a-z0-9]+)$", re.IGNORECASE)
 _SEND_OUTREACH_RE = re.compile(r"^send\s+outreach\s+(camp-[a-z0-9]+)$", re.IGNORECASE)
 _HELP_RE = re.compile(r"^(?:help|\?)$", re.IGNORECASE)
+# A bare confirmation with no proposal number ("YES", "ok close it") — arrives
+# with no context because escalations are proactive pushes (live D6). Routed to
+# a disambiguating answer that names the open escalation, never to an action.
+_BARE_ACK_RE = re.compile(
+    r"^(?:yes|yep|yeah|ok|okay|confirmed?|sounds good|sure)(?:[,.!\s]+(?:close|confirm|do)(?:\s+(?:it|that|out))?)?[.!\s]*$",
+    re.IGNORECASE,
+)
 _SHOW_DRAFT_RE = re.compile(
     r"^(?:show|view|display)(?:\s+me)?(?:\s+the)?\s+draft(?:\s+(?:for|on))?\s+(?:email\s+)?#?(\d+)$",
     re.IGNORECASE,
@@ -213,6 +220,9 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
 
     if _HELP_RE.match(normalized):
         return {"action": "help"}
+
+    if _BARE_ACK_RE.match(normalized):
+        return {"action": "bare_ack", "text": normalized}
 
     if _PENDING_RE.match(normalized):
         return {"action": "pending"}

@@ -209,6 +209,53 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
     if action == "help":
         return {"ok": True, "handled": True, "message": TEAMS_HELP_TEXT}
 
+    if action == "bare_ack":
+        # "YES" with no number can't be acted on (escalations are proactive
+        # pushes, so the reply carries no context — live D6). Never guess:
+        # name the open escalation(s) and give exact commands.
+        from app.storage.lexi_db import get_lexi_connection
+
+        with get_lexi_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.id, COALESCE(t.subject, '(no subject)') AS subject
+                FROM proposals p
+                LEFT JOIN email_threads t ON t.thread_id = p.thread_id
+                WHERE p.status IN ('needs_kory', 'needs_scheduling_guidance')
+                  AND COALESCE(p.updated_at, p.created_at) > datetime('now', '-3 days')
+                ORDER BY COALESCE(p.updated_at, p.created_at) DESC
+                LIMIT 5
+                """
+            ).fetchall()
+        if not rows:
+            return {
+                "ok": False,
+                "handled": False,
+                "message": "Not a Lexi command. Hermes may reply conversationally.",
+            }
+        if len(rows) == 1:
+            pid, subject = rows[0]["id"], rows[0]["subject"]
+            return {
+                "ok": True,
+                "handled": True,
+                "message": (
+                    f"Just to be sure — if that's about the escalation on "
+                    f"**#{pid}** (\"{subject}\"): say **reject #{pid} — reason** "
+                    f"to close it, or reply with guidance like \"try next week\" "
+                    f"and I'll re-run the search."
+                ),
+            }
+        listing = "\n".join(f"• **#{r['id']}** — {r['subject']}" for r in rows)
+        return {
+            "ok": True,
+            "handled": True,
+            "message": (
+                "Which one do you mean? Open escalations:\n"
+                f"{listing}\n"
+                "Say **reject #N — reason** or give guidance naming the number."
+            ),
+        }
+
     if action == "pending":
         from app.agents.comms_agent import get_lexi_invite_queue
 
