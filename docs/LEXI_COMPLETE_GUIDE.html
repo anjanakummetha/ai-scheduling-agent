@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lexi — The Complete Guide</title>
+<style>
+  :root {
+    --ink: #1a2333; --muted: #5b6779; --bg: #f7f8fa; --panel: #ffffff;
+    --accent: #0f5c8c; --accent-soft: #e8f1f7; --good: #1a7f4e; --good-soft: #e7f4ec;
+    --warn: #9a5b00; --warn-soft: #fdf3e3; --bad: #a33030; --bad-soft: #faeaea;
+    --line: #dfe4ea; --code-bg: #eef1f5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         color: var(--ink); background: var(--bg); line-height: 1.55; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 24px 96px; }
+  header.hero { background: linear-gradient(135deg, #10344e 0%, #0f5c8c 100%); color: #fff;
+                border-radius: 14px; padding: 36px 36px 30px; margin-bottom: 28px; }
+  header.hero h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: .2px; }
+  header.hero p { margin: 4px 0; opacity: .92; max-width: 60ch; }
+  header.hero .meta { font-size: 13px; opacity: .75; margin-top: 14px; }
+  nav.toc { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+            padding: 18px 22px; margin-bottom: 28px; }
+  nav.toc strong { display: block; margin-bottom: 8px; }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  nav.toc ol { margin: 0; padding-left: 22px; columns: 2; column-gap: 40px; }
+  nav.toc li { margin: 3px 0; break-inside: avoid; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+            padding: 26px 30px; margin-bottom: 26px; }
+  h2 { margin: 0 0 4px; font-size: 22px; color: var(--accent); }
+  h2 .num { color: var(--muted); font-weight: 600; margin-right: 8px; }
+  h3 { margin: 22px 0 8px; font-size: 16.5px; }
+  p { margin: 10px 0; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
+  code, .cmd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px;
+               background: var(--code-bg); border-radius: 5px; padding: 2px 7px; white-space: nowrap; }
+  .say { display: inline-block; background: var(--accent-soft); color: var(--accent);
+         border-radius: 14px; padding: 3px 12px; font-size: 13.5px; margin: 2px 4px 2px 0;
+         font-style: italic; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--accent-soft); color: var(--accent); font-size: 13px;
+       text-transform: uppercase; letter-spacing: .4px; }
+  tr:last-child td { border-bottom: none; }
+  .tablewrap { overflow-x: auto; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .4px;
+          border-radius: 10px; padding: 2px 9px; text-transform: uppercase; }
+  .pill.on   { background: var(--good-soft); color: var(--good); }
+  .pill.ask  { background: var(--warn-soft); color: var(--warn); }
+  .pill.off  { background: var(--bad-soft); color: var(--bad); }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft);
+             border-radius: 0 10px 10px 0; padding: 12px 18px; margin: 14px 0; }
+  .callout.good { border-color: var(--good); background: var(--good-soft); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+  .callout.bad  { border-color: var(--bad);  background: var(--bad-soft); }
+  ul.tight { margin: 8px 0; padding-left: 22px; }
+  ul.tight li { margin: 5px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } nav.toc ol { columns: 1; } }
+  .kbd { font-family: ui-monospace, Menlo, monospace; background: #fff; border: 1px solid var(--line);
+         border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; font-size: 13px; }
+  footer { color: var(--muted); font-size: 12.5px; text-align: center; margin-top: 30px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Lexi — The Complete Guide</h1>
+  <p>Your AI executive assistant for scheduling, email, calendar, tasks, CRM, and research —
+     living in your <b>Microsoft&nbsp;Teams</b> chat.</p>
+  <p>Talk to her like you'd talk to Heidi. She reads your real inbox and calendar, follows your
+     rules, and <b>never sends anything without your approval</b>.</p>
+  <div class="meta">Prepared for Kory Mitchell · Iconic Founders Group · Verified in production 2026-08-08 ·
+    Every capability in this guide was live-tested end-to-end.</div>
+</header>
+
+<nav class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#quickstart">Quick start — your first five minutes</a></li>
+    <li><a href="#talking">How to talk to Lexi</a></li>
+    <li><a href="#commands">Command cheat sheet</a></li>
+    <li><a href="#scheduling">Scheduling — the full story</a></li>
+    <li><a href="#rules">Your rules — what Lexi enforces for you</a></li>
+    <li><a href="#email">Email</a></li>
+    <li><a href="#calendar">Calendar &amp; daily briefings</a></li>
+    <li><a href="#asana">Asana tasks</a></li>
+    <li><a href="#hubspot">HubSpot CRM</a></li>
+    <li><a href="#research">Research &amp; the outside world</a></li>
+    <li><a href="#memory">Memory — teaching Lexi your rules</a></li>
+    <li><a href="#escalations">When Lexi asks for help (escalations)</a></li>
+    <li><a href="#cannot">What Lexi can NOT do</a></li>
+    <li><a href="#safety">The safety model — why you can trust it</a></li>
+    <li><a href="#faq">FAQ &amp; troubleshooting</a></li>
+    <li><a href="#appendix">Appendix — every tool, explained</a></li>
+  </ol>
+</nav>
+
+<!-- ================================================================ -->
+<section id="quickstart">
+  <h2><span class="num">1</span>Quick start — your first five minutes</h2>
+  <p class="sub">Open Teams → the Lexi (Hermes) chat. Try these, in order:</p>
+  <ul class="tight">
+    <li><span class="say">today</span> — your calendar for the day, in one message.</li>
+    <li><span class="say">pending</span> — anything waiting on your decision (this is the source of truth — always trust it over old messages in the scroll).</li>
+    <li><span class="say">inbox review</span> — what's landed in your email in the last 24 hours, triaged.</li>
+    <li><span class="say">prebrief Jon Kinning</span> — a full who-is-this-person brief: their CRM record, your email history with them, plus fresh web research.</li>
+    <li><span class="say">Set up a 30-minute intro call with jane@example.com next week — mornings her time, she's in Boston</span> — the full machine: Lexi finds rule-compliant times, drafts the email, holds the slots, and asks you to approve before anything sends.</li>
+  </ul>
+  <div class="callout good">
+    <b>The one rule to remember:</b> nothing external ever happens without you saying so.
+    Every email send, calendar invite, task write, and CRM note passes through your explicit
+    approval — <code>approve #N</code> — and every decision is recorded with who approved it and when.
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="talking">
+  <h2><span class="num">2</span>How to talk to Lexi</h2>
+  <p><b>Plain English works.</b> Lexi is an AI agent with ~90 specialized abilities behind her; you never
+     have to know their names. Say what you want the way you'd tell an assistant:</p>
+  <ul class="tight">
+    <li><span class="say">What does my Thursday look like?</span></li>
+    <li><span class="say">Who am I meeting tomorrow? Brief me on anyone external.</span></li>
+    <li><span class="say">Reply to Natalie — happy hour works, offer her a couple of times late next week.</span></li>
+    <li><span class="say">Add a task to IFG Tasks: send the Q3 pre-read, due Friday.</span></li>
+    <li><span class="say">What's the latest news on the Denver construction market?</span></li>
+    <li><span class="say">Remember: never book me Friday afternoons.</span></li>
+  </ul>
+  <h3>Being specific pays off</h3>
+  <p>When you're scheduling, include your constraints in the same breath — they flow straight into
+     the search: window (<i>"next week"</i>, <i>"week of the 17th"</i>), time of day (<i>"mornings"</i>,
+     <i>"after 3"</i>), and where the other person is (<i>"she's in Boston"</i>, <i>"mornings her time"</i>).
+     "Her time" genuinely means <b>her</b> clock — a Boston "mornings her time" produces 6–10&nbsp;AM
+     Mountain options, which is 8–noon Eastern.</p>
+  <h3>Session resets</h3>
+  <p>Type <span class="kbd">/new</span> to start a fresh conversation. Do it when you switch topics or a chat
+     has gone long — it keeps responses fast and cheap. You lose nothing that matters: your saved rules,
+     the pending queue, and everything in the database survive a reset. Only the visible chat context clears.</p>
+  <h3>Timing expectations</h3>
+  <ul class="tight">
+    <li>Simple questions (calendar, pending, lookups): a few seconds.</li>
+    <li>Slot searches and drafts: ~15–60 seconds (she's reading your real calendar).</li>
+    <li>Deep research briefs on a person: up to a minute or two.</li>
+    <li>New email is noticed within ~seconds via a live feed, with a backup sweep every few minutes.</li>
+  </ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="commands">
+  <h2><span class="num">3</span>Command cheat sheet</h2>
+  <p class="sub">Plain English always works — these short forms are just faster. <code>#N</code> is the proposal number Lexi shows you.</p>
+  <div class="tablewrap"><table>
+    <tr><th style="width:36%">Type…</th><th>What happens</th></tr>
+    <tr><td><code>pending</code></td><td>Everything waiting on your decision. <b>The source of truth.</b></td></tr>
+    <tr><td><code>inbound</code></td><td>Threads where someone replied and Lexi staged a response for you.</td></tr>
+    <tr><td><code>today</code></td><td>Today's calendar.</td></tr>
+    <tr><td><code>inbox review</code></td><td>Triaged look at the last 24h of email.</td></tr>
+    <tr><td><code>unanswered</code></td><td>Emails from real people you haven't answered.</td></tr>
+    <tr><td><code>prebrief</code> / <code>prebrief &lt;name&gt;</code></td><td>Today's meetings, or a deep brief on one person.</td></tr>
+    <tr><td><code>show draft #N</code></td><td>See the exact email before deciding.</td></tr>
+    <tr><td><code>approve #N</code></td><td>Release it — the offer email or the calendar invite actually sends.</td></tr>
+    <tr><td><code>approve #N — but make it Tuesday at 3</code></td><td>Approve with your change; the new time keeps the meeting's proper duration.</td></tr>
+    <tr><td><code>reject #N — reason</code></td><td>Kill it. Works on anything pending <i>and</i> on items Lexi escalated to you.</td></tr>
+    <tr><td><code>cancel meeting #N — reason</code></td><td>Cancels a <b>booked</b> meeting — the invite is retracted properly. Use this exact phrasing.</td></tr>
+    <tr><td><code>help</code></td><td>Lexi's own quick reference.</td></tr>
+    <tr><td><span class="kbd">/new</span></td><td>Fresh session (saves tokens; nothing important is lost).</td></tr>
+  </table></div>
+  <div class="callout warn"><b>Never approve an old number from the scroll.</b> Proposal numbers in old
+  messages may be long-decided. Type <code>pending</code> first — if a number isn't listed there, it's history.</div>
+</section>
+
+<!-- ================================================================ -->
+<section id="scheduling">
+  <h2><span class="num">4</span>Scheduling — the full story</h2>
+  <p class="sub">This is Lexi's core job, and the part most thoroughly tested. Two ways in:</p>
+
+  <h3>A. You start it (delegation)</h3>
+  <p><span class="say">Set up a coffee with Mike Rowland (mike@x.com) — in person, Cherry Creek, whenever I'm back in town</span></p>
+  <ol>
+    <li><b>Search.</b> Lexi reads your live calendar and finds 2–3 times that pass <i>all</i> your rules
+        (§5) — honoring your stated window, time-of-day, and the other person's timezone.</li>
+    <li><b>Draft + hold.</b> She writes the offer email (in your voice from your mailbox, or as
+        "Lexi, Kory's assistant" from hers — say <i>"as Lexi"</i> to choose) and shows you everything.
+        If nothing fits your ask, she says so honestly: <i>"No availability for next week — offering
+        August 18, 20 and 25 instead."</i> You always know when an offer deviates from what you asked.</li>
+    <li><b>You approve.</b> <code>approve #N</code> → the email sends and the offered slots are
+        <b>held on your calendar</b> so nothing double-books them while you wait.</li>
+    <li><b>They pick.</b> When the reply lands, Lexi reads which time they chose — including timezone
+        conversion ("noon ET works" maps to the right 10&nbsp;AM MT slot) — and pings you.</li>
+    <li><b>You approve the invite.</b> One more <code>approve #N</code> → the real calendar invite goes
+        out with the Teams link (or venue address for in-person), the unused holds are released, and it's booked.</li>
+  </ol>
+
+  <h3>B. Someone emails you</h3>
+  <p>Lexi watches your inbox continuously. Replies on threads she's handling and things you delegate get
+     acted on and pinged to you. <b>Cold requests from strangers deliberately do NOT interrupt you</b> —
+     they go to your briefings and the review queues instead (Teams pings are for decisions, not FYIs).
+     When you want one handled: <span class="say">schedule the coffee with the guy from the Construction
+     Network email</span> and Lexi picks the thread up from the queue.</p>
+
+  <h3>Changing your mind — all supported</h3>
+  <ul class="tight">
+    <li><b>Different time:</b> <span class="say">approve #212 but do Thursday at 3 instead</span></li>
+    <li><b>Edit the email:</b> <span class="say">show draft #212</span> → <span class="say">change it to mention the Q3 numbers, then send</span></li>
+    <li><b>They declined the times:</b> Lexi finds fresh options and re-stages for your approval (never re-sends on her own).</li>
+    <li><b>Reschedule a booked meeting:</b> ask, and the replacement invite fully replaces the old one — the original is only removed after the new time is confirmed.</li>
+    <li><b>Cancel a booked meeting:</b> <span class="say">cancel meeting #212 — conflict came up</span></li>
+  </ul>
+
+  <h3>Built-in protections (all verified live)</h3>
+  <ul class="tight">
+    <li><b>Conflict re-check at booking.</b> The calendar is authoritative at the moment the invite is created,
+        not when times were offered. If something landed on the chosen slot in between, Lexi <b>refuses to book</b>,
+        keeps the holds protecting the slot, and asks you — there is deliberately no override switch.</li>
+    <li><b>Holds age out.</b> If a recipient never answers, you get a reminder first; expired offers have their
+        holds cleaned off your calendar automatically.</li>
+    <li><b>Stated durations are honored.</b> A 30-minute ask books 30 minutes — except coffee, which always
+        books 60 (your rule: they run long). A modified time can never produce a zero-length meeting.</li>
+    <li><b>Every send is yours.</b> Auto-send is off at the system level. No approval, no email — ever.</li>
+  </ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="rules">
+  <h2><span class="num">5</span>Your rules — what Lexi enforces for you</h2>
+  <p class="sub">These are coded in, validated on every single slot, and re-checked before booking. Lexi will not offer or book a time that breaks them — when a request can't be satisfied compliantly, she asks you instead of guessing.</p>
+  <div class="tablewrap"><table>
+    <tr><th style="width:34%">Rule</th><th>What it means in practice</th></tr>
+    <tr><td>Training block is protected</td><td>Your 6:30 workout is untouchable. Earliest virtual/informal call: <b>8:00&nbsp;AM</b> (you take those finishing the workout). Earliest formal/in-person: <b>9:30&nbsp;AM</b>.</td></tr>
+    <tr><td>Tue/Thu early starts</td><td>7:00&nbsp;AM is an acceptable occasional early start; <b>6:00&nbsp;AM only for East-Coast contacts</b>. Nothing earlier, ever.</td></tr>
+    <tr><td>Lunch is yours</td><td>Lexi never auto-offers lunch slots. A lunch request is held and routed to you as an exception decision.</td></tr>
+    <tr><td>Weekends are closed</td><td>Weekend requests route to you to approve; nothing is booked by default. (Family calendar details are never read — only "Do Not Move" blocks.)</td></tr>
+    <tr><td>Coffee = 60 minutes</td><td>Even when they ask for 30. And nothing gets booked within 30 minutes after a coffee — without a visible "buffer" block cluttering your calendar.</td></tr>
+    <tr><td>Coffee stays coffee</td><td>Lexi never converts your coffee into a call or video meeting to find an easier slot. Matt joins coffees only when the thread explicitly says so.</td></tr>
+    <tr><td>"Urgent" escalates, never bypasses</td><td>Someone writing "urgent"/"ASAP" cannot unlock lunch, 6&nbsp;AM, or travel days. Lexi flags it to you with an exception offer instead.</td></tr>
+    <tr><td>Travel weeks are guarded</td><td>Days you're traveling are held for you — travel weeks are for 2–3 critical check-ins only, and Lexi asks before offering times on them.</td></tr>
+    <tr><td>No same-day booking</td><td>Next-day is the earliest anything gets offered.</td></tr>
+    <tr><td>Nothing after 6&nbsp;PM</td><td>Non-dinner meetings end by 6. Happy hours end by 6 (and Fridays are discouraged). Dinner is its own category.</td></tr>
+    <tr><td>Reschedules are considerate</td><td>2 options offered, priority handling, short 1-day holds.</td></tr>
+    <tr><td>Venue addresses on invites</td><td>In-person invites carry the venue address; meal meetings trigger a reservation-reminder task on your Asana board.</td></tr>
+  </table></div>
+  <p>Want a rule changed or added? Just tell her — see <a href="#memory">Memory (§11)</a> — or tell Anjana for anything structural.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="email">
+  <h2><span class="num">6</span>Email</h2>
+  <h3>What she does with your inbox</h3>
+  <ul class="tight">
+    <li><b>Watches continuously</b> — new mail is triaged (who it's from, what they want, how urgent) within moments of arriving.</li>
+    <li><b>Surfaces what matters</b>: <span class="say">inbox review</span> for the day's picture, <span class="say">unanswered</span> for real people awaiting your reply, and the review queues for scheduling-shaped threads.</li>
+    <li><b>Searches on demand</b>: <span class="say">find the thread where Travis mentioned the plumbing deal</span>.</li>
+  </ul>
+  <h3>Writing and sending</h3>
+  <ul class="tight">
+    <li><b>Two voices.</b> <i>"In my voice"</i> = written as you, sent from your mailbox. <i>"As Lexi"</i> = she writes as your assistant from lexi@iconicfounders.com, introduced simply as "Kory's assistant". Scheduling replies default to continuing the existing thread the way a human EA would.</li>
+    <li><b>Draft-first, always.</b> You can review any email with <span class="say">show draft #N</span> and edit it in plain words before it goes.</li>
+    <li><b>No approval, no send.</b> There is no path around this.</li>
+  </ul>
+  <div class="callout"><b>Note:</b> emailing <code>lexi@iconicfounders.com</code> directly does nothing —
+  nobody's watching that mailbox. Lexi works from <i>your</i> inbox and this Teams chat. To hand her an
+  email thread, CC her on it, forward it, or just mention it here.</div>
+</section>
+
+<!-- ================================================================ -->
+<section id="calendar">
+  <h2><span class="num">7</span>Calendar &amp; daily briefings</h2>
+  <ul class="tight">
+    <li><span class="say">today</span> / <span class="say">what's my week look like?</span> / <span class="say">am I free Thursday at 2?</span> — reads across your calendars (main, master, birthdays…), timezone-correct, all-day events labeled properly.</li>
+    <li><b>Availability intelligence</b> — knows the difference between hard blocks (training, Do&nbsp;Not&nbsp;Move, travel) and soft ones; classifies busy time by type when searching.</li>
+    <li><b>Invites you receive</b> — <span class="say">accept the invite from Sarah</span> / <span class="say">decline the 4pm on Friday</span>.</li>
+    <li><b>Meeting prep</b> — <span class="say">prebrief</span> lists today's meetings; <span class="say">prebrief &lt;person&gt;</span> or <span class="say">brief me on my 10 o'clock</span> produces the deep version: who they are, your history, their company, recent news.</li>
+  </ul>
+  <h3>The morning briefing email</h3>
+  <p>Your daily briefing email (calendar, triaged inbox, tasks, prep) arrives early each morning
+     (~4:30&nbsp;AM MT). That's produced by the <b>dashboard</b> system, not this chat — but everything in it,
+     you can also ask Lexi about interactively.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="asana">
+  <h2><span class="num">8</span>Asana tasks</h2>
+  <ul class="tight">
+    <li><b>Reads span every project you have</b> — personal board, IFG Tasks, Call List, Marketing Content Calendar, all of it. <span class="say">what's overdue?</span> shows <i>your</i> tasks by default (teammates' work on shared boards is filtered out; say <i>"everyone's"</i> to see all).</li>
+    <li><b>Create anywhere, by name</b> — <span class="say">add a task to IFG Tasks: send the Q3 pre-read, due Friday</span>. No project named → your personal board. Ambiguous name → she asks rather than guessing.</li>
+    <li><b>Full management</b> — update, complete, move between sections, comment, delete: <span class="say">mark the cigars task done</span>, <span class="say">move it to YPO</span>, <span class="say">push the due date to Monday</span>.</li>
+    <li><b>Someone else's task?</b> She'll tell you whose it is and ask you to confirm before touching it — never silently.</li>
+    <li><b>Reservation reminders</b> — confirmed meal/venue meetings automatically stage a "Needs Reservation" task with the details.</li>
+    <li><b>Date sanity</b> — "due August 3" always resolves to the <i>next</i> August 3, never a date in the past.</li>
+  </ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="hubspot">
+  <h2><span class="num">9</span>HubSpot CRM</h2>
+  <h3>Reads — ask anything</h3>
+  <ul class="tight">
+    <li><span class="say">who is Kevin Rabe?</span> — the CRM record: title, company, phone, status, history.</li>
+    <li><span class="say">what changed in the CRM this week?</span> — new contacts, deal-stage movements.</li>
+    <li><span class="say">deals snapshot</span> — open pipeline at a glance.</li>
+    <li><span class="say">CRM health</span> — your book: missing titles/companies/phones, never-contacted counts.</li>
+    <li>Duplicate detection and contact enrichment run in <b>propose-only</b> mode — you see what would change; nothing merges or fills without you.</li>
+  </ul>
+  <h3>Writes — deliberately narrow</h3>
+  <ul class="tight">
+    <li><b>Meeting notes:</b> <span class="say">log a note on Jon Kinning — great call, wants the deck, follow up after Labor Day</span>. Filed on the right record, timestamped.</li>
+    <li><b>Guardrails proven live:</b> a fuzzy name match is never written to (exact record or nothing); a contact <b>owned by someone else</b> requires your explicit confirmation; <b>Do&nbsp;Not&nbsp;Contact</b> records are excluded from everything outreach-shaped, always.</li>
+  </ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="research">
+  <h2><span class="num">10</span>Research &amp; the outside world</h2>
+  <p>Lexi reaches the web only when the question needs it — your calendar/email/CRM questions never touch the internet.</p>
+  <ul class="tight">
+    <li><b>People</b> — <span class="say">research Jane Doe at Acme before Thursday</span>: web + news + your own email history with them + their CRM record, in one brief.</li>
+    <li><b>News</b> — <span class="say">latest news on the Denver construction market</span> — dated articles with sources.</li>
+    <li><b>Places</b> — <span class="say">good coffee shops in Cherry Creek</span> — ratings and addresses.</li>
+    <li><b>Travel</b> — <span class="say">flights DEN to Houston on the 17th</span> / <span class="say">hotels near the Galleria that week</span>. <b>Research only — she cannot book travel.</b></li>
+    <li><b>Anything else</b> — weather, a company, a URL you paste: she'll look it up and give a sourced answer.</li>
+  </ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="memory">
+  <h2><span class="num">11</span>Memory — teaching Lexi your rules</h2>
+  <ul class="tight">
+    <li><b>Add a rule:</b> <span class="say">Remember: no calls before 9 on Mondays</span> — it immediately shapes every future slot search. This is for durable preferences, not one-off requests.</li>
+    <li><b>See what she knows:</b> <span class="say">what do you remember about my preferences?</span></li>
+    <li><b>Change a rule:</b> just restate it — the new version replaces the old.</li>
+    <li><b>Remove a rule:</b> <span class="say">forget the rule about Monday calls</span> — she deletes it and quotes back exactly what was removed. If your phrase matches more than one rule she lists them and asks which, deleting nothing until you say.</li>
+  </ul>
+  <p>Separately, Lexi keeps her own operational notes (things she's learned about how you like things done —
+     e.g. that "as Lexi" means her voice from her mailbox). Those make her better over time without any action from you.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="escalations">
+  <h2><span class="num">12</span>When Lexi asks for help (escalations)</h2>
+  <p>When she can't do something compliantly — no valid times in the window, a lunch/weekend/travel exception,
+     a send failure — she <b>never guesses</b>. She explains the specific blocker and gives you concrete options,
+     always ending with exactly how to respond:</p>
+  <div class="callout">
+    <i>"Coffee mornings are packed the week of the 17th — the earliest compliant options are the following week.<br>
+    How to respond: reply with guidance (e.g. "try the week after"), or "reject #4242 — reason" to drop it."</i>
+  </div>
+  <ul class="tight">
+    <li><b>Reply in plain words</b> — <span class="say">try the week after</span> / <span class="say">offer the 6am slot, she's East Coast</span> — and the search re-runs with your guidance.</li>
+    <li><b>Or kill it</b> — <span class="say">reject #4242 — not worth pursuing</span>. Works on escalated items too.</li>
+    <li>If you just type "yes" or "ok", she'll confirm which item you mean before doing anything.</li>
+  </ul>
+  <p>You are the <b>only</b> escalation target — Lexi never hands your issues to anyone else, and never claims she has.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="cannot">
+  <h2><span class="num">13</span>What Lexi can NOT do</h2>
+  <p class="sub">Just as important as the capabilities. Some are safety design, some are deliberate scope, a few are current limitations.</p>
+  <div class="tablewrap"><table>
+    <tr><th style="width:38%">She cannot…</th><th>Why / what to do instead</th></tr>
+    <tr><td>Send any email, invite, or external message without your approval</td><td>By design, enforced at the system level. There is no "just send it" mode.</td></tr>
+    <tr><td>Book over your rules (lunch, weekends, training, travel, 6&nbsp;PM…)</td><td>She escalates with options instead. You grant exceptions per-case in chat.</td></tr>
+    <tr><td>Book over a conflict at confirmation time</td><td>Fails closed, no override flag exists. Clear the clash, then re-approve.</td></tr>
+    <tr><td>Respond to email sent <i>to</i> lexi@iconicfounders.com</td><td>Nothing watches that mailbox. Use this Teams chat, or CC/forward on your own mail.</td></tr>
+    <tr><td>Show interactive buttons/cards in Teams</td><td>Approvals are <b>typed</b> (<code>approve #N</code>) — deliberate, they're audited and reliable. Any card you see in the chat scroll is an old leftover: <b>ignore all cards</b>; <code>pending</code> is the truth.</td></tr>
+    <tr><td>Delete or edit her old Teams messages</td><td>Platform limitation — old messages stay in the scroll. Never act on an old message's numbers.</td></tr>
+    <tr><td>Run outreach campaigns / bulk email sequences</td><td>Deliberately switched off. Your YPO outreach stays fully in your hands.</td></tr>
+    <tr><td>Auto-log emails to HubSpot via BCC</td><td>Currently broken on HubSpot's side; parked. Meeting notes via chat work fine.</td></tr>
+    <tr><td>Permanently delete HubSpot contacts</td><td>Never — archive only (recoverable for 90 days). Permanent deletion would blacklist the address forever.</td></tr>
+    <tr><td>Read your family's calendar details</td><td>Privacy line: she sees only "Do Not Move" blocks, never contents. Weekend judgment calls come to you.</td></tr>
+    <tr><td>Book flights, hotels, or restaurants</td><td>She researches options and creates the reservation-reminder task; the booking is a human's.</td></tr>
+    <tr><td>Answer questions about other people's mailboxes or calendars</td><td>She acts only within your accounts, with your permissions.</td></tr>
+    <tr><td>Interrupt you for every cold email</td><td>Deliberate: strangers' asks go to briefs/queues, not pings. Say the word when you want one handled.</td></tr>
+  </table></div>
+</section>
+
+<!-- ================================================================ -->
+<section id="safety">
+  <h2><span class="num">14</span>The safety model — why you can trust it</h2>
+  <ul class="tight">
+    <li><b>Approval gate:</b> every outbound action requires your typed decision. Auto-execute and immediate-send are off in production config.</li>
+    <li><b>Audit trail:</b> every approval/rejection/modification is recorded — the decision, its source, who authorized it, and when. Every send, hold, booking, and cancellation writes an audit entry.</li>
+    <li><b>Calendar truth at booking:</b> conflicts are re-checked at the moment the invite is created; holds protect offered times in between.</li>
+    <li><b>Honest disclosure:</b> if an offer deviates from what you (or the sender) asked — different week, relaxed preference — the approval message says so before you approve.</li>
+    <li><b>Fails closed:</b> anything uncertain (ambiguous task name, ambiguous rule to delete, fuzzy CRM match, someone else's record, policy conflict) stops and asks rather than guessing.</li>
+    <li><b>Verified:</b> every capability in this guide was exercised against the live systems on 2026-08-08 — including the complete schedule→offer→accept→book→cancel lifecycle — with an automated test suite of ~680 checks behind it.</li>
+  </ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="faq">
+  <h2><span class="num">15</span>FAQ &amp; troubleshooting</h2>
+  <h3>“There's a card with buttons in my chat — should I tap it?”</h3>
+  <p><b>No.</b> Cards are retired leftovers from pre-launch testing and can even resurface looking new after
+     system restarts. They're harmless (verified), but ignore them. <code>pending</code> is always the truth.</p>
+  <h3>“I approved something but nothing seems to have happened.”</h3>
+  <p>Type <code>pending</code> — if the item is gone, it executed. Lexi also confirms every execution in chat.
+     If something failed, she tells you exactly what and stages a retry for your go-ahead.</p>
+  <h3>“Can I ask her to do several things at once?”</h3>
+  <p>Yes — <span class="say">what's my day, anything pending, and brief me on my 2 o'clock</span> works fine.</p>
+  <h3>“How do I hand her an email I got?”</h3>
+  <p>Mention it (<span class="say">the email from Sarah about the board dinner — offer her some times</span>) —
+     she'll find the thread. CCing her on an email also puts it in front of her.</p>
+  <h3>“What does a proposal number mean?”</h3>
+  <p>Every piece of work gets a number (<code>#8021</code>). It's how you and Lexi refer to the same thing
+     unambiguously. Numbers are per-item, never reused.</p>
+  <h3>“The chat is slow or acting confused.”</h3>
+  <p>Type <span class="kbd">/new</span> for a fresh session. If something seems genuinely broken, tell Anjana —
+     everything is logged, and a timestamp plus what you typed is enough to find it.</p>
+  <h3>“Where does the morning email come from?”</h3>
+  <p>The dashboard system sends it (~4:30&nbsp;AM MT daily). Lexi is the interactive side; the briefing is the
+     push side. Same data, two doors.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="appendix">
+  <h2><span class="num">16</span>Appendix — every tool, explained</h2>
+  <p class="sub">The complete inventory of Lexi's 90+ abilities. You never call these directly — you talk, and
+     the agent picks the right one — but this is the exhaustive map of what's under the hood.
+     <span class="pill on">write = needs your approval</span></p>
+
+  <h3>Scheduling engine</h3>
+  <div class="tablewrap"><table>
+    <tr><th style="width:30%">Tool</th><th>What it does</th></tr>
+    <tr><td><code>lexi_start_scheduling</code></td><td>Kicks off outbound scheduling: rule-valid slots + drafted offer + staged approval. Carries your constraints verbatim ("mornings her time", "next week"). <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_find_slots</code></td><td>Finds rule-valid times for any request — the mandatory path whenever times are proposed (no hand-picked guesses allowed).</td></tr>
+    <tr><td><code>lexi_preview_schedule</code> / <code>lexi_propose_schedule</code></td><td>Preview a scheduling outcome / stage a full proposal from an email thread. <span class="pill on">propose = write</span></td></tr>
+    <tr><td><code>lexi_validate_slots</code> / <code>lexi_validate_scheduling_cases</code></td><td>Check specific times against your rules + live calendar; explains every violation.</td></tr>
+    <tr><td><code>lexi_check_time_slot</code></td><td>Raw free/busy check for one window.</td></tr>
+    <tr><td><code>lexi_place_calendar_hold</code></td><td>Places a hold event protecting a slot. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_retry_scheduling</code></td><td>Re-runs a search with your guidance after an escalation.</td></tr>
+    <tr><td><code>lexi_begin_reoffer</code></td><td>Recipient declined the times → find fresh options, stage for approval.</td></tr>
+    <tr><td><code>lexi_decline_inbound_reply</code></td><td>Politely close out a thread instead of scheduling. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_recipient_timezone</code></td><td>Works out where the other person is (their words → signature → area code → history).</td></tr>
+    <tr><td><code>lexi_get_scheduling_context</code> / <code>lexi_get_scheduling_session</code> / <code>lexi_upsert_scheduling_session</code></td><td>The full picture of one scheduling thread; multi-step session state.</td></tr>
+    <tr><td><code>lexi_escalate_to_kory</code></td><td>Routes a blocked situation to you with specific options — you are the only escalation target.</td></tr>
+  </table></div>
+
+  <h3>Approvals &amp; queues</h3>
+  <div class="tablewrap"><table>
+    <tr><th style="width:30%">Tool</th><th>What it does</th></tr>
+    <tr><td><code>lexi_handle_teams_command</code></td><td>The router for your typed commands — approve / reject / cancel / pending / show draft / today / help all flow through here, against the database, never from chat memory.</td></tr>
+    <tr><td><code>get_lexi_pending_queue</code> / <code>get_pending_decisions</code></td><td>Everything awaiting your decision.</td></tr>
+    <tr><td><code>execute_lexi_approval</code> / <code>approve_decision</code> / <code>reject_decision</code></td><td>Records your decision and executes: send the offer, or send the invite + confirm the hold + release the rest. Every decision audited. <span class="pill on">write</span></td></tr>
+    <tr><td><code>modify_and_approve_decision</code></td><td>Approve with your changed time; duration inherited correctly. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_update_proposal_draft</code></td><td>Rewrites a pending email draft per your edits before it sends.</td></tr>
+    <tr><td><code>lexi_begin_draft_reply</code> / <code>lexi_draft_reply_for_email</code></td><td>Draft a reply on a queued thread (escalates if scheduling can't be satisfied).</td></tr>
+    <tr><td><code>lexi_get_inbound_reply_queue</code></td><td>Threads where a real person replied and a response is staged.</td></tr>
+    <tr><td><code>lexi_register_teams_conversation</code> / <code>lexi_handle_teams_card_submit</code></td><td>Plumbing: connects this chat for notifications; legacy card handler (cards are parked).</td></tr>
+  </table></div>
+
+  <h3>Email</h3>
+  <div class="tablewrap"><table>
+    <tr><th style="width:30%">Tool</th><th>What it does</th></tr>
+    <tr><td><code>lexi_inbox_review</code></td><td>Triaged review of recent mail: action items, FYIs, noise.</td></tr>
+    <tr><td><code>lexi_unanswered_brief</code></td><td>Real people awaiting your reply in the last N hours.</td></tr>
+    <tr><td><code>lexi_search_inbox</code> / <code>lexi_get_thread</code> / <code>lexi_get_thread_context</code></td><td>Find mail; read a message; reconstruct a whole conversation.</td></tr>
+    <tr><td><code>lexi_draft_outbound_email</code></td><td>Draft-only preview of a new email — nothing sends from this.</td></tr>
+    <tr><td><code>lexi_send_outbound_email</code></td><td>The actual send, approval-gated, from the correct mailbox for the voice. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_preview_scheduling_email</code></td><td>Example of a properly formatted offer (formatting reference).</td></tr>
+    <tr><td><code>lexi_execute_outlook_action</code></td><td>Controlled access to specific allowlisted Outlook operations. <span class="pill on">writes gated</span></td></tr>
+  </table></div>
+
+  <h3>Calendar &amp; briefings</h3>
+  <div class="tablewrap"><table>
+    <tr><th style="width:30%">Tool</th><th>What it does</th></tr>
+    <tr><td><code>lexi_today</code> / <code>lexi_today_calendar</code></td><td>Today's date/time anchor; today's meetings, properly timezone'd, all-day events labeled.</td></tr>
+    <tr><td><code>lexi_list_calendars</code></td><td>All calendars visible on your account.</td></tr>
+    <tr><td><code>lexi_get_calendar_availability</code></td><td>Your busy picture weeks ahead, classified (work / personal / family-DNM / travel).</td></tr>
+    <tr><td><code>lexi_summarize_calendar_window</code></td><td>"What's next week look like?" — day-by-day summary of any window.</td></tr>
+    <tr><td><code>lexi_find_meeting_times</code></td><td>Outlook's own meeting-time suggestions for multi-person internal scheduling.</td></tr>
+    <tr><td><code>lexi_accept_calendar_invite</code> / <code>lexi_decline_calendar_invite</code></td><td>Respond to invites you've received. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_add_conflict_calendar</code></td><td>Adds another calendar into conflict-checking.</td></tr>
+    <tr><td><code>lexi_get_family_calendar_status</code></td><td>Reports only whether family "Do Not Move" blocks exist — never details.</td></tr>
+    <tr><td><code>lexi_create_reservation_reminder</code></td><td>Stages the venue/meal reservation task on Asana. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_prebrief</code> / <code>lexi_meeting_brief</code> / <code>lexi_precall_brief</code></td><td>Today's meetings at a glance → full per-meeting brief → deep single-person brief (CRM + history + web).</td></tr>
+  </table></div>
+
+  <h3>Asana</h3>
+  <div class="tablewrap"><table>
+    <tr><th style="width:30%">Tool</th><th>What it does</th></tr>
+    <tr><td><code>lexi_list_asana_projects</code> / <code>lexi_list_asana_boards</code></td><td>Every project you can see; the sections on your personal board.</td></tr>
+    <tr><td><code>lexi_list_asana_tasks</code> / <code>lexi_search_asana_tasks</code></td><td>Overdue / due-today / upcoming / completed, across all projects; name search. Defaults to <i>your</i> tasks.</td></tr>
+    <tr><td><code>lexi_create_asana_task</code></td><td>Create on any project by name (defaults to your personal board); refuses ambiguous project names. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_update_asana_task</code> / <code>lexi_complete_asana_task</code> / <code>lexi_delete_asana_task</code></td><td>Edit / finish / remove — with the someone-else's-task confirmation guard. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_move_asana_task</code> / <code>lexi_comment_asana_task</code></td><td>Move between sections (project-aware); add comments. <span class="pill on">write</span></td></tr>
+  </table></div>
+
+  <h3>HubSpot</h3>
+  <div class="tablewrap"><table>
+    <tr><th style="width:30%">Tool</th><th>What it does</th></tr>
+    <tr><td><code>lexi_lookup_person</code></td><td>"Who is X?" — the go-to for any question about a person.</td></tr>
+    <tr><td><code>lexi_hubspot_find_contacts</code></td><td>Search by company, activity, lifecycle.</td></tr>
+    <tr><td><code>lexi_hubspot_status</code> / <code>lexi_hubspot_health_report</code> / <code>lexi_hubspot_compare_books</code></td><td>Portal overview; your book's data quality; owner-by-owner comparison.</td></tr>
+    <tr><td><code>lexi_hubspot_recent_changes</code> / <code>lexi_hubspot_deals_snapshot</code></td><td>What changed lately; the open pipeline.</td></tr>
+    <tr><td><code>lexi_hubspot_meeting_note</code></td><td>Logs your meeting note on the exact right record. <span class="pill on">write</span></td></tr>
+    <tr><td><code>lexi_hubspot_prebrief_enrich</code></td><td>CRM context feeding the pre-meeting briefs.</td></tr>
+    <tr><td><code>lexi_hubspot_duplicate_merges</code> / <code>lexi_hubspot_enrich_contacts</code> / <code>lexi_hubspot_cleanup_proposals</code></td><td><b>Propose-only</b>: potential duplicates, fillable blanks, stale records. Nothing changes without you.</td></tr>
+    <tr><td><code>lexi_hubspot_outreach_candidates</code> / <code>lexi_hubspot_outreach_batch</code></td><td>Reconnect-candidate lists (DNC always excluded). Campaign <i>sending</i> is switched off.</td></tr>
+  </table></div>
+
+  <h3>Research &amp; web</h3>
+  <div class="tablewrap"><table>
+    <tr><th style="width:30%">Tool</th><th>What it does</th></tr>
+    <tr><td><code>lexi_research_person</code></td><td>Web + news + your inbox history on one person.</td></tr>
+    <tr><td><code>lexi_web_search</code> / <code>lexi_search_news</code></td><td>Sourced answers; dated news.</td></tr>
+    <tr><td><code>lexi_search_maps</code></td><td>Places, ratings, addresses.</td></tr>
+    <tr><td><code>lexi_search_flights</code> / <code>lexi_search_hotels</code></td><td>Travel research (never booking).</td></tr>
+    <tr><td><code>lexi_fetch_url_content</code> / <code>lexi_execute_search_action</code></td><td>Read a webpage; other allowlisted search types (events, etc.).</td></tr>
+  </table></div>
+
+  <h3>Memory &amp; system</h3>
+  <div class="tablewrap"><table>
+    <tr><th style="width:30%">Tool</th><th>What it does</th></tr>
+    <tr><td><code>lexi_remember_kory_fact</code></td><td>Saves a standing rule you state; shapes all future scheduling.</td></tr>
+    <tr><td><code>lexi_forget_kory_fact</code></td><td>Removes a saved rule; quotes what was deleted; refuses ambiguity.</td></tr>
+    <tr><td><code>lexi_list_kory_memory</code></td><td>Shows everything saved.</td></tr>
+    <tr><td><code>lexi_get_system_status</code></td><td>Full health/config readout (mostly for Anjana).</td></tr>
+  </table></div>
+</section>
+
+<footer>
+  Lexi Complete Guide · prepared 2026-08-08 · every capability verified live in production (RUN 15) ·
+  questions or issues → Anjana
+</footer>
+</div>
+</body>
+</html>
