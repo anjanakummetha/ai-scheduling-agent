@@ -1181,9 +1181,12 @@ disposable HubSpot contact. Cleanup verified zero residue (§ Residue below).
   proposals are now rejectable via chat ("reject #N — reason"); rejection
   releases holds and records an audited decision; terminal statuses still
   refuse. Live-verified on prod with a throwaway escalated proposal.
-- **D6**: escalation says "reply YES to confirm" but the gateway agent has no
-  linkage from a bare YES back to the escalation — it asks "what would you like
-  to approve?".
+- **D6 — FIXED same day** (`e580274`): escalations now always end with a
+  deterministic #N-anchored options footer (composer forbidden from inviting
+  bare yes/no — the reply arrives without the push in the agent's context),
+  and the command router answers bare confirmations ("YES"/"ok") by naming
+  the open escalation(s) from the last 3 days with exact commands — never
+  guessing, conversational fall-through when none are open. Live-verified.
 - **D7 (decision, Anjana 2026-08-08)**: **Teams cards PARKED; text-only is the
   supported mode** (`LEXI_TEAMS_TEXT_ONLY=true` restored). Prod had in fact run
   text-only since Aug 4 — the "cards ON" go-live posture in
