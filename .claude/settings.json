@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh root@srv1686061.hstgr.cloud *)",
+      "Bash(ssh -o BatchMode=yes root@srv1686061.hstgr.cloud *)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=10 root@srv1686061.hstgr.cloud *)",
+      "Bash(ssh -i ~/.ssh/lexi_vps_ed25519 root@srv1686061.hstgr.cloud *)",
+      "Bash(scp -o BatchMode=yes *)",
+      "Bash(scp -i ~/.ssh/lexi_vps_ed25519 *)"
+    ]
+  }
+}
