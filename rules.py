@@ -1,8 +1,16 @@
 """
 Kory's Scheduling Rules — default preferences (living document).
 
-These outline Kory's *standard* preferences today. They will change over time;
-edit this file when preferences shift — no need to touch agent code for most updates.
+These outline Kory's *standard* preferences today. They will change over time.
+
+NOT every key here is machine-enforced. Keys the code actually reads are safe to
+edit directly (durations, preferred_times, locations, VENUE_ADDRESSES, HOLD_RULES
+day counts). Keys that only feed the LLM prompt text (notes, override_condition,
+travel_rule, stack_preference, reservation_note, post_meeting_rule, avoid_days,
+hard_end_time, max_per_week inside MEETING_TYPES) shape drafts but do NOT change
+deterministic validation — the enforced equivalents live in CAPACITY_LIMITS,
+BUFFER_RULES, and app/rules/validators.py. When changing a "hard" rule, verify a
+validator reads it before trusting the edit.
 
 Precedence (highest wins):
   1. Kory's calendar (actual busy/free, holds, existing commitments)
@@ -159,10 +167,12 @@ MEETING_TYPES = {
         "post_meeting_rule": "Never schedule anything after happy hour — family time.",
         "reservation_required": True,
         "reservation_note": "Request a bar booth.",
+        # Clean display names only — these go on the Outlook invite verbatim.
+        # Opening-time constraints live in VENUE_ADDRESSES below.
         "locations": [
-            "Cherry Creek Grill (opens 3:30 — default for 3:30 starts, closest to home)",
-            "Hillstone (opens 3:30)",
-            "Quality Italian (opens 4:00 only)",
+            "Cherry Creek Grill",
+            "Hillstone",
+            "Quality Italian",
         ],
     },
     "dinner": {
@@ -175,6 +185,7 @@ MEETING_TYPES = {
     },
     "lunch": {
         "label": "Lunch Meeting",
+        "duration_minutes": 60,
         "default": "NO — Kory works through lunch by default.",
         "exception": "Only for clients who absolutely cannot meet any other time.",
     },
@@ -190,6 +201,27 @@ MEETING_TYPES = {
         "format": "virtual",
         "scheduling": "Ad hoc — no fixed cadence. Opportunistic booking.",
     },
+}
+
+# VENUE ADDRESSES — appended to the Outlook invite Location field so guests
+# get a mappable address (matches Heidi's invite convention).
+# VERIFY BEFORE RELYING ON THEM: only Aviano on St. Paul is confirmed from a
+# real Heidi invite; the rest are believed-correct and need a one-time check.
+VENUE_ADDRESSES = {
+    "Olive & Finch": "3390 E 1st Ave, Denver, CO 80206",
+    "Aviano on St. Paul": "215 Saint Paul St, Denver, CO 80206",
+    "Aviano on Detroit": "244 Detroit St, Denver, CO 80206",
+    "Cherry Creek Grill": "184 Fillmore St, Denver, CO 80206",
+    "Hillstone": "303 Josephine St, Denver, CO 80206",
+    "Quality Italian": "241 Columbine St, Denver, CO 80206",
+}
+
+# Earliest bookable start per venue (opening time, HH:MM local). Read by
+# invite/venue selection so e.g. Quality Italian is never offered for 3:30.
+VENUE_OPENS_AT = {
+    "Cherry Creek Grill": "15:30",
+    "Hillstone": "15:30",
+    "Quality Italian": "16:00",
 }
 
 # BUFFER AND CAPACITY RULES

@@ -188,7 +188,11 @@ def _resolve_type_key(intent: str | None, subject: str, body: str) -> str:
     subject_lower = (subject or "").lower()
     intent_key = (intent or "unknown").lower().replace(" ", "_")
 
-    if any(cue in combined for cue in PODCAST_CUES):
+    # Meal/coffee cues outrank podcast text cues: "coffee before the recording
+    # session?" is a coffee, and misreading it as podcast loses the venue, the
+    # 90-min reserve, and the post-coffee buffer. An explicit podcast triage
+    # intent still wins outright.
+    if intent_key == "podcast":
         return "podcast"
     if intent_key in {"happy_hour"} or re.search(r"happy\s*hour", combined):
         return "happy_hour"
@@ -202,6 +206,8 @@ def _resolve_type_key(intent: str | None, subject: str, body: str) -> str:
         return "dinner"
     if intent_key in {"lunch", "lunch_request"} or "lunch" in combined:
         return "lunch"
+    if any(cue in combined for cue in PODCAST_CUES):
+        return "podcast"
 
     if "intro" in subject_lower or any(cue in subject_lower for cue in INTRO_CUES):
         return "referral_or_intro"
@@ -258,7 +264,9 @@ def resolve_meeting_type(
         block = max(int(_type_config("coffee").get("calendar_block_minutes") or 90), duration + 30)
         meeting_duration = int(_type_config("coffee").get("duration_minutes") or 60)
     elif type_key == "referral_or_intro":
-        meeting_duration = min(duration, 30) if duration <= 45 else duration
+        # Honor the sender's stated length ("45 minutes" stays 45 — Kory's
+        # rule is "go with whatever they noted", not round-down-to-30).
+        meeting_duration = duration
         block = meeting_duration
     elif type_key == "new_client":
         meeting_duration = max(duration, 60) if duration >= 45 else duration

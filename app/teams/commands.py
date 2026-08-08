@@ -26,6 +26,12 @@ from app.utils.teams_cards import (
 )
 
 
+def _result_warnings(result: Any) -> str:
+    """Warnings carry Kory-facing remedy copy (E-6 clash guidance, hold-placement
+    alerts); every render path must append them or they are written and lost."""
+    return " ".join(getattr(result, "warnings", None) or [])
+
+
 def handle_teams_card_submit(value: dict[str, Any], *, authorized_by: str = "kory") -> dict[str, Any]:
     """Process Adaptive Card submit payloads (editable draft + Send/Discard/Save)."""
     action = str(value.get("action") or "").strip()
@@ -123,18 +129,20 @@ def handle_teams_card_submit(value: dict[str, Any], *, authorized_by: str = "kor
             }
         if result.ok:
             suffix = " (dry run)" if settings.lexi_dry_run else ""
+            note = _result_warnings(result)
             return {
                 "ok": True,
                 "handled": True,
-                "message": f"Calendar invite sent{suffix}.",
+                "message": f"Calendar invite sent{suffix}." + (f" ⚠️ {note}" if note else ""),
                 "proposal_id": proposal_id,
                 "execution": result.to_dict(),
             }
         errors = ", ".join(result.errors or []) or "unknown error"
+        detail = f"{errors} {_result_warnings(result)}".strip()
         return {
             "ok": False,
             "handled": True,
-            "message": f"Invite failed: {errors}",
+            "message": f"Invite failed: {detail}",
             "proposal_id": proposal_id,
             "execution": result.to_dict(),
         }
@@ -635,21 +643,24 @@ def _run_invite_from_text(proposal_id: int, authorized_by: str) -> dict[str, Any
         }
     if result.ok:
         released = result.holds_released or 0
+        note = _result_warnings(result)
         return {
             "ok": True,
             "handled": True,
             "message": (
                 f"Calendar invite sent for **{label}**"
                 + (f" — released {released} unused hold(s)." if released else ".")
+                + (f" ⚠️ {note}" if note else "")
             ),
             "proposal_id": proposal_id,
             "execution": result.to_dict(),
         }
     errors = ", ".join(result.errors or []) or "unknown error"
+    detail = f"{errors} {_result_warnings(result)}".strip()
     return {
         "ok": False,
         "handled": True,
-        "message": f"Invite failed for **{label}**: {errors}",
+        "message": f"Invite failed for **{label}**: {detail}",
         "proposal_id": proposal_id,
         "execution": result.to_dict(),
     }
@@ -709,6 +720,7 @@ def _run_approval(
 
     if result.ok:
         suffix = " (dry run — nothing sent to Outlook)" if settings.lexi_dry_run else ""
+        note = _result_warnings(result)
         return {
             "ok": True,
             "handled": True,
@@ -717,7 +729,7 @@ def _run_approval(
                 subject=bundle.get("subject") if bundle else None,
                 sender=bundle.get("sender") if bundle else None,
                 success=True,
-                detail=suffix,
+                detail=(f"{suffix} ⚠️ {note}".strip() if note else suffix),
             ),
             "proposal_id": proposal_id,
             "execution": result.to_dict(),
@@ -732,7 +744,7 @@ def _run_approval(
             subject=bundle.get("subject") if bundle else None,
             sender=bundle.get("sender") if bundle else None,
             success=False,
-            detail=errors,
+            detail=f"{errors} {_result_warnings(result)}".strip(),
         ),
         "proposal_id": proposal_id,
         "execution": result.to_dict(),

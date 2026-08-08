@@ -37,17 +37,40 @@ def _normalize_intent(intent: str | None) -> str:
     return mapping.get(key, key)
 
 
-def default_location_for_intent(intent: str | None) -> str:
+def _venue_with_address(name: str) -> str:
+    address = kory_rules.VENUE_ADDRESSES.get(name)
+    return f"{name} ({address})" if address else name
+
+
+def _venue_open_at(name: str, slot_start: str | None) -> bool:
+    """True unless the venue's opening time is after the slot start."""
+    opens = kory_rules.VENUE_OPENS_AT.get(name)
+    if not opens or not slot_start:
+        return True
+    try:
+        from datetime import datetime
+
+        local = datetime.fromisoformat(slot_start.replace("Z", "+00:00"))
+        return local.strftime("%H:%M") >= opens
+    except (TypeError, ValueError):
+        return True
+
+
+def default_location_for_intent(intent: str | None, slot_start: str | None = None) -> str:
     """Coffee/lunch → Cherry Creek venue; calls → Teams; dinner/happy hour → venue."""
     key = _normalize_intent(intent)
     if key in VIRTUAL_INTENTS:
         return "Microsoft Teams"
     if key == "coffee":
         locations = kory_rules.MEETING_TYPES.get("coffee", {}).get("locations") or []
-        return str(locations[0]) if locations else "Cherry Creek (TBD)"
+        return _venue_with_address(str(locations[0])) if locations else "Cherry Creek (TBD)"
     if key == "happy_hour":
-        locations = kory_rules.MEETING_TYPES.get("happy_hour", {}).get("locations") or []
-        return str(locations[0]) if locations else "Cherry Creek Grill"
+        locations = [
+            str(v)
+            for v in (kory_rules.MEETING_TYPES.get("happy_hour", {}).get("locations") or [])
+            if _venue_open_at(str(v), slot_start)
+        ]
+        return _venue_with_address(locations[0]) if locations else "Cherry Creek Grill"
     if key == "dinner":
         return str(kory_rules.MEETING_TYPES.get("dinner", {}).get("location_preference") or "Cherry Creek")
     if key in {"lunch", "lunch_request"}:
@@ -60,7 +83,8 @@ def is_online_meeting(intent: str | None, location: str) -> bool:
     if key in IN_PERSON_INTENTS:
         return False
     loc = (location or "").lower()
-    if any(v in loc for v in ("cherry creek", "olive", "aviano", "grill", "hillstone", "restaurant")):
+    configured_venues = tuple(v.lower() for v in kory_rules.VENUE_ADDRESSES)
+    if any(v in loc for v in ("cherry creek", "restaurant", *configured_venues)):
         return False
     return "teams" in loc or "zoom" in loc or key in VIRTUAL_INTENTS
 
@@ -114,7 +138,7 @@ def build_hold_action(
     sender: str | None = None,
     body: str = "",
 ) -> dict[str, Any]:
-    location = default_location_for_intent(intent)
+    location = default_location_for_intent(intent, slot.get("start"))
     guest = parse_guest_profile(sender=sender, subject=meeting_subject or "", body=body)
     title = build_hold_calendar_title(
         intent=intent,
@@ -149,7 +173,7 @@ def build_invite_action(
     extra_attendees: list[str] | None = None,
     recipient_timezone: ZoneInfo | None = None,
 ) -> dict[str, Any]:
-    location = default_location_for_intent(intent)
+    location = default_location_for_intent(intent, slot.get("start"))
     online = is_online_meeting(intent, location)
     combined_text = f"{meeting_subject or ''}\n{body or ''}\n{body_note or ''}"
     attendees = merge_invite_attendees(

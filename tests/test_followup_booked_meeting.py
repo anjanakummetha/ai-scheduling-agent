@@ -23,6 +23,7 @@ def _mem_db(status: str = "executed"):
     conn.execute(
         "CREATE TABLE proposals (id INTEGER PRIMARY KEY, thread_id TEXT, status TEXT, "
         "drafted_reply TEXT, proposed_slots TEXT, recipient_selected_slot TEXT, "
+        "intent_classification TEXT, "
         "teams_approval_notified_at TEXT, invite_event_id TEXT, updated_at TEXT)"
     )
     conn.execute("INSERT INTO email_threads VALUES ('t1', 'Could we set up a 30-minute intro call?')")

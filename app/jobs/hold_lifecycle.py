@@ -16,7 +16,11 @@ import rules as kory_rules
 
 logger = logging.getLogger(__name__)
 
-ACTIVE_HOLD_STATUSES = ("pending_approval", "offer_sent", "pending_invite")
+# Statuses whose holds age out. pending_invite is deliberately NOT here: the
+# prospect already picked a slot, and releasing its hold while Kory decides
+# leaves the chosen time unprotected (and the "no reply" notice would be
+# false). Those holds are settled at confirm time instead.
+RELEASABLE_HOLD_STATUSES = ("pending_approval", "offer_sent")
 RELEASED_STATUS = "released"
 PENDING_APPROVAL = "pending_approval"
 
@@ -39,11 +43,13 @@ def run_hold_lifecycle_cycle() -> dict[str, Any]:
 def _release_expired_holds() -> int:
     now = datetime.now(timezone.utc).isoformat()
     count = 0
+    released_proposals: set[int] = set()
     with get_lexi_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.id, h.proposal_id, h.event_id, h.slot_start, h.expires_at,
-                   p.status AS proposal_status, e.subject, e.sender
+                   p.status AS proposal_status, p.intent_classification,
+                   e.subject, e.sender
             FROM holds AS h
             INNER JOIN proposals AS p ON p.id = h.proposal_id
             LEFT JOIN email_threads AS e ON e.thread_id = p.thread_id
@@ -53,8 +59,8 @@ def _release_expired_holds() -> int:
               AND p.status IN ({placeholders})
               AND h.event_id NOT LIKE 'hold-pending-%'
               AND COALESCE(h.event_id, '') != ''
-            """.format(placeholders=",".join("?" * len(ACTIVE_HOLD_STATUSES))),
-            (RELEASED_STATUS, now, *ACTIVE_HOLD_STATUSES),
+            """.format(placeholders=",".join("?" * len(RELEASABLE_HOLD_STATUSES))),
+            (RELEASED_STATUS, now, *RELEASABLE_HOLD_STATUSES),
         ).fetchall()
 
         for row in rows:
@@ -82,15 +88,33 @@ def _release_expired_holds() -> int:
                     "expires_at": row["expires_at"],
                     "subject": row["subject"],
                     "sender": row["sender"],
-                    "reminder_days": kory_rules.HOLD_RULES.get("reminder_after_days"),
+                    "held_days": _held_days_for_intent(row["intent_classification"]),
                 },
             )
             count += 1
+            released_proposals.add(int(row["proposal_id"]))
             _maybe_notify_hold_released(row)
 
         if count:
             conn.commit()
+
+    # "Release the hold ... and re-remind them at the same time" (HOLD_RULES).
+    # Stage the prospect follow-up draft for any offer that expired without a
+    # reply — Kory approves the send, same as every other outbound.
+    if released_proposals and kory_rules.HOLD_RULES.get("re_remind_on_release"):
+        from app.scheduling.hold_reminder import stage_release_followups
+
+        try:
+            stage_release_followups(sorted(released_proposals))
+        except Exception:
+            logger.exception("Release follow-up staging failed.")
     return count
+
+
+def _held_days_for_intent(intent: str | None) -> int:
+    if (intent or "").lower() == "reschedule":
+        return int(kory_rules.RESCHEDULE_RULES.get("reply_window_days", 1))
+    return int(kory_rules.HOLD_RULES.get("release_hold_after_days", 3))
 
 
 def _next_week_window_mt(now_mt: datetime) -> tuple[datetime, datetime]:
@@ -112,6 +136,11 @@ def _friday_cleanup_next_week_holds() -> int:
     now_mt = datetime.now(mt)
     if now_mt.weekday() != 4:  # Friday, Mountain Time
         return 0
+    # "By END of every Friday" — sweeping at 00:01 Friday would strip a
+    # Wednesday-offered hold barely a day into its window. 5 PM MT gives the
+    # prospect the full business week to answer.
+    if now_mt.hour < 17:
+        return 0
 
     week_start, week_end = _next_week_window_mt(now_mt)
     count = 0
@@ -126,8 +155,8 @@ def _friday_cleanup_next_week_holds() -> int:
               AND h.expires_at != ?
               AND h.event_id NOT LIKE 'hold-pending-%'
               AND COALESCE(h.event_id, '') != ''
-            """.format(placeholders=",".join("?" * len(ACTIVE_HOLD_STATUSES))),
-            (*ACTIVE_HOLD_STATUSES, RELEASED_STATUS),
+            """.format(placeholders=",".join("?" * len(RELEASABLE_HOLD_STATUSES))),
+            (*RELEASABLE_HOLD_STATUSES, RELEASED_STATUS),
         ).fetchall()
 
         for row in rows:
@@ -168,13 +197,14 @@ def _maybe_notify_hold_released(row: Any) -> None:
 
         subject = display_subject(row["subject"] or "(no subject)")
         sender = display_sender(row["sender"] or "unknown")
-        release_days = kory_rules.HOLD_RULES.get("release_hold_after_days", 3)
+        held_days = _held_days_for_intent(row["intent_classification"])
+        day_word = "day" if held_days == 1 else "days"
         text = (
             f"**Lexi — hold released (no reply)**\n"
             f"**{subject}**\n"
             f"From {sender}\n"
             f"Slot: {row['slot_start']}\n\n"
-            f"Held {release_days} days with no response — calendar hold removed. "
+            f"Held {held_days} {day_word} with no response — calendar hold removed. "
             f"Ask me to re-offer times for **{subject}** from {sender}."
         )
         coro = push_approval_text_to_teams(text, proposal_id=row["proposal_id"])

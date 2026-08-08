@@ -443,6 +443,26 @@ def validate_proposal_slots(
                 result.violations.append(
                     f"{prefix}: exceeds happy hour cap ({prefs.happy_hour_max_per_week}/week)."
                 )
+            # Reverse of the family-time rule: a happy hour is the LAST work
+            # commitment of the day. Warn (not block — the later event may be
+            # personal) when something already sits after this slot's end.
+            later_same_evening = []
+            for event in busy:
+                raw_start = parse_event_datetime(event.get("start"))
+                if not raw_start:
+                    continue
+                evt_start = local_dt(raw_start)
+                if (
+                    evt_start.date() == start_local.date()
+                    and end_local <= evt_start
+                    and evt_start.hour < 21
+                ):
+                    later_same_evening.append(event)
+            if later_same_evening:
+                result.warnings.append(
+                    f"{prefix}: Kory already has a commitment later that evening — "
+                    "happy hour is meant to be his last work stop of the day."
+                )
 
         result.rules_checked.append("dinner_rules")
         if intent_key in DINNER_INTENTS:

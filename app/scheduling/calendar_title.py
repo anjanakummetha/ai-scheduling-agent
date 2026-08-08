@@ -145,7 +145,7 @@ def build_confirmed_calendar_title(
     if guest.company:
         guest_part = f"{guest.name} ({guest.company})"
 
-    kory_part = _kory_side_label(key)
+    kory_part = _kory_side_label(key, subject=subject, body=body)
     time_suffix = _format_slot_time_for_title(slot_start, recipient_timezone)
     podcast = key == "podcast" or _podcast_context(subject, body)
 
@@ -241,8 +241,13 @@ def _confirmed_type_label(intent_key: str) -> str:
     return labels.get(intent_key, "Intro")
 
 
-def _kory_side_label(intent_key: str) -> str:
-    if intent_key == "coffee":
+def _kory_side_label(intent_key: str, *, subject: str = "", body: str = "") -> str:
+    # "Kory/Matt" only when the thread says Matt is joining — the same cue that
+    # adds him as an attendee. A title naming someone who isn't on the invite
+    # reads as a mistake to the guest.
+    if intent_key == "coffee" and re.search(
+        r"\bkory/matt\b|\bmatt\s+will\s+join\b", f"{subject}\n{body}", re.I
+    ):
         return "Kory/Matt (Iconic Founders)"
     return "Kory Mitchell (IFG)"
 

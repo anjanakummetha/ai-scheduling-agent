@@ -205,6 +205,11 @@ def find_valid_slots(
     skip_time_of_day: bool = False,
 ) -> SlotProposal:
     """Return up to max_slots non-overlapping, rule-valid, calendar-free options."""
+    # Reschedules offer 2 options, not 3 (RESCHEDULE_RULES.options_to_offer) —
+    # keyed off the raw triage intent so normalization can't hide it.
+    if (intent or "").lower().replace(" ", "_") == "reschedule":
+        max_slots = min(max_slots, int(kory_rules.RESCHEDULE_RULES.get("options_to_offer") or 2))
+        min_slots = min(min_slots, max_slots)
     intent_key = _normalize_intent(intent, subject=subject, body=body)
     meeting_spec = resolve_meeting_type(intent=intent, subject=subject, body=body)
     fmt = (
@@ -259,8 +264,11 @@ def find_valid_slots(
         re.search(r"\b(east coast|eastern|nyc|new york|boston|et)\b", f"{subject}\n{body}", re.I)
     )
     combined = f"{subject}\n{body}".lower()
+    # Only an explicit afternoon mention widens coffee beyond the 8:30/9:00
+    # preference — "flexible"/"either" are far too common to mean "afternoon
+    # is fine" and were quietly abandoning Kory's preferred coffee times.
     flexible_afternoon = intent_key == "coffee" and any(
-        cue in combined for cue in ("afternoon", "early afternoon", "flexible", "either")
+        cue in combined for cue in ("afternoon", "after lunch", "later in the day")
     )
 
     candidates: list[tuple[float, dict[str, str], str]] = []

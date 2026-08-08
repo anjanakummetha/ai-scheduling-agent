@@ -425,6 +425,7 @@ def _reschedule_booked_meeting(
             UPDATE proposals
             SET status = 'pending_triage', drafted_reply = NULL,
                 proposed_slots = NULL, recipient_selected_slot = NULL,
+                intent_classification = 'reschedule',
                 teams_approval_notified_at = NULL, updated_at = datetime('now')
             WHERE id = ?
             """,

@@ -560,24 +560,6 @@ def _insert_outbound_proposal(
     return int(cursor.lastrowid)
 
 
-def _insert_outbound_holds(
-    conn: sqlite3.Connection,
-    proposal_id: int,
-    slots: list[dict[str, str]],
-    meeting_intent: str,
-) -> None:
-    from app.integrations.hold_placement import place_offered_holds
-
-    place_offered_holds(
-        conn,
-        proposal_id=proposal_id,
-        slots=slots,
-        intent_classification=meeting_intent,
-        meeting_subject=f"Outbound {meeting_intent.replace('_', ' ')}",
-        calendar_name=resolve_write_calendar_name(intent=meeting_intent),
-    )
-
-
 def _set_proposal_status(conn: sqlite3.Connection, proposal_id: int, status: str) -> None:
     conn.execute(
         """

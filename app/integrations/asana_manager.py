@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 from app.config import ASANA_BOARD_NAME, ASANA_PARENT_PROJECT_NAME, settings
 from app.integrations.composio_client import ComposioNotConfiguredError, execute_asana_tool
 
+import rules as kory_rules
+
 logger = logging.getLogger(__name__)
 MT = ZoneInfo("America/Denver")
 
@@ -22,10 +24,14 @@ VENUE_TASK_PREFIX = "Needs Reservation:"
 
 MealKind = Literal["lunch", "dinner"]
 
-VENUE_RESERVATION_INTENTS = frozenset({"lunch_request", "dinner_request", "happy_hour"})
+VENUE_RESERVATION_INTENTS = frozenset(
+    {"lunch_request", "dinner_request", "happy_hour", "dinner", "lunch"}
+)
 INTENT_TO_MEAL: dict[str, MealKind] = {
     "lunch_request": "lunch",
+    "lunch": "lunch",
     "dinner_request": "dinner",
+    "dinner": "dinner",
 }
 
 _KORY_SIGNATURE_RE = re.compile(r"let['']s win,?\s*\n\s*kory\b", re.IGNORECASE)
@@ -200,12 +206,17 @@ def create_venue_reservation_task(
     assert_kory_approved_write(approved=approved, action="Asana venue reservation task")
     subject = (meeting_subject or "Meeting").strip()
     title = f"{VENUE_TASK_PREFIX} {subject}"
+    booth_note = str(
+        kory_rules.MEETING_TYPES.get("happy_hour", {}).get("reservation_note")
+        or "Request a bar booth."
+    )
     notes = (
         "Lexi venue reservation request\n"
         "------------------------------\n"
         f"Board: {ASANA_BOARD_NAME}\n"
         f"Selected time slot: {time_slot.strip()}\n"
         f"Target participant(s): {participants.strip()}\n"
+        f"Kory's standing ask: {booth_note}\n"
     )
     return _create_asana_task(title=title, notes=notes)
 

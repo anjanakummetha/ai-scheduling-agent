@@ -212,6 +212,78 @@ def process_due_hold_reminders() -> list[dict[str, Any]]:
     return staged
 
 
+def stage_release_followups(proposal_ids: list[int]) -> list[int]:
+    """Stage the "holds released — still interested?" prospect follow-up.
+
+    HOLD_RULES says release and re-remind happen together; historically the
+    release was silent to the prospect. Same approve-to-send contract as the
+    day-2 reminder: this only stages a draft for Kory.
+    """
+    staged: list[int] = []
+    with get_lexi_connection() as conn:
+        for proposal_id in proposal_ids:
+            row = conn.execute(
+                """
+                SELECT p.id, p.status, p.recipient_timezone, e.subject, e.sender
+                FROM proposals AS p
+                INNER JOIN email_threads AS e ON e.thread_id = p.thread_id
+                WHERE p.id = ?
+                """,
+                (proposal_id,),
+            ).fetchone()
+            if not row or str(row["status"]) != OFFER_SENT:
+                continue
+            already = conn.execute(
+                "SELECT 1 FROM audit_log WHERE step_name = 'hold_release_followup_staged' "
+                "AND reference_id = ? LIMIT 1",
+                (str(proposal_id),),
+            ).fetchone()
+            if already:
+                continue
+
+            # No slots on purpose: the held times are gone; the draft asks for
+            # their availability instead of re-quoting released options.
+            draft = compose_hold_reminder_draft(
+                sender=str(row["sender"] or ""),
+                subject=str(row["subject"] or ""),
+                slots=[],
+                recipient_timezone=str(row["recipient_timezone"] or "") or None,
+            )
+            conn.execute(
+                """
+                UPDATE proposals
+                SET status = ?, drafted_reply = ?, scheduling_note = ?,
+                    teams_approval_notified_at = NULL, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (
+                    PENDING_APPROVAL,
+                    draft,
+                    f"{HOLD_REMINDER_PREFIX}: Holds released after no reply — "
+                    "approve to send the follow-up.",
+                    proposal_id,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO audit_log (step_name, reference_id, log_level, message, payload) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    "hold_release_followup_staged",
+                    str(proposal_id),
+                    "INFO",
+                    "Release follow-up draft staged for Kory approval.",
+                    json.dumps({"subject": row["subject"], "sender": row["sender"]}),
+                ),
+            )
+            staged.append(proposal_id)
+        if staged:
+            conn.commit()
+
+    for proposal_id in staged:
+        _notify_kory_hold_reminder(proposal_id)
+    return staged
+
+
 def _parse_slots(raw: Any) -> list[dict[str, str]]:
     if not raw:
         return []

@@ -92,13 +92,24 @@ def test_coffee_title_kory_matt():
         company="Evergreen Surety",
         email="tom@evergreensurety.com",
     )
+    # "Kory/Matt" only when the thread says Matt is joining — matching the
+    # attendee logic, so the title never names someone not on the invite.
     title = build_confirmed_calendar_title(
+        intent="coffee",
+        guest=guest,
+        slot_start="2026-06-17T09:00:00-06:00",
+        body="Matt will join as well.",
+        recipient_timezone=ZoneInfo("America/Denver"),
+    )
+    assert title.startswith("Coffee: Tom Patton (Evergreen Surety) <> Kory/Matt (Iconic Founders)")
+
+    solo_title = build_confirmed_calendar_title(
         intent="coffee",
         guest=guest,
         slot_start="2026-06-17T09:00:00-06:00",
         recipient_timezone=ZoneInfo("America/Denver"),
     )
-    assert title.startswith("Coffee: Tom Patton (Evergreen Surety) <> Kory/Matt (Iconic Founders)")
+    assert solo_title.startswith("Coffee: Tom Patton (Evergreen Surety) <> Kory Mitchell (IFG)")
 
 
 def test_extract_kory_requested_attendees():

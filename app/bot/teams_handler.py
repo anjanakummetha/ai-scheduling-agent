@@ -274,6 +274,9 @@ class LexiTeamsBot(ActivityHandler):
         from app.teams.commands import _fetch_bundle
 
         bundle = _fetch_bundle(proposal_id)
+        # warnings carry Kory-facing remedy copy (E-6 clash guidance, hold
+        # alerts) — append them or they are composed and never delivered.
+        warnings = " ".join(result.warnings or [])
         if result.ok:
             suffix = " (dry run — nothing sent to Outlook)" if settings.lexi_dry_run else ""
             await turn_context.send_activity(
@@ -282,7 +285,7 @@ class LexiTeamsBot(ActivityHandler):
                     subject=bundle.get("subject") if bundle else None,
                     sender=bundle.get("sender") if bundle else None,
                     success=True,
-                    detail=suffix,
+                    detail=(f"{suffix} ⚠️ {warnings}".strip() if warnings else suffix),
                 )
             )
             return
@@ -294,7 +297,7 @@ class LexiTeamsBot(ActivityHandler):
                 subject=bundle.get("subject") if bundle else None,
                 sender=bundle.get("sender") if bundle else None,
                 success=False,
-                detail=errors,
+                detail=f"{errors} {warnings}".strip(),
             )
         )
 

@@ -424,6 +424,7 @@ def get_lexi_pending_queue() -> list[LexiQueueItem]:
                     WHEN 'medium' THEN 1
                     ELSE 2
                 END,
+                CASE WHEN p.intent_classification = 'reschedule' THEN 0 ELSE 1 END,
                 p.id ASC
             """,
             (PENDING_APPROVAL,),
@@ -1423,11 +1424,16 @@ def _send_drafted_reply(
         return False, "No drafted_reply available on proposal."
 
     thread_id = str(proposal.get("thread_id") or "").strip()
-    if not thread_id or thread_id.startswith("demo-"):
+    if thread_id.startswith("demo-"):
         result.warnings = (result.warnings or []) + [
-            "Email dispatch skipped: thread_id is missing or demo-only."
+            "Email dispatch skipped: demo-only thread."
         ]
         return False, None
+    if not thread_id:
+        # A missing thread_id in production is a broken proposal, not a demo —
+        # return an error so the needs_kory escalation fires instead of the
+        # approval quietly "succeeding" with nothing sent.
+        return False, "Email dispatch failed: proposal has no thread_id to reply to."
 
     try:
         intended = _extract_email(proposal.get("sender"))

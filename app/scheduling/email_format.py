@@ -241,7 +241,7 @@ def build_meeting_scheduling_phrase(
     if spec.type_key == "new_client":
         return f"a 60-minute {'virtual Teams call' if virtual else 'meeting'}"
     if spec.type_key == "coffee":
-        return "a 60-minute coffee in Cherry Creek (30 minutes kept clear after on Kory's calendar)"
+        return "a 60-minute coffee in Cherry Creek (Kory schedules nothing right after)"
     if spec.type_key == "happy_hour":
         return "a happy hour (1.5 hours, ending by 6:00 PM MT)"
     if spec.type_key == "dinner":
