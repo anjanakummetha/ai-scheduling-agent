@@ -1211,15 +1211,21 @@ disposable HubSpot contact. Cleanup verified zero residue (§ Residue below).
 - **M2 FIXED**: modify-and-approve with a novel time no longer books a
   zero-minute meeting — end==start (or missing end) inherits the proposal's
   offered-slot duration, 30-min fallback. Live-verified via resolver.
-- **Refinements logged (open, engine semantics):** R1 — "mornings HER time"
-  applies the morning window in MT, not the recipient's timezone (≤2h blur
-  for ET). R2 — the outbound path calls the slot engine directly and skips
-  `verify_before_kory_approval`, so out-of-window offers ship without the
-  "no availability for <window> — offering <dates> instead" disclosure the
-  inbound path attaches (C-1/C-2 machinery). Also noted: offer email sends
-  ~13s before holds land (deliberate crash-safety ordering; E-6 confirm
-  re-check backstops it) and the hold-delete 404 warning on invite release
-  is benign double-delete noise.
+- **R1 FIXED** (`31eed76`): "mornings HER time" now means the recipient's
+  morning — with a her/his/their-time cue + a stated zone, the time-of-day
+  window shifts into MT (Boston mornings → 06:00–10:00 MT; live: 6 AM MT
+  = 8 AM ET slots offered, using the East-Coast Tue/Thu early-start rule).
+  Cue without a stated zone never guesses; Pacific shifts the other way.
+- **R2 FIXED** (`31eed76` + `1b964bf`): outbound proposals store a
+  `scheduling_note` computed from the inbound gate's primitives — live:
+  "No availability for next week — offering August 18, August 20 and
+  August 25 instead." — rendered on the Teams approval push. Note-only,
+  never blocks. Follow-on fix: the gate now derives the east_coast cue
+  exactly like the engine (it was flagging 6 AM slots offered FOR a Boston
+  contact), and redundant "outside requested window" entries are deduped.
+- Also noted: offer email sends ~13s before holds land (deliberate
+  crash-safety ordering; E-6 confirm re-check backstops it) and the
+  hold-delete 404 warning on invite release is benign double-delete noise.
 
 ### Post-sweep observation (2026-08-08 ~07:56 UTC) — stale card RESURFACED
 An Aug-5 UAT card ("[TEST] Quick catch-up? — LT-H4", "Invite send is disabled
