@@ -1,17 +1,25 @@
-# Lexi — Session Handoff (updated 2026-08-08)
+# Lexi — Session Handoff (updated 2026-08-08, post-sweep)
 
-## 0. NEXT UP — full read/write verification sweep (Anjana approved, ready to run)
+## 0. VERIFICATION SWEEP COMPLETE (2026-08-08) — see RUN 15
 
-Anjana's directive: verify EVERY read and write the Teams chat uses, autonomously.
-Scope: Outlook mail + calendar (edit allowed, [TEST]-prefixed, delete when done),
-Asana full CRUD, HubSpot reads + create→verify→archive writes. Budget fine (9.3% MTD).
-Plus one FEATURE to build first: **Kory writes to ANY Asana project/task**, not just
-the "Kory NON-IFG" board (current deliberate scope guard — needs code change + tests
-+ safety review of what "any project" means for the approval gate). Also queued:
-store Teams activity ids so Lexi can retire her own old cards (stale [TEST] cards
-from Aug 5 sit in Kory's chat; verified inert + housekeeping note posted 05:5x UTC).
-`.claude/settings.json` now allows ssh/scp to the box — restart the CLI session to
-load it, then no more classifier blocks on deploys.
+The full chat-surface sweep ran and finished: all 86 tools verified against
+ground truth, 4 defects fixed+deployed (maps payload, stale all-day events,
+timezone body cues, **chat-initiated offers could never send** `5290d66`),
+2 open defects logged (needs_kory proposals can't be rejected; escalation YES
+has no context linkage), zero test residue (audited). Full record:
+`docs/SCHEDULING_LIVE_TEST_PLAN.md` RUN 15 + `docs/CHAT_VERIFICATION_PLAN.md`.
+
+**Shipped: Asana any-project writes** (`9a6a832`) — project='<name>' on
+create/move, live-verified in the Anju project.
+
+**Decision (Anjana): Teams cards PARKED, text-only is the supported mode.**
+`LEXI_TEAMS_TEXT_ONLY=true` restored (prod had run text-only since Aug 4
+anyway; the "cards ON" claim in KORY_GO_LIVE_READINESS.md was never live).
+Cards return only after activity-id persistence is built. Typed `approve #N`
+is the approval path — proven live end-to-end today.
+
+**Box state:** commit `5290d66`, both services healthy, suite 655 (+3 known
+stale-data failures). Poll stagger verified clean 3.5h post-deploy (0 errors).
 
 **Resume phrase:** *"Kory is live; check what he's done, then continue the open work list."*
 
