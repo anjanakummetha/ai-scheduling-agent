@@ -520,6 +520,12 @@ def execute_lexi_approval(
                     PENDING_APPROVAL,
                     STATUS_OFFER_SENT,
                     STATUS_PENDING_INVITE,
+                    # Escalated proposals must be rejectable — "just drop it"
+                    # after an escalation had no path except DB surgery
+                    # (live D5: needs_kory 7999; the 08-06 cleanup hit the
+                    # same wall).
+                    "needs_kory",
+                    "needs_scheduling_guidance",
                 }:
                     raise ValueError(
                         f"Proposal {proposal_id} cannot be rejected (status={status})."
