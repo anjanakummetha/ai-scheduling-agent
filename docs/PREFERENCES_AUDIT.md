@@ -1,9 +1,10 @@
-# Kory Preferences vs. Code — Audit (PAUSED, verify-only, no changes made)
+# Kory Preferences vs. Code — Audit
 
-Status 2026-08-05: 2 of 3 audit sweeps complete (time/day rules; blocks/holds/reschedules).
-The meeting-type sweep (coffee/happy hour/dinner durations, venues, weekly caps) was paused
-mid-run at Anjana's request — resume it before acting on this document.
-NOTHING here has been changed in code. This is the raw flag list for review with Anjana/Kory.
+Status 2026-08-08: ALL THREE sweeps complete (time/day rules; blocks/holds/reschedules;
+meeting types/venues — the paused sweep was finished today). A fix batch shipped as
+`0c3fd56`; see "2026-08-08 RESOLUTION" at the bottom for what was fixed vs. what
+remains a Kory/Anjana decision. Headline flags below are the ORIGINAL Aug-5 findings —
+several are now fixed; the resolution section is authoritative.
 
 ## Headline flags (things that disagree with Kory's written preferences)
 
@@ -70,5 +71,63 @@ NOTHING here has been changed in code. This is the raw flag list for review with
   approval (gates verified); no VIP auto-yes (priority contacts only raise triage priority).
 
 ## Still to audit (paused)
-Meeting-type sweep: durations per type, coffee times/venues, happy-hour times/venues/caps
-vs REAL calendar counts, dinner stacking, virtual-default inference, podcast ad-hoc.
+~~Meeting-type sweep~~ — COMPLETED 2026-08-08, findings folded into the resolution below.
+(Also corrected: flag 8 was stale — outbound offers DO place holds via the shared
+send_offer approval path; only the auto-execute branch, env-gated off, skips them.)
+
+## 2026-08-08 RESOLUTION (fix batch `0c3fd56`; meeting-type sweep completed)
+
+### Fixed in code
+- **Warnings now render in Teams** (was: E-6 clash remedy, hold-placement alerts composed
+  then dropped — nothing read `ExecutionResult.warnings`). Highest-leverage fix.
+- **pending_invite holds no longer age out** — prospect-picked slot stays protected until
+  Kory confirms; the false "no reply" notice for prospects who DID reply is gone.
+- **Friday sweep waits for 5 PM MT** (was 00:00 Friday) and the release notice states the
+  real held days (1 for reschedules).
+- **Re-remind on release** implemented — expiry stages the prospect follow-up draft for
+  approval (`stage_release_followups`); `re_remind_on_release` was config-only before.
+- **Reschedules**: 2 options (was 3), jump the approval queue within tier (was FIFO),
+  booked-meeting reschedules keep `intent='reschedule'` → 1-day holds (was 3).
+- **Venues**: invite Location now "Name (street address)" per Heidi's convention
+  (`VENUE_ADDRESSES` — addresses need one-time verification, only Aviano St. Paul is
+  confirmed from a real invite); happy-hour annotation no longer leaks; Quality Italian
+  gated behind its 4:00 opening (`VENUE_OPENS_AT`).
+- **Durations**: stated 45-min intro honored (was cut to 30); approved lunch books 60
+  (was 30 via fall-through); "coffee before the recording" is coffee, not podcast.
+- **Coffee mornings protected**: only an explicit afternoon mention widens past 8:30/9:00
+  ("flexible"/"either" no longer do).
+- **Titles**: "Kory/Matt" only when the thread says Matt joins (matches attendee logic).
+- **Copy**: offer email no longer claims a 30-min calendar block that doesn't exist.
+- **Happy hour**: warning when Kory already has a later same-evening commitment
+  (warn-not-block — the later event may be personal/family).
+- Asana venue tasks carry "Request a bar booth"; canonical dinner/lunch intents included.
+- Silent non-send hole closed (missing thread_id → needs_kory escalation).
+- Dead `_insert_outbound_holds` deleted; `rules.py` docstring now says which keys are
+  prompt-only.
+
+### Still open — needs Kory/Anjana decision (deliberately NOT changed)
+1. **Urgent keyword self-service** (flag 12): "urgent"/"asap"/"new client" in a
+   prospect's email relaxes lunch, travel-day, and 6 AM gates with no human in the loop.
+   Travel-day relaxation arguably implements "2-3 critical check-ins", but a stranger's
+   word choice shouldn't be the trigger. The preference's actual ask — Lexi ASKS Kory to
+   move a movable meeting — has no implementation (`update_calendar_event`: 0 call sites).
+2. **Tue/Thu 7/8 AM routine vs. "occasional"** (flag 1) and the 7:00-floor vs. 6 AM
+   East-Coast lane (flag 2, V-1 ruling conflict) — needs Kory's ruling.
+3. **No-minimum-notice vs. effective next-day minimum** (flag 3) — 2h lead + day_offset=1.
+4. **Weekend family-calendar exception** (flag 4) — family busy-read was ruled OUT
+   (kory-scheduling-rulings); weekends stay blocked, dinner exemption stands. Revisit only
+   if Kory wants weekend scheduling.
+5. **30-min-Teams batching** (flag 5) — still unimplemented (selector prefers one slot/day).
+6. **Drive-time rules** (flag 6) — only Cherry Creek 15-min enforced; DTC/Littleton/DEN
+   pads and calls-during-drives remain prompt-only.
+7. **Coffee 90-min block visibility**: Lexi reserves 90 internally but writes a 60-min
+   event — same convention as Heidi (her invites are also 60 min with no buffer event).
+   If Kory wants a visible 10:00–10:30 block, that's a new feature.
+8. **Coffee 60-min override**: a sender asking a "30-minute coffee" still gets 60
+   (locked by test as a deliberate ruling — confirm with Kory it should stay).
+9. **Dinner/happy-hour same-evening stacking** (pref) — nothing searches for the stack;
+   only permitted, not preferred, in code.
+10. **Matt on coffees**: title/attendees now require an explicit "Matt will join" cue —
+    confirm whether Matt should default-join BD coffees instead.
+11. **Buffer/coffee protection is subject-regex based** — a coffee titled without the word
+    "coffee" gets no post-coffee buffer protection.

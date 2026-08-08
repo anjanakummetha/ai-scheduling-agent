@@ -65,6 +65,18 @@ Next timer run: 10:30 UTC daily.
 
 **Fix BUILT 2026-08-08 (`ce73e7a`, pushed to origin/main): one Kory folder per poll cycle, alternating inbox/sentitems** — each folder still swept every ~10 min inside the 24h window; 4 new tests in `tests/test_outlook_poll_stagger.py`. **Not yet live: the `deploy_lexi.sh` run was blocked by the permission classifier** — run `ssh root@srv1686061.hstgr.cloud 'bash -s' < scripts/deploy_lexi.sh` from the repo root. Skipping sentitems entirely stays on the table if errors persist (86 of the first 374 triaged messages were Kory's own outbound YPO mail).
 
+## 2b. PREFERENCE AUDIT COMPLETE + FIX BATCH (2026-08-08, commit `0c3fd56`)
+
+All three sweeps of `docs/PREFERENCES_AUDIT.md` are done (the paused meeting-type sweep
+included) and a 14-file fix batch shipped: warnings now render in Teams (E-6 remedy copy
+was being dropped), pending_invite holds no longer age out, Friday sweep waits for 5 PM MT,
+re-remind-on-release implemented, reschedules = 2 options + queue priority + 1-day holds,
+venue addresses on invites, stated durations honored, lunch books 60, and more — the
+authoritative fixed-vs-open list is the audit doc's "2026-08-08 RESOLUTION" section.
+Suite 626. **NOT yet deployed — needs a `deploy_lexi.sh` run.** Open decisions for
+Kory/Anjana are listed there too (urgent-keyword breadth, Tue/Thu early-morning policy,
+Matt-on-coffees default, visible coffee buffer block, venue address verification).
+
 ## 3. OPEN WORK LIST (rough order)
 
 1. ~~Deploy both fixes~~ **DONE 2026-08-08 ~04:30 UTC** (Anjana ran the restart + `deploy_lexi.sh`; box at `5421d95`). Briefing fix verified live: POST returned 200 with a full briefing in 381s (first attempt still burns 8192 tokens thinking; the doubled-cap retry lands it — timer allows 900s). Next send 10:30 UTC.
