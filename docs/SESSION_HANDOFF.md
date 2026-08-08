@@ -43,6 +43,12 @@ facts, 0 outlook_poll errors since the 04:30 stagger deploy, Composio 9.7%
 MTD, 91 tools registered with the gateway. Kory had still used NOTHING as of
 ~08:00 UTC; proposal 6218 still waits for him.
 
+**Dashboard fix (2026-08-08 ~15:00 UTC, dashboard repo `36d997d`, deployed):** the Today
+tab no longer substitutes MOCK briefing/priorities when today's real data doesn't exist yet
+(it was showing a fabricated "Series B term sheet" day) — honest "collecting today's data"
+empty states instead. Deploy recipe used: build standalone (Node 20 via nvm) → rsync
+`.next/standalone/` (EXCLUDING `data/`!) + `.next/static/` → chown ceo → restart.
+
 **Resume phrase:** *"Kory is live; check what he's done, then continue the open work list."*
 
 Two repos, one box:
