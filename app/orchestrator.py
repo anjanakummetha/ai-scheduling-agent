@@ -707,12 +707,22 @@ def _recover_pending_triage() -> int:
         return 0
 
 
+_POLL_FOLDER_ROTATION = ("inbox", "sentitems")
+_poll_folder_cursor = 0
+
+
 def _poll_outlook_ingress() -> int:
     """Poll Kory inbox + sent items for messages Composio triggers may miss locally.
 
     Kory's Sent Items is what carries a delegation reply: the
     OUTLOOK_MESSAGE_TRIGGER webhook lives on Kory's connection only, and his
     reply never lands in his inbox, so this poll is that flow's only ingress.
+
+    One folder per cycle, alternating: Graph allows ~4 concurrent requests per
+    mailbox, and polling both folders back-to-back while the webhook pipeline's
+    GET retries and the dashboard share the same mailbox tripped that limit
+    2-4 times/hour. The 24h listing window means alternation costs only
+    latency — each folder is still swept every two poll cycles.
 
     Lexi's mailbox holds the same message (she is CC'd) but is opt-in via
     LEXI_POLL_LEXI_MAILBOX: Graph ids are mailbox-scoped and the rest of the
@@ -722,10 +732,13 @@ def _poll_outlook_ingress() -> int:
     if not settings.composio_api_key:
         return 0
 
+    global _poll_folder_cursor
+    folder = _POLL_FOLDER_ROTATION[_poll_folder_cursor % len(_POLL_FOLDER_ROTATION)]
+    _poll_folder_cursor += 1
+
     processed = 0
     window_start = datetime.now(timezone.utc) - timedelta(hours=24)
-    for folder in ("inbox", "sentitems"):
-        processed += _poll_outlook_folder(folder, window_start=window_start)
+    processed += _poll_outlook_folder(folder, window_start=window_start)
     if _lexi_mailbox_poll_enabled():
         processed += _poll_outlook_folder(
             "inbox", window_start=window_start, role="lexi"
