@@ -67,9 +67,9 @@ Next timer run: 10:30 UTC daily.
 
 ## 3. OPEN WORK LIST (rough order)
 
-1. **Restart ceo-dashboard + run deploy_lexi.sh** (§2a, §2) — both fixes are staged on/for the box; only the two blocked commands remain (Anjana must run them)
+1. ~~Deploy both fixes~~ **DONE 2026-08-08 ~04:30 UTC** (Anjana ran the restart + `deploy_lexi.sh`; box at `5421d95`). Briefing fix verified live: POST returned 200 with a full briefing in 381s (first attempt still burns 8192 tokens thinking; the doubled-cap retry lands it — timer allows 900s). Next send 10:30 UTC.
 2. **M-2** — Anjana verifies morning-briefing content (08-06 send only; 08-07 never sent, see §2a)
-3. **Verify both fixes after deploy** — briefing POST returns 200; outlook_poll error rate drops (was 75 since go-live)
+3. **Verify the stagger** — outlook_poll error rate should drop from ~2-4/hr (75 total at deploy time); check after a day
 4. **Suite note:** 3 pre-existing failures on 08-08 (`test_api_v1` aged-asks ×2, `test_prebrief_attendees` future-date) — local-DB history from the Aug 5-6 sessions sits inside the tests' 24h-72h window; ages out on its own, real fix is isolating the suite from `data/lexi.db`
 5. **Log + fix Kory's change requests** as they arrive
 6. **M-3 redo** against `logs/lexi.log` (the journalctl sweep was void)
