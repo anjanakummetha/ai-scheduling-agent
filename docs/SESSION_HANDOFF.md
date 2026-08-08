@@ -132,7 +132,7 @@ Matt-on-coffees default, visible coffee buffer block, venue address verification
 8. **Design item (accepted risk):** HubSpot/Asana write approval is a model-supplied boolean; scheduling's typed `approve #N` + audited `decision_source` is the pattern to copy
 9. **Decide the Aug-3 staged-ask backlog:** 26 REAL threads sit in `awaiting_reply_prompt` since 08-03 — any inbound reply re-pings Teams (that's what 6218 did). Options: expire staged asks after N days (no TTL exists) or bulk-close with Kory's sign-off.
 10. **Suite isolation:** 3 pre-existing failures (`test_api_v1` aged-asks ×2, `test_prebrief_attendees`) come from Aug 5-6 history in the shared `data/lexi_test.db` window; ages out alone, real fix is isolating the suite from live-DB state.
-11. **Systemd stop-timeout mismatch** (new, from gateway startup log): `lexi-hermes.service` has `TimeoutStopSec=90` but the gateway's drain timeout is 180s — systemd can SIGKILL mid-drain. One-liner: `hermes gateway service install --replace` or shorten `agent.restart_drain_timeout`.
+11. ~~Systemd stop-timeout mismatch~~ **DONE 2026-08-08 08:48 UTC**: drop-in `/etc/systemd/system/lexi-hermes.service.d/stop-timeout.conf` sets `TimeoutStopSec=210` (was the 90s default vs a 180s drain — SIGKILL risk mid-drain). daemon-reload + restart verified: warning gone from the new startup, service healthy.
 12. **Benign leftover:** one orphaned chat-path `[TEST]` note object in HubSpot (its contact is archived; no note-search slug exists to find it). Hidden from the UI.
 
 ## 4. HARD-WON FACTS (do not relearn)
