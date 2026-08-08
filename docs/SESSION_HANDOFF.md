@@ -77,7 +77,10 @@ go-live, all `no_reply_needed`. **Proposal 6218** (referral_or_intro,
 `awaiting_reply_prompt`) pinged Kory in Teams 08-06 17:15 (inbound reply on a
 time-blocked thread) and has been waiting ever since.
 
-## 2a. ACTIVE ISSUE — morning briefing DOWN since Aug 7 (fix built, deploy blocked)
+## 2a. RESOLVED — morning briefing outage (Aug 7) — fix live, timer sends proven
+
+**CLOSED 2026-08-08:** deploy + restart done ~04:30 UTC; manual POST verified 200; and the
+10:30 UTC timer run on 08-08 completed SUCCESS unattended (sent 10:35:01). Original record:
 
 The 10:30 UTC `lexi-morning-briefing.timer` failed all 6 attempts on 08-07
 ("Dashboard returned 500: Empty Anthropic response") — **Kory got no briefing
@@ -102,7 +105,10 @@ Then verify: POST `http://127.0.0.1:3000/api/hermes/briefing` with
 `x-briefing-token` from the agent `.env` → expect 200 with `emailDraft`.
 Next timer run: 10:30 UTC daily.
 
-## 2. ACTIVE ISSUE — Graph throttling the backup poll
+## 2. RESOLVED — Graph throttling the backup poll
+
+**CLOSED 2026-08-08 14:36 UTC:** stagger (`ce73e7a`) deployed 04:30; **0 poll errors in the
+10 hours since** (baseline was 2–4/hr, 40/day). Original record:
 
 36 `outlook_poll` failures since go-live (~2–4/hr): 20 APITimeout, 10 `CommandConcurrencyLimitReached`, 4 `ErrorTooManyObjectsOpened`, 2 `ApplicationThrottled`. The poll is the **safety net** for webhook drops (Graph 404s just-arrived message ids, ~14/48h; recovery ≤5 min). If both degrade together, mail sits unseen longer.
 
