@@ -1190,6 +1190,12 @@ disposable HubSpot contact. Cleanup verified zero residue (§ Residue below).
   typed approvals are proven and audited. Cards return only after activity-id
   persistence (open item) makes them retirable and testable.
 
+### Post-sweep addition (same day)
+- **`lexi_forget_kory_fact` shipped** (`3fe5df0`): Kory can remove a remembered
+  rule from chat (previously SQL-only). Matches key/id/unique substring,
+  refuses ambiguity with candidates, quotes what was deleted. Live-verified
+  remember→forget→list-empty.
+
 ### Notes / verified-by-observation
 - Cold inbound auto-skip (`delegation_and_followups_cold_inbound`) confirmed
   working as designed — a cold scheduling ask never reaches Teams; Kory
