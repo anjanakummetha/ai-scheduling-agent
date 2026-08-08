@@ -221,7 +221,14 @@ def create_venue_reservation_task(
     return _create_asana_task(title=title, notes=notes)
 
 
-def _create_asana_task(*, title: str, notes: str, section: str = "") -> dict[str, Any]:
+def _create_asana_task(
+    *,
+    title: str,
+    notes: str,
+    section: str = "",
+    project_gid: str = "",
+    project_name: str = "",
+) -> dict[str, Any]:
     if _should_simulate_asana():
         task_id = f"asana-sim-{uuid.uuid4().hex[:12]}"
         return {
@@ -230,12 +237,13 @@ def _create_asana_task(*, title: str, notes: str, section: str = "") -> dict[str
             "title": title,
             "notes": notes,
             "board": ASANA_BOARD_NAME,
+            "project": project_name or ASANA_PARENT_PROJECT_NAME,
             "simulated": True,
             "composio_log_id": None,
             "error": None,
         }
 
-    if not settings.asana_project_gid:
+    if not (project_gid or settings.asana_project_gid):
         return {
             "ok": False,
             "task_id": None,
@@ -251,7 +259,7 @@ def _create_asana_task(*, title: str, notes: str, section: str = "") -> dict[str
 
     try:
         task_id, log_id, placed_gid = _create_task_via_composio(
-            title=title, notes=notes, section=section
+            title=title, notes=notes, section=section, project_gid=project_gid
         )
         return {
             "ok": bool(task_id),
@@ -261,7 +269,8 @@ def _create_asana_task(*, title: str, notes: str, section: str = "") -> dict[str
             # The board the task actually landed on. This used to report a
             # constant, so a task filed under Personal was announced as
             # Reservation Reminders.
-            "board": _section_name_for_gid(placed_gid) or "(unfiled)",
+            "board": _section_name_for_gid(placed_gid, project_gid) or "(unfiled)",
+            "project": project_name or ASANA_PARENT_PROJECT_NAME,
             "simulated": False,
             "composio_log_id": log_id,
             "error": None if task_id else "Composio returned no task id.",
@@ -343,17 +352,17 @@ def _should_simulate_asana() -> bool:
 
 
 def _create_task_via_composio(
-    *, title: str, notes: str, section: str = ""
+    *, title: str, notes: str, section: str = "", project_gid: str = ""
 ) -> tuple[str | None, str | None, str]:
-    project_gid = settings.asana_project_gid
-    if not project_gid:
+    target_gid = (project_gid or settings.asana_project_gid or "").strip()
+    if not target_gid:
         raise RuntimeError("ASANA_PROJECT_GID is not configured.")
 
     arguments: dict[str, Any] = {
         "data": {
             "name": title,
             "notes": notes,
-            "projects": [project_gid],
+            "projects": [target_gid],
         }
     }
     result = execute_asana_tool(ASANA_CREATE_TOOL, arguments)
@@ -362,7 +371,7 @@ def _create_task_via_composio(
     task_id = _extract_task_id(result.get("data"))
     if not task_id:
         raise RuntimeError("Composio Asana create returned no task id.")
-    placed_gid = _add_task_to_section_if_configured(task_id, section)
+    placed_gid = _add_task_to_section_if_configured(task_id, section, project_gid=target_gid)
     return task_id, result.get("log_id"), placed_gid
 
 
@@ -440,13 +449,39 @@ def resolve_task_gid(task: str) -> str:
     return raw
 
 
-def _section_name_for_gid(section_gid: str) -> str:
+def _section_name_for_gid(section_gid: str, project_gid: str = "") -> str:
     if not section_gid:
         return ""
-    for row in list_project_sections():
+    for row in list_project_sections(project_gid):
         if row["gid"] == section_gid:
             return row["name"]
     return ""
+
+
+def resolve_project_gid(project: str) -> tuple[str, str]:
+    """Map a project Kory named ("IFG Tasks", a gid) to (gid, name).
+
+    Returns ("", "") when nothing matches or the name is ambiguous — the
+    caller must refuse rather than guess: a task filed on the wrong project
+    is worse than an error.
+    """
+    raw = (project or "").strip()
+    if not raw:
+        return "", ""
+    projects = list_asana_project_options().get("projects", [])
+    if raw.isdigit():
+        for row in projects:
+            if row["gid"] == raw:
+                return raw, row["name"]
+        return raw, ""
+    wanted = raw.casefold()
+    for row in projects:
+        if row["name"].strip().casefold() == wanted:
+            return row["gid"], row["name"]
+    hits = [row for row in projects if wanted in row["name"].strip().casefold()]
+    if len(hits) == 1:
+        return hits[0]["gid"], hits[0]["name"]
+    return "", ""
 
 
 def resolve_task_or_error(
@@ -508,8 +543,19 @@ def resolve_task_or_error(
     }
 
 
-def _add_task_to_section_if_configured(task_gid: str, section: str = "") -> str:
-    section_gid = resolve_section_gid(section) if section.strip() else settings.asana_section_gid
+def _add_task_to_section_if_configured(
+    task_gid: str, section: str = "", project_gid: str = ""
+) -> str:
+    home_gid = (settings.asana_project_gid or "").strip()
+    target_project = (project_gid or home_gid).strip()
+    if section.strip():
+        section_gid = resolve_section_gid(section, target_project)
+    elif target_project and home_gid and target_project != home_gid:
+        # The default section belongs to Kory's personal project; applying it
+        # to a task on another project would silently drag the task back home.
+        section_gid = ""
+    else:
+        section_gid = settings.asana_section_gid
     if not section_gid:
         return ""
     try:
@@ -574,12 +620,35 @@ def create_asana_task_from_chat(
     notes: str = "",
     due_on: str = "",
     section: str = "",
+    project: str = "",
     approved: bool = False,
 ) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana create task")
-    result = _create_asana_task(title=title, notes=notes or title, section=section)
+    project_gid = ""
+    project_name = ""
+    if project.strip():
+        project_gid, project_name = resolve_project_gid(project)
+        if not project_gid:
+            names = (
+                ", ".join(r["name"] for r in list_asana_project_options().get("projects", []))
+                or "none found"
+            )
+            return {
+                "ok": False,
+                "error": (
+                    f"No Asana project matching {project!r} (or the name matches several). "
+                    f"Available projects: {names}."
+                ),
+            }
+    result = _create_asana_task(
+        title=title,
+        notes=notes or title,
+        section=section,
+        project_gid=project_gid,
+        project_name=project_name,
+    )
     if due_on.strip() and result.get("ok") and result.get("task_id"):
         update = update_asana_task(
             task_gid=str(result["task_id"]),
@@ -735,6 +804,7 @@ def move_asana_task_to_section(
     task_gid: str,
     section_gid: str = "",
     section_name: str = "",
+    project: str = "",
     approved: bool = False,
     owner_ack: bool = False,
 ) -> dict[str, Any]:
@@ -744,11 +814,25 @@ def move_asana_task_to_section(
     task_gid, _resolve_error = resolve_task_or_error(task_gid, owner_ack=owner_ack)
     if _resolve_error:
         return _resolve_error
+    project_gid = ""
+    if project.strip():
+        project_gid, _project_name = resolve_project_gid(project)
+        if not project_gid:
+            names = (
+                ", ".join(r["name"] for r in list_asana_project_options().get("projects", []))
+                or "none found"
+            )
+            return {
+                "ok": False,
+                "error": (
+                    f"No Asana project matching {project!r}. Available projects: {names}."
+                ),
+            }
     target = section_gid.strip()
     if not target and section_name.strip():
-        target = resolve_section_gid(section_name)
+        target = resolve_section_gid(section_name, project_gid)
         if not target:
-            names = ", ".join(r["name"] for r in list_project_sections()) or "none found"
+            names = ", ".join(r["name"] for r in list_project_sections(project_gid)) or "none found"
             return {
                 "ok": False,
                 "error": f"No board named '{section_name}'. Available boards: {names}.",

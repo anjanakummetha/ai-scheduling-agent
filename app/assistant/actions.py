@@ -926,12 +926,23 @@ def list_asana_tasks_action(*, bucket: str = "all", mine_only: bool = True) -> d
 
 
 def create_asana_task_action(
-    *, title: str, notes: str = "", due_on: str = "", section: str = "", confirm: bool = False
+    *,
+    title: str,
+    notes: str = "",
+    due_on: str = "",
+    section: str = "",
+    project: str = "",
+    confirm: bool = False,
 ) -> dict[str, Any]:
     from app.integrations.asana_manager import create_asana_task_from_chat
 
     return create_asana_task_from_chat(
-        title=title, notes=notes, due_on=due_on, section=section, approved=confirm
+        title=title,
+        notes=notes,
+        due_on=due_on,
+        section=section,
+        project=project,
+        approved=confirm,
     )
 
 
@@ -979,6 +990,7 @@ def move_asana_task_action(
     task_gid: str,
     section_gid: str = "",
     section_name: str = "",
+    project: str = "",
     confirm: bool = False,
 ) -> dict[str, Any]:
     from app.integrations.asana_manager import move_asana_task_to_section
@@ -987,6 +999,7 @@ def move_asana_task_action(
         task_gid=task_gid,
         section_gid=section_gid,
         section_name=section_name,
+        project=project,
         approved=confirm,
     )
 

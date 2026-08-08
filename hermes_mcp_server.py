@@ -455,8 +455,9 @@ def lexi_today() -> str:
 def lexi_list_asana_projects() -> str:
     """Every Asana project Lexi can read for Kory (reads span all of them).
 
-    Use this before saying which projects are visible. Tasks are created on
-    Kory's personal project only; reads cover all of these.
+    Use this before saying which projects are visible. Tasks default to
+    Kory's personal project but can be created on any of these via the
+    project parameter of lexi_create_asana_task.
     """
     return _wrap("lexi_list_asana_projects", lexi.list_asana_projects_action)
 
@@ -489,9 +490,10 @@ def lexi_create_asana_task(
     notes: str = "",
     due_on: str = "",
     section: str = "",
+    project: str = "",
     confirm: str = "false",
 ) -> str:
-    """Create an Asana task on Kory's project. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
+    """Create an Asana task. Defaults to Kory's personal project; pass project='<name>' to file it on any project he can access (names from lexi_list_asana_projects — when he names a project, always pass it). Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_create_asana_task",
@@ -500,6 +502,7 @@ def lexi_create_asana_task(
         notes=notes,
         due_on=due_on,
         section=section,
+        project=project,
         confirm=approved,
     )
 
@@ -568,9 +571,10 @@ def lexi_move_asana_task(
     task_gid: str,
     section_gid: str = "",
     section_name: str = "",
+    project: str = "",
     confirm: str = "false",
 ) -> str:
-    """Move Asana task to a section after confirm (writes blocked for now)."""
+    """Move an Asana task to a section. Section names resolve within Kory's personal project unless project='<name>' says which project's boards to use. Pass confirm='true' once Kory has asked for or agreed to this."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_move_asana_task",
@@ -578,6 +582,7 @@ def lexi_move_asana_task(
         task_gid=task_gid,
         section_gid=section_gid,
         section_name=section_name,
+        project=project,
         confirm=approved,
     )
 
