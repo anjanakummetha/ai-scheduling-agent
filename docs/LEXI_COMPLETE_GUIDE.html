@@ -165,7 +165,7 @@
     <tr><td><code>approve #N</code></td><td>Release it — the offer email or the calendar invite actually sends.</td></tr>
     <tr><td><code>approve #N — but make it Tuesday at 3</code></td><td>Approve with your change; the new time keeps the meeting's proper duration.</td></tr>
     <tr><td><code>reject #N — reason</code></td><td>Kill it. Works on anything pending <i>and</i> on items Lexi escalated to you.</td></tr>
-    <tr><td><code>cancel meeting #N — reason</code></td><td>Cancels a <b>booked</b> meeting — the invite is retracted properly. Use this exact phrasing.</td></tr>
+    <tr><td><code>cancel meeting #N — reason</code></td><td>Cancels a <b>booked</b> meeting — the invite is retracted properly. Natural language works too ("cancel my Thursday coffee with Mike — conflict came up"); Lexi finds the number herself and asks if it's ambiguous.</td></tr>
     <tr><td><code>help</code></td><td>Lexi's own quick reference.</td></tr>
     <tr><td><span class="kbd">/new</span></td><td>Fresh session (saves tokens; nothing important is lost).</td></tr>
   </table></div>
@@ -405,9 +405,11 @@
   <h3>“How do I hand her an email I got?”</h3>
   <p>Mention it (<span class="say">the email from Sarah about the board dinner — offer her some times</span>) —
      she'll find the thread. CCing her on an email also puts it in front of her.</p>
-  <h3>“What does a proposal number mean?”</h3>
-  <p>Every piece of work gets a number (<code>#8021</code>). It's how you and Lexi refer to the same thing
-     unambiguously. Numbers are per-item, never reused.</p>
+  <h3>“What does a proposal number mean? Do I have to use it?”</h3>
+  <p>Every piece of work gets a number (<code>#8021</code>) so you and Lexi can refer to the same thing
+     unambiguously. <b>You never have to know one</b> — describe what you mean ("cancel my coffee with
+     Mike", "approve the intro call with Jane") and Lexi resolves the number herself, asking only if two
+     things could match. Use numbers as shorthand once she's shown them to you.</p>
   <h3>“The chat is slow or acting confused.”</h3>
   <p>Type <span class="kbd">/new</span> for a fresh session. If something seems genuinely broken, tell Anjana —
      everything is logged, and a timestamp plus what you typed is enough to find it.</p>
