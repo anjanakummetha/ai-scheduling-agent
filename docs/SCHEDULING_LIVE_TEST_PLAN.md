@@ -1196,6 +1196,20 @@ disposable HubSpot contact. Cleanup verified zero residue (§ Residue below).
   refuses ambiguity with candidates, quotes what was deleted. Live-verified
   remember→forget→list-empty.
 
+### Post-sweep observation (2026-08-08 ~07:56 UTC) — stale card RESURFACED
+An Aug-5 UAT card ("[TEST] Quick catch-up? — LT-H4", "Invite send is disabled
+(UAT safety)") appeared in Kory's chat with a fresh timestamp during the
+07:56 deploy restart (webhook disconnect/reconnect), minutes after a `/new`
+session reset. **Neither system sent it**: proposal 6861 is `cancelled`
+(cleaned that morning), zero send lines in lexi.log/gateway.log/audit_log,
+and the card's copy reflects Aug-5 flag state — i.e. a Teams client/service
+resync redelivered the old activity. Verified INERT: executor refuses
+send_invite on non-pending statuses and "Not yet" is a no-op. Consequence:
+stale cards don't just linger, they can RESURFACE looking new — raises the
+priority of the activity-id-persistence item (store ids; update cards to a
+decided/expired state on decision). Interim guidance for Kory/Anjana: never
+tap a card whose proposal number isn't in `pending`.
+
 ### Notes / verified-by-observation
 - Cold inbound auto-skip (`delegation_and_followups_cold_inbound`) confirmed
   working as designed — a cold scheduling ask never reaches Teams; Kory
