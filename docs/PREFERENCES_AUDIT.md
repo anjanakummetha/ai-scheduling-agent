@@ -105,29 +105,35 @@ send_offer approval path; only the auto-execute branch, env-gated off, skips the
 - Dead `_insert_outbound_holds` deleted; `rules.py` docstring now says which keys are
   prompt-only.
 
+### RULED 2026-08-08 (via Anjana) — and implemented same day
+1. **Urgent keyword self-service — RULED: escalate, never auto-relax.** Urgency no longer
+   bypasses lunch/travel-day/6 AM anywhere; validators warn "no rules were auto-relaxed",
+   and an urgency-flagged request that fails the rules now calls `escalate_to_kory` with
+   the exception offer (guidance reply → `kory_scheduling_guidance` → re-run). The
+   ask-Kory-to-MOVE-a-meeting flow still doesn't exist (`update_calendar_event`: 0 sites).
+2. **Tue/Thu early starts — RULED: only when the contact's schedule needs it.** 7:00/8:00
+   candidates appear only for East-Coast senders or a stated early window; 6 AM is
+   East-Coast-only; the 7:00 floor drops to 6:00 when an East-Coast cue is present, so
+   "6 AM ET works" is finally reachable (amends ruling V-1).
+3. **30-min coffee ask — RULED: keep booking 60** ("they run long — give them the room").
+4. **Same-day scheduling — RULED: keep next-day earliest** ("no minimum notice" just
+   means no multi-day lead requirement).
+5. **Matt on coffees — RULED: not by default**; only with an explicit "Matt will join".
+6. **Coffee buffer — RULED: stays invisible**; Lexi must simply never book the 30 min
+   after a coffee (current behavior correct).
+
 ### Still open — needs Kory/Anjana decision (deliberately NOT changed)
-1. **Urgent keyword self-service** (flag 12): "urgent"/"asap"/"new client" in a
-   prospect's email relaxes lunch, travel-day, and 6 AM gates with no human in the loop.
-   Travel-day relaxation arguably implements "2-3 critical check-ins", but a stranger's
-   word choice shouldn't be the trigger. The preference's actual ask — Lexi ASKS Kory to
-   move a movable meeting — has no implementation (`update_calendar_event`: 0 call sites).
-2. **Tue/Thu 7/8 AM routine vs. "occasional"** (flag 1) and the 7:00-floor vs. 6 AM
-   East-Coast lane (flag 2, V-1 ruling conflict) — needs Kory's ruling.
-3. **No-minimum-notice vs. effective next-day minimum** (flag 3) — 2h lead + day_offset=1.
-4. **Weekend family-calendar exception** (flag 4) — family busy-read was ruled OUT
+1. **Weekend family-calendar exception** (flag 4) — family busy-read was ruled OUT
    (kory-scheduling-rulings); weekends stay blocked, dinner exemption stands. Revisit only
    if Kory wants weekend scheduling.
-5. **30-min-Teams batching** (flag 5) — still unimplemented (selector prefers one slot/day).
-6. **Drive-time rules** (flag 6) — only Cherry Creek 15-min enforced; DTC/Littleton/DEN
+2. **30-min-Teams batching** (flag 5) — still unimplemented (selector prefers one slot/day).
+3. **Drive-time rules** (flag 6) — only Cherry Creek 15-min enforced; DTC/Littleton/DEN
    pads and calls-during-drives remain prompt-only.
-7. **Coffee 90-min block visibility**: Lexi reserves 90 internally but writes a 60-min
-   event — same convention as Heidi (her invites are also 60 min with no buffer event).
-   If Kory wants a visible 10:00–10:30 block, that's a new feature.
-8. **Coffee 60-min override**: a sender asking a "30-minute coffee" still gets 60
-   (locked by test as a deliberate ruling — confirm with Kory it should stay).
-9. **Dinner/happy-hour same-evening stacking** (pref) — nothing searches for the stack;
+4. **Dinner/happy-hour same-evening stacking** (pref) — nothing searches for the stack;
    only permitted, not preferred, in code.
-10. **Matt on coffees**: title/attendees now require an explicit "Matt will join" cue —
-    confirm whether Matt should default-join BD coffees instead.
-11. **Buffer/coffee protection is subject-regex based** — a coffee titled without the word
-    "coffee" gets no post-coffee buffer protection.
+5. **Ask-Kory-to-move-a-meeting flow** — the urgent ruling routes exception requests to
+   Kory, but Lexi still cannot MOVE an existing meeting (`update_calendar_event`: 0 sites).
+6. **Buffer/coffee protection is subject-regex based** — a coffee titled without the word
+   "coffee" gets no post-coffee buffer protection.
+7. **Venue addresses** in `rules.py` `VENUE_ADDRESSES` — one-time human verification
+   (only Aviano on St. Paul confirmed from a real Heidi invite).

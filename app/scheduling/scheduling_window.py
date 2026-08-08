@@ -9,6 +9,10 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 
+# Same East-Coast cue set the slot engine uses — a match lowers the early-
+# morning floor from 7:00 to 6:00 (Kory's Tue/Thu East-Coast lane).
+_EAST_COAST_CUE = re.compile(r"\b(east coast|eastern|nyc|new york|boston|et)\b", re.I)
+
 MT = ZoneInfo(settings.scheduling_timezone)
 
 
@@ -324,17 +328,21 @@ def _lower_start_for_explicit_am(window: TimeOfDayWindow, combined: str) -> Time
     """Widen a morning window downward when the sender names an earlier time.
 
     "Early morning — even 7 AM works" must make 7:00 offerable. Only ever
-    lowers the start (an explicit 10 AM mention never shrinks the window), and
-    floors at 7:00 — Kory's earliest for outside meetings (ruling V-1).
+    lowers the start (an explicit 10 AM mention never shrinks the window).
+    Floors at 7:00 (ruling V-1) — except East-Coast contacts, whose floor is
+    6:00: Kory's spec explicitly allows 6 AM Tue/Thu for them, and the old
+    unconditional 7:00 floor made "6 AM ET works" unreachable (audit flag 2,
+    ruled 2026-08-08).
     """
     from dataclasses import replace
 
+    floor = 6 * 60 if _EAST_COAST_CUE.search(combined) else 7 * 60
     earliest = window.earliest_minutes()
     for match in re.finditer(r"\b(\d{1,2})(?::(\d{2}))?\s*a\.?m\.?\b", combined):
         hour, minute = int(match.group(1)), int(match.group(2) or 0)
         if not 1 <= hour <= 11:
             continue
-        total = max(hour * 60 + minute, 7 * 60)
+        total = max(hour * 60 + minute, floor)
         if total < earliest:
             earliest = total
     if earliest == window.earliest_minutes():

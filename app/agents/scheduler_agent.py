@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -14,6 +15,8 @@ from typing import Any
 from app.config import settings
 from app.llm.hermes_client import get_hermes_client
 from app.storage.lexi_db import get_lexi_connection
+
+logger = logging.getLogger(__name__)
 
 PENDING_TRIAGE = "pending_triage"
 PENDING_APPROVAL = "pending_approval"
@@ -259,7 +262,42 @@ def _advance_proposal(conn: sqlite3.Connection, proposal: PendingProposal) -> bo
             },
         )
         conn.commit()
+        _maybe_escalate_urgent_failure(proposal, exc)
         return False
+
+
+def _maybe_escalate_urgent_failure(proposal: PendingProposal, exc: Exception) -> None:
+    """Ruling 2026-08-08: urgency escalates to Kory instead of relaxing gates.
+
+    When an urgency-flagged request can't be scheduled within the rules
+    (ValueError = a rules/gate refusal, not a transient integration error),
+    route it to Kory with the exception offer — his guidance reply flows back
+    into the re-run via kory_scheduling_guidance. Non-urgent failures keep the
+    existing behavior (retry from pending_triage each cycle).
+    """
+    if not isinstance(exc, ValueError):
+        return
+    from app.scheduling.slot_engine import _is_urgent
+
+    if not _is_urgent(proposal.subject or "", proposal.raw_body or ""):
+        return
+    try:
+        from app.scheduling.kory_escalation import escalate_to_kory
+
+        escalate_to_kory(
+            proposal.proposal_id,
+            reason=(
+                "Sender flags this as urgent, but no time fits your rules. "
+                "No exception was applied automatically — if you want one "
+                "(lunch, travel week, or an early start), reply with the "
+                "exception and I'll re-run the search."
+            ),
+            failure_error=str(exc),
+        )
+    except Exception:
+        logger.exception(
+            "Urgent-failure escalation failed for proposal %s.", proposal.proposal_id
+        )
 
 
 def _proposal_from_row(row: sqlite3.Row) -> PendingProposal:

@@ -108,6 +108,7 @@ def _candidate_start_times(
     east_coast: bool,
     urgent: bool,
     flexible_afternoon: bool = False,
+    early_ok: bool = False,
 ) -> list[datetime]:
     weekday = day_local.strftime("%A")
     day_rules = kory_rules.DAILY_AVAILABILITY.get(weekday, {})
@@ -127,7 +128,7 @@ def _candidate_start_times(
         times = ["18:00", "18:30", "19:00"]
     elif intent == "podcast":
         times = ["07:00", "08:00", "09:00", "10:00", "11:00", "14:00", "15:00"]
-        if weekday in kory_rules.EARLY_START_DAYS and (east_coast or urgent):
+        if weekday in kory_rules.EARLY_START_DAYS and east_coast:
             times = ["06:00", "07:00"] + times
     elif intent == "lunch":
         # The generic menu deliberately skips noon (Kory works through lunch),
@@ -139,9 +140,12 @@ def _candidate_start_times(
         times = ["09:00", "10:00", "11:00", "14:00", "15:00", "16:00"]
     else:
         times = ["09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"]
-        if weekday in kory_rules.EARLY_START_DAYS:
+        # Ruling 2026-08-08: Tue/Thu early starts are "only when the contact's
+        # schedule needs it" — offered when the sender is East Coast or asked
+        # for early times, never as a routine menu item.
+        if weekday in kory_rules.EARLY_START_DAYS and (early_ok or east_coast):
             times = ["07:00", "08:00"] + times
-            if east_coast or urgent:
+            if east_coast:
                 times = ["06:00"] + times
         if weekday in kory_rules.WORKOUT_DAYS and meeting_format == "virtual":
             times = ["08:00"] + [t for t in times if t >= "08:00"]
@@ -264,6 +268,10 @@ def find_valid_slots(
         re.search(r"\b(east coast|eastern|nyc|new york|boston|et)\b", f"{subject}\n{body}", re.I)
     )
     combined = f"{subject}\n{body}".lower()
+    # The contact's schedule "needs" an early start when their stated window
+    # opens before 9:00 (e.g. "we could do 7 AM") — that unlocks Tue/Thu
+    # 7:00/8:00 candidates alongside the East-Coast signal.
+    early_ok = bool(time_window and time_window.earliest_minutes() < 9 * 60)
     # Only an explicit afternoon mention widens coffee beyond the 8:30/9:00
     # preference — "flexible"/"either" are far too common to mean "afternoon
     # is fine" and were quietly abandoning Kory's preferred coffee times.
@@ -290,6 +298,7 @@ def find_valid_slots(
             east_coast=east_coast,
             urgent=is_urgent,
             flexible_afternoon=flexible_afternoon,
+            early_ok=early_ok,
         ):
             if start_local < earliest:
                 continue

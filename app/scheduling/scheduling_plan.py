@@ -171,14 +171,17 @@ def _llm_window_from_dates(
     return SchedulingWindow(start=start, end=end, source="llm", label=label)
 
 
-def _llm_time_window(parsed: dict[str, Any]) -> TimeOfDayWindow | None:
+def _llm_time_window(parsed: dict[str, Any], *, east_coast: bool = False) -> TimeOfDayWindow | None:
     """Clamped time-of-day preference. Floor 7:00 (ruling V-1: Kory's earliest
-    for outside meetings); a start at/after the end is discarded."""
+    for outside meetings) — 6:00 for East-Coast contacts, whose lane Kory's
+    spec explicitly allows (ruled 2026-08-08); a start at/after the end is
+    discarded."""
+    floor = 6 if east_coast else 7
     earliest = parsed.get("earliest_hour")
     latest = parsed.get("latest_hour")
     if not isinstance(earliest, int) and not isinstance(latest, int):
         return None
-    start_hour = max(7, earliest) if isinstance(earliest, int) and 0 <= earliest <= 23 else 7
+    start_hour = max(floor, earliest) if isinstance(earliest, int) and 0 <= earliest <= 23 else floor
     end_hour = latest if isinstance(latest, int) and 0 < latest <= 23 else 17
     end_hour = min(end_hour, 19)
     if end_hour <= start_hour:
@@ -234,7 +237,11 @@ def _merge_llm_plan(
             ):
                 plan.window = llm_window
 
-    time_window = _llm_time_window(parsed)
+    from app.scheduling.scheduling_window import _EAST_COAST_CUE
+
+    time_window = _llm_time_window(
+        parsed, east_coast=bool(_EAST_COAST_CUE.search(f"{subject}\n{body}"))
+    )
     if time_window is not None:
         plan.time_window = time_window
 

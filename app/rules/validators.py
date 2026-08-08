@@ -350,9 +350,18 @@ def validate_proposal_slots(
         result.violations.append("No slots proposed.")
         return result
 
-    if intent_key in {"lunch", "lunch_request"} and not prefs.lunch_allowed and not urgent:
+    # Ruling 2026-08-08: urgency in a sender's email NEVER self-relaxes gates
+    # (anyone could type "urgent"). It surfaces as a warning so Kory can grant
+    # the exception; the lunch/travel/6AM rules below hold regardless.
+    if urgent:
+        result.warnings.append(
+            "Sender flags urgency — no rules were auto-relaxed. If Kory wants an "
+            "exception (lunch, travel week, 6 AM), tell Lexi and she will re-run."
+        )
+
+    if intent_key in {"lunch", "lunch_request"} and not prefs.lunch_allowed:
         result.valid = False
-        result.violations.append("Lunch meetings are exception-only unless Kory allows via memory/urgent.")
+        result.violations.append("Lunch meetings are exception-only — route to Kory.")
 
     for index, slot in enumerate(slots, start=1):
         start = parse_iso_datetime(str(slot.get("start") or ""))
@@ -375,7 +384,7 @@ def validate_proposal_slots(
         _check_timed_hard_blocks(start_local, end_local, weekday, prefix, result)
 
         result.rules_checked.append("travel_day")
-        if _travel_blocks_slot(start_local, end_local, busy) and not urgent:
+        if _travel_blocks_slot(start_local, end_local, busy):
             result.valid = False
             result.violations.append(
                 f"{prefix}: Kory is traveling this day — hold for Kory. Travel weeks are "
@@ -420,10 +429,10 @@ def validate_proposal_slots(
                 result.violations.append(
                     f"{prefix}: earliest on {weekday} is 6:00 AM (East Coast) / 7:00 AM."
                 )
-            elif start_local.hour == 6 and not (urgent or east_coast):
+            elif start_local.hour == 6 and not east_coast:
                 result.valid = False
                 result.violations.append(
-                    f"{prefix}: 6 AM on {weekday} is only for East Coast / urgent requests."
+                    f"{prefix}: 6 AM on {weekday} is only for East Coast contacts."
                 )
 
         result.rules_checked.append("happy_hour_rules")
