@@ -98,7 +98,7 @@ def test_lexi_voice_mode_lands_in_proposal(tmp_path, monkeypatch):
         "priority_tier TEXT, rule_reasoning TEXT, proposed_slots TEXT, "
         "drafted_reply TEXT, confidence_score REAL, justification TEXT, "
         "voice_mode TEXT DEFAULT 'kory', send_channel TEXT DEFAULT 'kory', "
-        "updated_at TEXT)"
+        "scheduling_note TEXT, updated_at TEXT)"
     )
     conn.commit()
     conn.close()

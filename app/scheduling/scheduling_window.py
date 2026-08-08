@@ -350,12 +350,65 @@ def _lower_start_for_explicit_am(window: TimeOfDayWindow, combined: str) -> Time
     return replace(window, start_hour=earliest // 60, start_minute=earliest % 60)
 
 
+_RECIPIENT_TIME_CUE = re.compile(
+    r"\b(?:her|his|their|your)\s+(?:local\s+)?time\b", re.IGNORECASE
+)
+
+
 def infer_time_of_day_window(
     *,
     subject: str = "",
     body: str = "",
 ) -> TimeOfDayWindow | None:
-    """Parse 'between 9 AM and 4:30 PM' or soft preferences like 'mornings work best'."""
+    """Parse 'between 9 AM and 4:30 PM' or soft preferences like 'mornings work best'.
+
+    "Mornings HER time" means the recipient's morning: when the text carries a
+    recipient-relative cue and states where they are, the window shifts into MT
+    (live R1: a Boston "mornings her time" ask offered 10:00 MT — noon ET)."""
+    window = _infer_time_of_day_window_local(subject=subject, body=body)
+    if window is None:
+        return None
+    combined = f"{subject}\n{body}"
+    if not _RECIPIENT_TIME_CUE.search(combined):
+        return window
+    return _shift_window_for_recipient(window, combined)
+
+
+def _shift_window_for_recipient(window: TimeOfDayWindow, combined: str) -> TimeOfDayWindow:
+    from app.scheduling.timezone_intel import _timezone_from_body, _timezone_from_signature
+
+    detected = _timezone_from_body(combined) or _timezone_from_signature(combined)
+    if detected is None or detected.timezone is None:
+        return window  # cue without a stated zone — leave MT rather than guess
+    now = datetime.now(MT)
+    recipient_offset = now.astimezone(detected.timezone).utcoffset()
+    mt_offset = now.utcoffset()
+    if recipient_offset is None or mt_offset is None:
+        return window
+    delta_min = int((recipient_offset - mt_offset).total_seconds() // 60)
+    if delta_min == 0:
+        return window
+    start = window.start_hour * 60 + window.start_minute - delta_min
+    end = window.end_hour * 60 + window.end_minute - delta_min
+    start = max(0, min(start, 23 * 60 + 59))
+    end = max(0, min(end, 24 * 60))
+    if end - start < 30:
+        return window  # a shift that collapses the window is worse than MT
+    zone_label = now.astimezone(detected.timezone).strftime("%Z") or "recipient time"
+    return TimeOfDayWindow(
+        start_hour=start // 60,
+        start_minute=start % 60,
+        end_hour=end // 60,
+        end_minute=end % 60,
+        label=f"{window.label} ({zone_label})",
+    )
+
+
+def _infer_time_of_day_window_local(
+    *,
+    subject: str = "",
+    body: str = "",
+) -> TimeOfDayWindow | None:
     combined = f"{subject}\n{body}".lower()
     match = re.search(
         r"\bbetween\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+and\s+"

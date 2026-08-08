@@ -5,11 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import logging
 import re
 import sqlite3
 import traceback
 import uuid
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from app.agents.scheduler_agent import _load_calendar_context
 from app.config import settings
@@ -130,6 +133,13 @@ def initiate_outbound_scheduling(
             raise ValueError(
                 f"Outbound scheduling produced insufficient slots ({len(schedule.slots)})."
             )
+        scheduling_note = _outbound_disclosure_note(
+            subject=subject.strip(),
+            body=outbound_context,
+            intent=intent,
+            slots=schedule.slots,
+            calendar_context=calendar_context,
+        )
     except Exception as exc:
         tb = traceback.format_exc()
         result["errors"].append(f"{type(exc).__name__}: {exc}")
@@ -171,6 +181,7 @@ def initiate_outbound_scheduling(
                 duration_minutes=duration_minutes,
                 require_ceo_signoff=require_ceo_signoff,
                 voice_mode=voice,
+                scheduling_note=scheduling_note,
             )
             # Holds are placed after Kory approves send (comms_agent send_offer).
 
@@ -522,6 +533,62 @@ def _finalize_outbound_holds(
         conn.execute("DELETE FROM holds WHERE id = ?", (row["id"],))
 
 
+def _outbound_disclosure_note(
+    *,
+    subject: str,
+    body: str,
+    intent: str,
+    slots: list[dict[str, str]],
+    calendar_context: dict[str, Any],
+) -> str:
+    """The inbound path attaches "no availability for <window> — offering
+    <dates> instead" via its pre-approval gate; the outbound path called the
+    engine directly and shipped out-of-window offers with no caveat (R2).
+    Same disclosure, computed from the same primitives — never blocks."""
+    from app.scheduling.pre_approval_gate import offered_dates_label, verify_before_kory_approval
+    from app.scheduling.scheduling_window import infer_scheduling_window, slot_date_in_window
+
+    notes: list[str] = []
+    window = None
+    try:
+        window = infer_scheduling_window(subject=subject, body=body)
+    except Exception:
+        window = None
+    if window is not None and slots:
+        outside = [s for s in slots if not slot_date_in_window(s, window)]
+        if outside:
+            label = window.label or "the requested window"
+            offering = offered_dates_label(slots)
+            if len(outside) == len(slots):
+                notes.append(
+                    f"No availability for {label} — offering "
+                    f"{offering or 'the next open times'} instead."
+                )
+            else:
+                notes.append(
+                    f"Not everything fits {label} — offering {offering or 'a wider spread'}."
+                )
+    try:
+        gate = verify_before_kory_approval(
+            slots=slots,
+            calendar_context=calendar_context,
+            intent=intent,
+            subject=subject,
+            body=body,
+            window=window,
+        )
+        for warning in gate.warnings or []:
+            if warning not in notes:
+                notes.append(warning)
+        if not gate.ok:
+            summary = gate.summary()
+            if summary and summary not in notes:
+                notes.append(summary)
+    except Exception:
+        logger.debug("Outbound gate check failed; note carries window info only.", exc_info=True)
+    return " ".join(notes).strip()
+
+
 def _insert_outbound_proposal(
     conn: sqlite3.Connection,
     *,
@@ -532,6 +599,7 @@ def _insert_outbound_proposal(
     duration_minutes: int,
     require_ceo_signoff: bool,
     voice_mode: str = "kory",
+    scheduling_note: str = "",
 ) -> int:
     rule_reasoning = {
         "source": "outbound_delegation",
@@ -553,9 +621,10 @@ def _insert_outbound_proposal(
             confidence_score,
             justification,
             voice_mode,
-            send_channel
+            send_channel,
+            scheduling_note
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             thread_id,
@@ -569,6 +638,7 @@ def _insert_outbound_proposal(
             f"Outbound delegation to schedule a {duration_minutes}-minute {intent.replace('_', ' ')}.",
             voice_mode,
             voice_mode,  # voice decides the mailbox: kory-voice → kory channel
+            scheduling_note or None,
         ),
     )
     return int(cursor.lastrowid)
