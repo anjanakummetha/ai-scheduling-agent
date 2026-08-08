@@ -1,4 +1,4 @@
-# Lexi — Session Handoff (updated 2026-08-08, post-sweep)
+# Lexi — Session Handoff (updated 2026-08-08 end of session — production-ready, docs complete)
 
 ## 0. VERIFICATION SWEEP + FIX DAY COMPLETE (2026-08-08) — see RUN 15
 
@@ -48,6 +48,20 @@ tab no longer substitutes MOCK briefing/priorities when today's real data doesn'
 (it was showing a fabricated "Series B term sheet" day) — honest "collecting today's data"
 empty states instead. Deploy recipe used: build standalone (Node 20 via nvm) → rsync
 `.next/standalone/` (EXCLUDING `data/`!) + `.next/static/` → chown ceo → restart.
+
+**Afternoon additions (same session):**
+- Briefing timer send PROVEN unattended (10:30 UTC run → sent 10:35:01) and Graph
+  throttling CLOSED (0 poll errors in 10h) — both §2/§2a marked resolved.
+- Systemd stop-timeout drop-in (210s) applied + verified (§3 item 11 done).
+- **Dashboard mock-data fix deployed** (dashboard repo `36d997d`): Today tab shows honest
+  "collecting today's data" states instead of fabricated briefing/priorities. NOTE: other
+  tabs (Inbox/Tasks/Travel/Health) still carry demo-era mock fallbacks — same treatment
+  available if wanted.
+- **Deliverables created (all in docs/, all committed):** `LEXI_COMPLETE_GUIDE.html`
+  (Kory-facing full guide), `LEXI_SYSTEM_MAP.html` (3-figure visual architecture),
+  `TECHNICAL_HANDOVER.md` (successor doc incl. kill switches), `LEXI_MCP_TOOLS.docx`
+  (every tool explained for Kory's workspace).
+- Deferred by Anjana: staged-ask backlog decision (TTL feature vs bulk sign-off — revisit).
 
 **Resume phrase:** *"Kory is live; check what he's done, then continue the open work list."*
 
