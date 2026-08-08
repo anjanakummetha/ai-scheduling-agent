@@ -13,6 +13,7 @@ from app.integrations.outlook_calendar import create_calendar_event, delete_cale
 from app.integrations.outlook_email import (
     create_draft_reply,
     send_draft,
+    send_outbound_email,
     send_pilot_reply_for_proposal,
     send_reply_in_thread,
 )
@@ -1441,6 +1442,24 @@ def _send_drafted_reply(
         if send_channel not in {"kory", "lexi"}:
             send_channel = "kory"
         reply_target = str(proposal.get("reply_message_id") or "").strip() or thread_id
+
+        # Chat-initiated outbound proposals carry a synthetic thread id — there
+        # is no Outlook message to reply to, and CREATE_DRAFT_REPLY rejects the
+        # placeholder as a malformed id (live: proposal 7997, "set up a call
+        # with X" could never send its offer). Compose a fresh email instead.
+        if thread_id.startswith("lexi-outbound-"):
+            if not intended:
+                return False, "Email dispatch failed: outbound proposal has no recipient."
+            message_id, _log = send_outbound_email(
+                to_email=intended,
+                subject=str(proposal.get("subject") or "Scheduling"),
+                body=body,
+                approved_send=True,
+                send_channel=send_channel,  # type: ignore[arg-type]
+            )
+            if not message_id:
+                return False, "Email dispatch failed: outbound send returned no message id."
+            return True, None
 
         if settings.sandbox_email_loopback and settings.lexi_write_mode == "sandbox":
             message_id, _log = send_pilot_reply_for_proposal(
