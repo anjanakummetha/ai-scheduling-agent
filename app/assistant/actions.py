@@ -1328,7 +1328,10 @@ def list_asana_projects_action() -> dict[str, Any]:
         "ok": True,
         "count": len(projects),
         "projects": [p.get("name") for p in projects],
-        "note": "Reads cover all of these; new tasks go to Kory's personal project.",
+        "note": (
+            "Reads cover all of these; new tasks default to Kory's personal "
+            "project unless a project is named."
+        ),
     }
 
 

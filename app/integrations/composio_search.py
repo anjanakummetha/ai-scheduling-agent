@@ -101,7 +101,9 @@ def search_hotels(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def search_maps(query: str) -> dict[str, Any]:
-    return execute_search_action("COMPOSIO_SEARCH_GOOGLE_MAPS", {"query": query.strip()})
+    # COMPOSIO_SEARCH_GOOGLE_MAPS takes "q", unlike the other search tools'
+    # "query" — sending "query" fails with "missing: {'q'}".
+    return execute_search_action("COMPOSIO_SEARCH_GOOGLE_MAPS", {"q": query.strip()})
 
 
 def search_news(query: str) -> dict[str, Any]:

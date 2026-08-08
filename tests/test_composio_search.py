@@ -36,3 +36,21 @@ def test_parse_arguments_json():
 
 def test_search_enabled_is_bool():
     assert isinstance(search_enabled(), bool)
+
+
+def test_maps_sends_q_not_query(monkeypatch):
+    """COMPOSIO_SEARCH_GOOGLE_MAPS takes "q" unlike the other search tools —
+    sending "query" failed live with "missing: {'q'}"."""
+    import app.integrations.composio_search as cs
+
+    seen = {}
+
+    def fake_exec(slug, args):
+        seen[slug] = args
+        return {"data": {}}
+
+    monkeypatch.setattr(cs, "execute_search_action", fake_exec)
+    cs.search_maps("coffee shops Cherry Creek Denver")
+    assert seen["COMPOSIO_SEARCH_GOOGLE_MAPS"] == {"q": "coffee shops Cherry Creek Denver"}
+    cs.search_news("Denver construction")
+    assert seen["COMPOSIO_SEARCH_NEWS"] == {"query": "Denver construction"}

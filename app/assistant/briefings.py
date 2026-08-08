@@ -160,6 +160,7 @@ def build_today_calendar_brief() -> dict[str, Any]:
         for e in events
         if not e.get("isCancelled")
         and str(e.get("showAs") or "").lower() not in {"free", "workingelsewhere"}
+        and _event_overlaps_window(e, start, end)
     ]
     meetings.sort(key=lambda e: str(e.get("start") or ""))
 
@@ -170,7 +171,10 @@ def build_today_calendar_brief() -> dict[str, Any]:
     else:
         for event in meetings[:20]:
             subject = str(event.get("subject") or "(no title)")
-            start_t = _format_event_time(event.get("start"), tz)
+            if event.get("isAllDay"):
+                start_t = "All day"
+            else:
+                start_t = _format_event_time(event.get("start"), tz)
             line = f"• **{start_t}** — {subject}"
             # Attendees are Graph objects now that the calendar read selects
             # them; str() on those printed the whole dict into the message.
@@ -217,6 +221,43 @@ def _display_sender(sender: Any) -> str:
         addr = value.get("emailAddress") if isinstance(value.get("emailAddress"), dict) else value
         return str(addr.get("name") or addr.get("address") or "unknown")
     return str(value or "unknown")
+
+
+def _parse_event_boundary(raw: Any, tz: ZoneInfo) -> datetime | None:
+    """Aware datetime from a Graph start/end object, honouring its stated zone."""
+    stated_zone = ""
+    if isinstance(raw, dict):
+        stated_zone = str(raw.get("timeZone") or "")
+        raw = raw.get("dateTime") or raw.get("date") or ""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        source = tz
+        if stated_zone:
+            try:
+                source = ZoneInfo(stated_zone)
+            except Exception:
+                source = tz
+        dt = dt.replace(tzinfo=source)
+    return dt
+
+
+def _event_overlaps_window(
+    event: dict[str, Any], window_start: datetime, window_end: datetime
+) -> bool:
+    """Graph's calendarView can hand back all-day events created in another
+    timezone that never touch the local day — "Kory in Houston" (all-day
+    Aug 6–7) was listed on Aug 8's brief at "10:00 PM"."""
+    tz = window_start.tzinfo
+    event_start = _parse_event_boundary(event.get("start"), tz)
+    event_end = _parse_event_boundary(event.get("end"), tz)
+    if event_start is None or event_end is None:
+        return True  # can't tell — better to show a maybe than hide a meeting
+    return event_end > window_start and event_start < window_end
 
 
 def _format_event_time(raw: Any, tz: ZoneInfo) -> str:
