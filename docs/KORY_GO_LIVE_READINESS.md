@@ -16,7 +16,8 @@ and outreach campaigns.
 |---|---|---|
 | Scheduling (offer, hold, confirm, reschedule, cancel) | **ON** | Proven live, incl. E-3/E-4/E-6 |
 | Email drafting + sending (Lexi voice and Kory voice) | **ON** | Proven live |
-| Teams cards + approvals | **ON** | Proven live |
+| Teams typed approvals (`approve #N`) | **ON** | Proven live E2E (RUN 15, 2026-08-08) |
+| Teams interactive cards | **PARKED** (2026-08-08) | Text-only is the supported mode; prod had run `LEXI_TEAMS_TEXT_ONLY=true` since Aug 4 — this row's earlier "cards ON" claim was never the live state. Cards return after activity-id persistence. |
 | HubSpot **reads** (lookups, pre-briefs, deals, health) | **ON** | Proven live |
 | Asana **reads** | **ON** | Proven 2026-07-28 |
 | Morning briefing email | **ON** | Sends 4:45 AM MT; content not yet eyeballed by a human |
