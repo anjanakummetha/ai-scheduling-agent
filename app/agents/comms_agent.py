@@ -1052,8 +1052,9 @@ def _resolve_selected_slot(proposal: dict[str, Any], selected_slot: str) -> dict
                         "start": str(hold["slot_start"]),
                         "end": str(hold["slot_end"]),
                     }
-            if parsed.get("end"):
-                return {"start": str(parsed["start"]), "end": str(parsed["end"])}
+            return _slot_with_derived_end(
+                proposal, str(parsed["start"]), str(parsed.get("end") or "")
+            )
     except json.JSONDecodeError:
         pass
 
@@ -1076,9 +1077,46 @@ def _resolve_selected_slot(proposal: dict[str, Any], selected_slot: str) -> dict
             flags=re.DOTALL,
         )
         if match:
-            return {"start": match.group(1), "end": match.group(2)}
+            return _slot_with_derived_end(proposal, match.group(1), match.group(2))
 
     raise ValueError(f"Could not resolve selected_slot against proposal {proposal['id']}.")
+
+
+def _slot_with_derived_end(
+    proposal: dict[str, Any], start_str: str, end_str: str = ""
+) -> dict[str, str]:
+    """A novel time can arrive without a usable end — modify_and_approve sent
+    end == start, which booked a zero-minute meeting. Inherit the offered
+    slots' duration (every offered slot in a proposal shares one); 30 minutes
+    only when there is nothing to inherit."""
+    from datetime import datetime, timedelta
+
+    try:
+        start_dt = datetime.fromisoformat(str(start_str).replace("Z", "+00:00"))
+    except ValueError:
+        # Unparseable start: hand back what we got — downstream validation owns it.
+        return {"start": str(start_str), "end": str(end_str or start_str)}
+    if end_str:
+        try:
+            end_dt = datetime.fromisoformat(str(end_str).replace("Z", "+00:00"))
+            if end_dt > start_dt:
+                return {"start": str(start_str), "end": str(end_str)}
+        except ValueError:
+            pass
+    minutes = 30
+    for slot in proposal.get("proposed_slots") or []:
+        try:
+            s = datetime.fromisoformat(str(slot["start"]).replace("Z", "+00:00"))
+            e = datetime.fromisoformat(str(slot["end"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if e > s:
+            minutes = int((e - s).total_seconds() // 60)
+            break
+    return {
+        "start": str(start_str),
+        "end": (start_dt + timedelta(minutes=minutes)).isoformat(),
+    }
 
 
 def _normalize_slot_token(value: str) -> str:

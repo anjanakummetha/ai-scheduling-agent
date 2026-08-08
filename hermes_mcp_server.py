@@ -1276,6 +1276,7 @@ def lexi_start_scheduling(
     authorized_by: str = "kory",
     require_ceo_signoff: str = "true",
     voice_mode: str = "kory",
+    constraints: str = "",
 ) -> str:
     """Start outbound scheduling: LLM slots + draft + holds + pending_approval.
 
@@ -1296,6 +1297,12 @@ def lexi_start_scheduling(
     meeting_intent examples: lunch, dinner, coffee, meeting, internal_sync.
     duration_minutes: e.g. '60' for lunch. Set require_ceo_signoff=false only if Kory
     asked to send immediately without sign-off.
+
+    constraints: Kory's scheduling words VERBATIM — window ("next week",
+    "week of the 17th"), time of day ("mornings", "after 3"), and the
+    recipient's location/timezone ("she's in Boston", "mornings her time").
+    ALWAYS pass them when Kory states any — the slot search parses these
+    exactly like an inbound sender's words; omitting them ignores his ask.
     """
     try:
         duration = int(duration_minutes)
@@ -1316,6 +1323,7 @@ def lexi_start_scheduling(
         authorized_by=authorized_by,
         require_ceo_signoff=signoff,
         voice_mode=voice_mode,
+        constraints=constraints,
     )
 
 
@@ -1615,8 +1623,9 @@ def modify_and_approve_decision(
     notes: str,
     authorized_by: str,
 ) -> str:
-    """Modify and approve using new_time as selected slot start."""
-    slot_payload = json.dumps({"start": new_time.strip(), "end": new_time.strip()})
+    """Modify and approve using new_time as selected slot start. The end time
+    is derived from the proposal's offered-slot duration — never send end==start."""
+    slot_payload = json.dumps({"start": new_time.strip()})
     return execute_lexi_approval_tool(
         proposal_id=decision_id,
         decision="modified",

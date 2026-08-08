@@ -63,6 +63,7 @@ def initiate_outbound_scheduling(
     *,
     require_ceo_signoff: bool = True,
     voice_mode: str = "kory",
+    constraints: str = "",
 ) -> dict[str, Any]:
     """Start an outbound Lexi scheduling thread with slots, holds, and optional auto-send."""
     from app.scheduling.lexi_voice import normalize_voice_mode
@@ -84,6 +85,12 @@ def initiate_outbound_scheduling(
         f"Outbound delegation initiated by {authorized_by} for a {duration_minutes}-minute "
         f"{intent.replace('_', ' ')} with {recipient}."
     )
+    # Kory's own words ("mornings her time", "next week", "she's in Boston")
+    # must reach the slot engine — the canned context alone gave a Boston
+    # morning request noon-ET slots because the window/timezone cues that the
+    # inbound-email path parses were simply never present here.
+    if constraints.strip():
+        outbound_context += f" Kory's scheduling instructions: {constraints.strip()}"
 
     result: dict[str, Any] = {
         "ok": False,
@@ -113,6 +120,7 @@ def initiate_outbound_scheduling(
             authorized_by=authorized_by,
             calendar_context=calendar_context,
             voice_mode=voice,
+            constraints=constraints.strip(),
         )
         schedule.slots = _filter_non_conflicting_slots(
             schedule.slots,
@@ -244,14 +252,20 @@ def _build_outbound_schedule(
     authorized_by: str,
     calendar_context: dict[str, Any],
     voice_mode: str = "kory",
+    constraints: str = "",
 ) -> OutboundScheduleResult:
     from app.scheduling.slot_engine import propose_meeting_slots
 
+    body = f"Outbound delegation by {authorized_by} for {duration_minutes} minutes."
+    if constraints:
+        # The engine parses window/timezone/morning cues from body text —
+        # Kory's instructions belong there, same as an inbound sender's words.
+        body += f" {constraints}"
     engine = propose_meeting_slots(
         calendar_context,
         intent=meeting_intent,
         subject=subject,
-        body=f"Outbound delegation by {authorized_by} for {duration_minutes} minutes.",
+        body=body,
     )
     if len(engine.slots) >= MIN_SLOT_OPTIONS:
         first_name = sender_first_name(recipient_email)
