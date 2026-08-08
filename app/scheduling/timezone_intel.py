@@ -34,6 +34,19 @@ BODY_TZ_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(?:central|ct)\s+time\b", re.I), "America/Chicago"),
     (re.compile(r"\b(?:mountain|mt)\s+time\b", re.I), "America/Denver"),
     (re.compile(r"\bgmt\b|\butc\b|\buk\s+time\b", re.I), "Europe/London"),
+    # A zone abbreviation right after a clock time ("6 AM ET", "2:30pm EST") is
+    # as explicit as it gets — these were falling through to area-code guesses.
+    (re.compile(r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\s*(?:et|edt|est)\b", re.I), "America/New_York"),
+    (re.compile(r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\s*(?:ct|cdt|cst)\b", re.I), "America/Chicago"),
+    (re.compile(r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\s*(?:pt|pdt|pst)\b", re.I), "America/Los_Angeles"),
+    (re.compile(r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\s*(?:mt|mdt|mst)\b", re.I), "America/Denver"),
+    # "I am in Boston" — a stated city without the state the signature
+    # patterns require. Locational phrase prefix keeps "Boston Consulting
+    # Group" from matching.
+    (re.compile(r"\b(?:i am|i'm|we are|we're|based|located)\s+in\s+(?:boston|new york|nyc|manhattan|brooklyn|philadelphia|miami|atlanta|charlotte|washington dc)\b", re.I), "America/New_York"),
+    (re.compile(r"\b(?:i am|i'm|we are|we're|based|located)\s+in\s+(?:chicago|houston|dallas|austin|san antonio|nashville|minneapolis)\b", re.I), "America/Chicago"),
+    (re.compile(r"\b(?:i am|i'm|we are|we're|based|located)\s+in\s+(?:denver|boulder|phoenix|salt lake city)\b", re.I), "America/Denver"),
+    (re.compile(r"\b(?:i am|i'm|we are|we're|based|located)\s+in\s+(?:los angeles|san francisco|seattle|portland|san diego|la)\b", re.I), "America/Los_Angeles"),
 ]
 
 # Date header offset → approximate zone (sender mail client at send time).

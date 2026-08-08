@@ -241,3 +241,26 @@ def test_utc_date_header_internal_defaults_mt():
     assert result.confidence == "inferred"
     assert result.source == "internal_default"
     assert "Denver" in str(result.timezone)
+
+
+def test_time_with_zone_abbreviation_beats_area_code():
+    """"6 AM ET" is explicit; it was losing to a prior thread's area code."""
+    from app.scheduling.timezone_intel import _timezone_from_body
+
+    for text, zone in [
+        ("Could we do 6 AM ET before my day starts?", "America/New_York"),
+        ("How about 2:30pm EST?", "America/New_York"),
+        ("I could do 9 a.m. PT", "America/Los_Angeles"),
+        ("free after 3 PM CT", "America/Chicago"),
+    ]:
+        result = _timezone_from_body(text)
+        assert result is not None, text
+        assert str(result.timezone) == zone, text
+
+
+def test_stated_city_without_state_is_recognized():
+    from app.scheduling.timezone_intel import _timezone_from_body
+
+    assert str(_timezone_from_body("I am in Boston next month.").timezone) == "America/New_York"
+    assert str(_timezone_from_body("We're based in Chicago.").timezone) == "America/Chicago"
+    assert _timezone_from_body("Boston Consulting Group reached out.") is None
