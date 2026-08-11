@@ -119,6 +119,129 @@ def create_calendar_event(calendar_action: dict[str, Any]) -> tuple[str | None, 
     return data.get("id"), result.get("log_id")
 
 
+def get_calendar_event(event_id: str, *, role: str = "write") -> dict[str, Any] | None:
+    """Fetch one event by id, normalized to the scheduling timezone.
+
+    Graph event ids are mailbox-scoped, so a read-back has to use the same
+    connection the write used — reading Kory's mailbox for an id created on the
+    sandbox connection is a 404, not an empty result.
+    """
+    runner = execute_write_tool if role == "write" else execute_read_tool
+    try:
+        result = runner("OUTLOOK_GET_EVENT", {"user_id": "me", "event_id": event_id})
+    except Exception as exc:  # noqa: BLE001 — a failed read-back is "unverified", not fatal
+        logger.warning("OUTLOOK_GET_EVENT failed for %s: %s", event_id, exc)
+        return None
+    data = _coerce_data(result.get("data"))
+    event = data.get("event") if isinstance(data.get("event"), dict) else data
+    if not isinstance(event, dict) or not event.get("id"):
+        return None
+    return _event_to_scheduling_timezone(event)
+
+
+def move_calendar_event(
+    event_id: str,
+    *,
+    start_iso: str,
+    end_iso: str,
+) -> dict[str, Any]:
+    """Reschedule an existing event, then read it back to confirm it moved.
+
+    OUTLOOK_UPDATE_CALENDAR_EVENT takes **flat** `start_datetime` / `end_datetime`
+    with a sibling `time_zone` — not the nested `{"start": {"dateTime", "timeZone"}}`
+    shape the create path uses. Graph accepts the nested shape as unrecognized
+    fields and changes nothing, which is how hand-assembled moves through the
+    generic passthrough returned in ~0.00s and still reported "Done! shifted to
+    11:45" while the event never moved.
+
+    Returns the observed post-write state. `ok` is only true once the calendar
+    itself confirms the new time — never on the strength of the reply alone.
+    """
+    start = _convert_iso_timezone(start_iso, SCHEDULING_TIMEZONE, OUTLOOK_TIMEZONE)
+    end = _convert_iso_timezone(end_iso, SCHEDULING_TIMEZONE, OUTLOOK_TIMEZONE)
+
+    if settings.lexi_dry_run:
+        logger.info("[DRY RUN] Would move Outlook event %s to %s–%s", event_id, start, end)
+        return {
+            "ok": True,
+            "verified": False,
+            "dry_run": True,
+            "event_id": event_id,
+            "requested": {"start": start_iso, "end": end_iso},
+        }
+
+    result = execute_write_tool(
+        "OUTLOOK_UPDATE_CALENDAR_EVENT",
+        {
+            "user_id": "me",
+            "event_id": event_id,
+            "start_datetime": start,
+            "end_datetime": end,
+            "time_zone": OUTLOOK_TIMEZONE,
+        },
+    )
+    _invalidate_scheduling_cache()
+
+    if result.get("successful") is False:
+        return {
+            "ok": False,
+            "verified": False,
+            "error": "Outlook refused the update.",
+            "event_id": event_id,
+            "requested": {"start": start_iso, "end": end_iso},
+            "composio_log_id": result.get("log_id"),
+        }
+
+    observed = get_calendar_event(event_id)
+    if observed is None:
+        return {
+            "ok": False,
+            "verified": False,
+            "error": "Update returned no error, but the event could not be read back to confirm it.",
+            "event_id": event_id,
+            "requested": {"start": start_iso, "end": end_iso},
+            "composio_log_id": result.get("log_id"),
+        }
+
+    landed = event_time_matches(observed, start_iso=start_iso, end_iso=end_iso)
+    return {
+        "ok": landed,
+        "verified": landed,
+        "event_id": event_id,
+        "subject": observed.get("subject"),
+        "requested": {"start": start_iso, "end": end_iso},
+        "observed": {
+            "start": _observed_iso(observed.get("start")),
+            "end": _observed_iso(observed.get("end")),
+        },
+        "composio_log_id": result.get("log_id"),
+        **(
+            {}
+            if landed
+            else {"error": "The update was accepted but the event is still at its old time."}
+        ),
+    }
+
+
+def event_time_matches(event: dict[str, Any], *, start_iso: str, end_iso: str) -> bool:
+    """True when a read-back event sits at exactly the requested start and end."""
+    observed_start = _event_datetime(event.get("start"))
+    observed_end = _event_datetime(event.get("end"))
+    wanted_start = _slot_datetime(start_iso)
+    wanted_end = _slot_datetime(end_iso)
+    if not all((observed_start, observed_end, wanted_start, wanted_end)):
+        return False
+    return (
+        observed_start.replace(second=0, microsecond=0) == wanted_start.replace(second=0, microsecond=0)
+        and observed_end.replace(second=0, microsecond=0) == wanted_end.replace(second=0, microsecond=0)
+    )
+
+
+def _observed_iso(value: Any) -> str | None:
+    parsed = _event_datetime(value)
+    return parsed.isoformat(timespec="seconds") if parsed else None
+
+
 def delete_calendar_event(event_id: str) -> str | None:
     if settings.lexi_dry_run:
         if event_id.startswith("hold-pending-") or event_id.startswith("dry-run-"):

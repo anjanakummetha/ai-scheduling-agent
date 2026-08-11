@@ -1037,6 +1037,74 @@ def lexi_place_calendar_hold(
 
 
 @_tool
+def lexi_create_calendar_event(
+    title: str,
+    start_iso: str,
+    end_iso: str,
+    attendee_email: str = "",
+    location: str = "",
+    notes: str = "",
+    calendar_name: str = "",
+    is_online_meeting: str = "",
+    allow_conflict: str = "false",
+    confirm: str = "false",
+) -> str:
+    """Create an ordinary calendar event with the exact title given (no HOLD prefix).
+
+    Use this for any normal event Kory asks for. Use lexi_place_calendar_hold ONLY
+    for tentative placeholders while scheduling options are outstanding.
+    allow_conflict='true' double-books on purpose; confirm must be 'true'.
+    Returns verified=true only when the calendar confirms the event landed.
+    """
+    truthy = {"true", "yes", "1"}
+    online: bool | None = None
+    if is_online_meeting.strip():
+        online = is_online_meeting.strip().lower() in truthy
+    return _wrap(
+        "lexi_create_calendar_event",
+        lexi.create_calendar_event,
+        title=title,
+        start_iso=start_iso,
+        end_iso=end_iso,
+        attendee_email=attendee_email,
+        location=location,
+        notes=notes,
+        calendar_name=calendar_name,
+        is_online_meeting=online,
+        allow_conflict=allow_conflict.strip().lower() in truthy,
+        confirm=confirm.strip().lower() in truthy,
+    )
+
+
+@_tool
+def lexi_move_calendar_event(
+    event_id: str,
+    start_iso: str,
+    end_iso: str = "",
+    allow_conflict: str = "false",
+    confirm: str = "false",
+) -> str:
+    """Move/reschedule an existing calendar event to a new time.
+
+    end_iso is optional — omit it to keep the meeting's current length.
+    Find event_id via lexi_today_calendar / lexi_summarize_calendar_window first.
+    allow_conflict='true' moves it despite a clash; confirm must be 'true'.
+    Returns verified=true only after reading the event back at its new time —
+    report the move as done only when that is true.
+    """
+    truthy = {"true", "yes", "1"}
+    return _wrap(
+        "lexi_move_calendar_event",
+        lexi.move_calendar_event,
+        event_id=event_id,
+        start_iso=start_iso,
+        end_iso=end_iso,
+        allow_conflict=allow_conflict.strip().lower() in truthy,
+        confirm=confirm.strip().lower() in truthy,
+    )
+
+
+@_tool
 def lexi_draft_outbound_email(
     to_email: str,
     subject: str,

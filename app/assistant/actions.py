@@ -355,6 +355,234 @@ def place_calendar_hold(
         }
 
 
+def create_calendar_event(
+    *,
+    title: str,
+    start_iso: str,
+    end_iso: str,
+    attendee_email: str = "",
+    location: str = "",
+    notes: str = "",
+    calendar_name: str = "",
+    is_online_meeting: bool | None = None,
+    allow_conflict: bool = False,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Create an ordinary calendar event — the title is used verbatim, no HOLD prefix.
+
+    Distinct from place_calendar_hold on purpose: a hold is a tentative placeholder
+    Lexi parks while options are outstanding and is meant to carry the canonical
+    "HOLD: " prefix. This is Kory asking for a real event on his calendar, so
+    prefixing it would rename the thing he asked for.
+    """
+    from app.integrations.named_calendars import create_event_on_calendar
+    from app.integrations.outlook_calendar import event_time_matches, get_calendar_event
+    from app.safety.approval_gate import assert_kory_approved_write
+
+    assert_kory_approved_write(approved=confirm, action="Calendar event")
+
+    subject = (title or "").strip()
+    if not subject:
+        return {"ok": False, "error": "A calendar event needs a title."}
+
+    attendees = []
+    email = attendee_email.strip().lower()
+    if email and "@" in email:
+        attendees.append(email)
+
+    action: dict[str, Any] = {
+        "title": subject,
+        "start": start_iso.strip(),
+        "end": end_iso.strip(),
+        "attendees": attendees,
+        "location": location.strip() or "TBD",
+        "body": (notes or "").strip() or "Created by Lexi.",
+    }
+    if is_online_meeting is not None:
+        action["is_online_meeting"] = bool(is_online_meeting)
+
+    conflict, conflicts, _ = has_conflict(action)
+    if conflict and not allow_conflict:
+        return {
+            "ok": False,
+            "error": "That time conflicts with something already on the calendar.",
+            "conflicting_events": conflicts[:5],
+            "override": "Pass allow_conflict=true to book it anyway (double-booking is Kory's call).",
+            "action": action,
+        }
+
+    cal = (calendar_name or "").strip()
+    if cal and not resolve_calendar_name(cal, role="write"):
+        return {
+            "ok": False,
+            "error": f"Calendar not found: {cal}. Call lexi_list_calendars first.",
+        }
+
+    try:
+        event_id, log_id = create_event_on_calendar(action, calendar_name=cal or None)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc(),
+            "action": action,
+        }
+
+    if not event_id:
+        return {
+            "ok": False,
+            "error": "Outlook did not return an event id — the event was not created.",
+            "composio_log_id": log_id,
+            "action": action,
+        }
+
+    _audit(
+        "hermes_create_event",
+        reference_id=event_id,
+        message=f"Calendar event created: {subject}",
+        payload={"action": action, "event_id": event_id, "log_id": log_id,
+                 "calendar_name": cal or "default"},
+    )
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "event_id": event_id,
+        "composio_log_id": log_id,
+        "dry_run": settings.lexi_dry_run,
+        "calendar_name": cal or "default",
+        "double_booked": bool(conflict),
+        "action": action,
+    }
+    if settings.lexi_dry_run:
+        result["verified"] = False
+        return result
+
+    # Read back rather than trusting the reply — half of Lexi's "Done!" messages
+    # described what she attempted, not what landed.
+    observed = get_calendar_event(event_id)
+    if observed is None:
+        result["verified"] = False
+        result["warning"] = "Created, but the event could not be read back to confirm it."
+        return result
+
+    result["verified"] = event_time_matches(observed, start_iso=action["start"], end_iso=action["end"])
+    result["observed_title"] = observed.get("subject")
+    if not result["verified"]:
+        result["ok"] = False
+        result["error"] = "The event was created but is not at the requested time."
+    return result
+
+
+def move_calendar_event(
+    *,
+    event_id: str,
+    start_iso: str,
+    end_iso: str = "",
+    allow_conflict: bool = False,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Reschedule an existing event to a new time, confirmed against the calendar.
+
+    end_iso is optional — omitting it keeps the meeting's current length, which is
+    what "move it 15 minutes later" means.
+    """
+    from app.integrations.outlook_calendar import (
+        get_calendar_event,
+        move_calendar_event as _move_event,
+    )
+    from app.safety.approval_gate import assert_kory_approved_write
+
+    assert_kory_approved_write(approved=confirm, action="Calendar move")
+
+    event_id = (event_id or "").strip()
+    if not event_id:
+        return {"ok": False, "error": "A move needs the event id. Look it up on the calendar first."}
+
+    start = start_iso.strip()
+    end = end_iso.strip()
+    before = get_calendar_event(event_id)
+
+    if not end:
+        # Preserve the existing duration; without the original event we cannot
+        # know it, and guessing 30 minutes would silently shorten a 2-hour block.
+        if before is None:
+            return {
+                "ok": False,
+                "error": "Could not read the event, so its length is unknown. Pass end_iso explicitly.",
+                "event_id": event_id,
+            }
+        duration = _event_duration_minutes(before)
+        if duration is None:
+            return {
+                "ok": False,
+                "error": "The event has no readable start/end, so its length is unknown. Pass end_iso.",
+                "event_id": event_id,
+            }
+        try:
+            from datetime import datetime, timedelta
+
+            end = (
+                datetime.fromisoformat(start.replace("Z", "+00:00")) + timedelta(minutes=duration)
+            ).isoformat(timespec="seconds")
+        except ValueError:
+            return {"ok": False, "error": f"start_iso is not a valid time: {start_iso}"}
+
+    conflict, conflicts, _ = has_conflict(
+        {"start": start, "end": end}, ignore_event_ids=[event_id]
+    )
+    if conflict and not allow_conflict:
+        return {
+            "ok": False,
+            "error": "The new time conflicts with something already on the calendar.",
+            "conflicting_events": conflicts[:5],
+            "override": "Pass allow_conflict=true to move it there anyway.",
+            "event_id": event_id,
+        }
+
+    try:
+        outcome = _move_event(event_id, start_iso=start, end_iso=end)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc(),
+            "event_id": event_id,
+        }
+
+    outcome["double_booked"] = bool(conflict)
+    if before is not None:
+        outcome["moved_from"] = {
+            "start": _event_iso(before.get("start")),
+            "end": _event_iso(before.get("end")),
+        }
+        outcome.setdefault("subject", before.get("subject"))
+
+    _audit(
+        "hermes_move_event",
+        reference_id=event_id,
+        message=f"Calendar move {'confirmed' if outcome.get('ok') else 'FAILED'}: {event_id}",
+        payload=outcome,
+    )
+    return outcome
+
+
+def _event_duration_minutes(event: dict[str, Any]) -> int | None:
+    from app.integrations.outlook_calendar import _event_datetime
+
+    start = _event_datetime(event.get("start"))
+    end = _event_datetime(event.get("end"))
+    if not start or not end:
+        return None
+    return int((end - start).total_seconds() // 60)
+
+
+def _event_iso(value: Any) -> str | None:
+    from app.integrations.outlook_calendar import _event_datetime
+
+    parsed = _event_datetime(value)
+    return parsed.isoformat(timespec="seconds") if parsed else None
+
+
 def infer_outbound_send_channel(body: str, *, explicit: str = "") -> str:
     """Pick kory vs lexi mailbox for chat-initiated outbound mail."""
     from app.integrations.outlook_email import infer_outbound_send_channel as _infer

@@ -80,6 +80,11 @@ def build_calendar_window_summary(
                 "event_count": len(day_events),
                 "events": [
                     {
+                        # Carried so a follow-up can act on an event by id —
+                        # rescheduling needs one, and without it the summary was
+                        # a dead end for anything past today. Structured field
+                        # only; the formatted summary Kory reads stays clean.
+                        "event_id": e.get("id"),
                         "subject": str(e.get("subject") or ""),
                         "start": e.get("start"),
                         "end": e.get("end"),
