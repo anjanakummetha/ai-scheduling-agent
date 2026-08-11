@@ -1,177 +1,226 @@
-# Lexi — Session Handoff (updated 2026-08-08 end of session — production-ready, docs complete)
+# Lexi — Session Handoff (updated 2026-08-11, overnight fix session)
 
-## 0. VERIFICATION SWEEP + FIX DAY COMPLETE (2026-08-08) — see RUN 15
+**Resume phrase:** *"Read the open items, then keep testing the scheduling engine."*
 
-**All 86 chat tools verified against ground truth; EVERY defect found was
-fixed, deployed, and live-verified the same day. Zero test residue (audited).
-Lexi is ready for Kory's daily use.** Full record:
-`docs/SCHEDULING_LIVE_TEST_PLAN.md` RUN 15 + `docs/CHAT_VERIFICATION_PLAN.md`.
-
-**Fixed + shipped today (all live on the box):**
-- D1 maps `q` payload · D2 stale all-day events on today-brief · D3 timezone
-  body cues ("6 AM ET", "I am in Boston") — `3225255`, `01d6451`
-- D4 **chat-initiated offers could never send** (synthetic thread id →
-  CREATE_DRAFT_REPLY "malformed id"; now composes fresh email) — `5290d66`
-- D5 escalated (`needs_kory`/`needs_scheduling_guidance`) proposals are
-  rejectable from chat — `c6f8f3f`
-- D6 escalations end with #N-anchored reply options + the router answers a
-  bare "YES" by naming the open escalation (3-day window) — `e580274`
-- M1 `lexi_start_scheduling` takes `constraints=` (Kory's words verbatim →
-  window/time-of-day/tz parsing) · M2 modify-and-approve can't book a
-  zero-minute meeting (novel times inherit offered duration) — `31b88de`
-- R1 "mornings HER time" = the recipient's morning (Boston mornings →
-  6:00–10:00 MT, live-verified 6 AM MT slots) · R2 outbound proposals store
-  the "no availability for <window> — offering <dates> instead"
-  scheduling_note, rendered on the approval push — `31eed76`
-- Gate/engine consistency: the pre-approval gate now derives the east_coast
-  cue like the engine (was flagging 6 AM slots offered FOR a Boston contact) —
-  `1b964bf`
-- **Features:** Asana any-project writes (`9a6a832`, project='<name>' on
-  create/move) · `lexi_forget_kory_fact` (`3fe5df0`, remove a remembered rule
-  from chat; refuses ambiguity)
-
-**Decision (Anjana): Teams cards PARKED, text-only is the supported mode**
-(`LEXI_TEAMS_TEXT_ONLY=true`; prod had run text-only since Aug 4 — the old
-"cards ON" claim was never live and KORY_GO_LIVE_READINESS.md is corrected).
-Typed `approve #N` is the approval path, proven E2E. A stale Aug-5 card even
-RESURFACED during a restart resync (verified inert, RUN 15) — activity-id
-persistence is now the top enhancement.
-
-**End-of-day state:** suite **684 passing** (+3 known stale-data failures),
-readiness sweep all green, queue at baseline 26 (zero [TEST]), 0 memory
-facts, 0 outlook_poll errors since the 04:30 stagger deploy, Composio 9.7%
-MTD, 91 tools registered with the gateway. Kory had still used NOTHING as of
-~08:00 UTC; proposal 6218 still waits for him.
-
-**Dashboard fix (2026-08-08 ~15:00 UTC, dashboard repo `36d997d`, deployed):** the Today
-tab no longer substitutes MOCK briefing/priorities when today's real data doesn't exist yet
-(it was showing a fabricated "Series B term sheet" day) — honest "collecting today's data"
-empty states instead. Deploy recipe used: build standalone (Node 20 via nvm) → rsync
-`.next/standalone/` (EXCLUDING `data/`!) + `.next/static/` → chown ceo → restart.
-
-**Afternoon additions (same session):**
-- Briefing timer send PROVEN unattended (10:30 UTC run → sent 10:35:01) and Graph
-  throttling CLOSED (0 poll errors in 10h) — both §2/§2a marked resolved.
-- Systemd stop-timeout drop-in (210s) applied + verified (§3 item 11 done).
-- **Dashboard mock-data fix deployed** (dashboard repo `36d997d`): Today tab shows honest
-  "collecting today's data" states instead of fabricated briefing/priorities. NOTE: other
-  tabs (Inbox/Tasks/Travel/Health) still carry demo-era mock fallbacks — same treatment
-  available if wanted.
-- **Deliverables created (all in docs/, all committed):** `LEXI_COMPLETE_GUIDE.html`
-  (Kory-facing full guide), `LEXI_SYSTEM_MAP.html` (3-figure visual architecture),
-  `TECHNICAL_HANDOVER.md` (successor doc incl. kill switches), `LEXI_MCP_TOOLS.docx`
-  (every tool explained for Kory's workspace).
-- Deferred by Anjana: staged-ask backlog decision (TTL feature vs bulk sign-off — revisit).
-
-**Resume phrase:** *"Kory is live; check what he's done, then continue the open work list."*
-
-Two repos, one box:
-- **Lexi** `~/AI_Scheduling_Agent` → `/home/lexi/AI_Scheduling_Agent` (services `lexi-hermes` **and** `lexi-api` :8081; worker health :8780)
-- **Dashboard** `CEO_Executive_Dashboard--main/` (own git repo, gitignored by the outer one) → `/opt/ceo-dashboard` (service `ceo-dashboard`)
-
-`srv1686061.hstgr.cloud` is **multi-tenant** — never reboot it, never touch the co-tenant Docker containers (`hermes-agent-teuw-*`, `traefik-*`). **Deploy with `scripts/deploy_lexi.sh`** — it restarts both services; restarting only `lexi-hermes` serves stale `api_v1.py`.
-
-**Logs are FILES, not journalctl.** `logs/lexi.log` (+ `~/.hermes/logs/*`). `journalctl -u lexi-hermes` contains zero application logging — a sweep against it is worthless (this mistake voided one M-3 run).
+18 commits, `main` at `81e8fc9`. CI green (689 tests), laptop/GitHub/box all in
+sync, working tree clean. Everything below is deployed and live.
 
 ---
 
-## 1. WHERE THINGS STAND
+## 0. THE ONE THING TO KNOW
 
-**All planned testing is DONE.** RUNs 1–14 in `docs/SCHEDULING_LIVE_TEST_PLAN.md` (RUNs 9–14 are the last stretch: HubSpot writes, E-3/E-4/E-6, MCP hang fix, M-3/M-4 + corrections). Suite **615 passing**.
+Twelve defects were found and fixed. **Every single one presented to the user as
+success.** They are variants of one theme: *the system could not distinguish
+"nothing" from "not enough", "unknown", or "didn't check"* — and each produced a
+confident, wrong, actionable answer.
 
-**Kory went LIVE 2026-08-06** with all reads AND writes ON for HubSpot + Asana (Anjana's call — accepted risk documented in `docs/KORY_GO_LIVE_READINESS.md`, which also has the rollback: `.env.bak.20260805-222013` + restart both). As of 2026-08-07 02:30 UTC he had made **zero** Teams tool calls. System healthy meanwhile: 374 emails triaged (all correctly `no_reply_needed`), morning briefing sent 08-06 10:37 UTC, Composio 8.3% MTD.
+- Asana writes returned a hardcoded `ok: True` and never read the response
+- HubSpot scanned 50 of 2,207 contacts and said "your book looks clean"
+- A capped scan reported `complete: True` (a bug *introduced while fixing* the above)
+- An unknown contact total was rendered as the row count
+- One free slot was reported as zero, producing "booked until September"
 
-**The working plan now: Kory uses it; change requests get logged into OPEN ISSUES in the test plan.** When he reports something, get a rough timestamp + what he typed — that's enough to find it in `logs/lexi.log`.
+**The lesson that kept paying off: verify against the destination, not the
+reply.** Roughly half of Lexi's "Done!" messages were wrong when checked in
+Asana / HubSpot / Outlook directly.
 
-**Scrapped / parked (Kory has been told the first two do nothing):**
-- Emailing `lexi@iconicfounders.com` directly — nothing watches that mailbox (one Composio trigger, on Kory's connection; `LEXI_POLL_LEXI_MAILBOX` unset)
-- Outreach campaigns — `LEXI_OUTREACH_CAMPAIGNS_ENABLED=false`, MCP tools unregistered
-- HubSpot BCC logging — genuinely broken HubSpot-side; Lexi-side bypass bug already fixed (`8570656`); next diagnostic is `scripts/hs_bcc_test.py --precreate` or Kory checking the portal's email-logging settings
+**Tell Kory:** for anything consequential, check the destination. Not because
+Lexi is broadly unreliable — reads and triage are solid — but because its
+confirmations describe what it *attempted*.
 
-## 1b. KORY ACTIVITY CHECK (2026-08-08 03:55 UTC)
+---
 
-Still **zero** Kory interactions: no Teams messages (gateway silent since its
-04:38 08-06 restart), no MCP CallToolRequests since the 01:54 08-06 pre-live
-tests, no approvals since the 02:15 08-06 cleanup. 742 emails triaged since
-go-live, all `no_reply_needed`. **Proposal 6218** (referral_or_intro,
-`awaiting_reply_prompt`) pinged Kory in Teams 08-06 17:15 (inbound reply on a
-time-blocked thread) and has been waiting ever since.
+## 1. OPEN ITEMS (priority order)
 
-## 2a. RESOLVED — morning briefing outage (Aug 7) — fix live, timer sends proven
+### 1a. Calendar write surface only supports holds — **highest**
+There is **no plain create-event tool**. `lexi_place_calendar_hold` is the only
+way onto the calendar, and it applies a canonical `HOLD: ` prefix downstream
+(`calendar_holds.py`). So "create a calendar event called X" produces
+`HOLD: X`.
 
-**CLOSED 2026-08-08:** deploy + restart done ~04:30 UTC; manual POST verified 200; and the
-10:30 UTC timer run on 08-08 completed SUCCESS unattended (sent 10:35:01). Original record:
+There is also **no move/reschedule tool**. A move falls through to the generic
+`lexi_execute_outlook_action` passthrough, hand-assembling a slug + JSON. Logged
+live: three calls, two returning in ~0.00–0.01s (error responses), and Lexi
+still reported *"Done! shifted to 11:45"*. The event never moved.
 
-The 10:30 UTC `lexi-morning-briefing.timer` failed all 6 attempts on 08-07
-("Dashboard returned 500: Empty Anthropic response") — **Kory got no briefing
-email 08-07**, and will get none until the fix is deployed.
+Fix: add `lexi_create_calendar_event` (no HOLD prefix) and
+`lexi_move_calendar_event` (event id + new time, verifies the result). Do not
+patch the hold path.
 
-Root cause (reproduced live with the exact prompt): Sonnet's adaptive thinking
-spends the entire 8192-token output budget before any text block is emitted —
-response is a lone `thinking` block with `stop_reason=max_tokens`. The
-dashboard's `cli.ts` threw "Empty Anthropic response" *before* its own
-doubled-cap max_tokens retry could run, in both `runAnthropicPrompt` and
-`runAnthropicResearch` (so attendee intel was silently degrading too).
+Repro: `create a calendar event called "TEST move event" tomorrow at 11:30`
+then `move it 15 minutes later`.
 
-Fix committed in the dashboard repo, `a70f688` on `deploy-prep-phase1`
-(reorder: max_tokens retry before the empty guard, both paths). Built and
-**rsynced to `/opt/ceo-dashboard` 2026-08-08 (ownership restored to ceo)** —
-only the service restart is outstanding; the running process still serves the
-old code until then:
+**Until fixed: Kory should create and move ordinary calendar events in Outlook.**
 
-    ssh root@srv1686061.hstgr.cloud systemctl restart ceo-dashboard
+### 1b. Verify-after-write across all integrations
+The plumbing fix landed (`execute_tool` now preserves Composio's `successful`
+flag; Asana and HubSpot writers check it). The structural fix did not: **writes
+should read back and return the observed state, not a boolean.** If `assign`
+returns `assignee: "Kory Mitchell"` read back from Asana, Lexi can only say that
+when it's true — it quotes data instead of narrating intent. One extra read per
+consequential write; Composio is at ~12% of a 200k budget.
 
-Then verify: POST `http://127.0.0.1:3000/api/hermes/briefing` with
-`x-briefing-token` from the agent `.env` → expect 200 with `emailDraft`.
-Next timer run: 10:30 UTC daily.
+### 1c. `meeting_request` over-fires on transactional mail
+Invoices, subscription renewals, login links and out-of-office replies are being
+classified `meeting_request` (234 in 7 days). Nothing reached Kory — all landed
+`no_reply_needed`/`rejected`, so the second stage caught it — but the intent
+label alone is unreliable. Check what reads intent downstream.
 
-## 2. RESOLVED — Graph throttling the backup poll
+Also worth spot-checking: `#8871 RE: McCombs | Iconic` and `#8927 Energy
+Solutions Catch Up` look like genuine requests that were marked no-reply.
 
-**CLOSED 2026-08-08 14:36 UTC:** stagger (`ce73e7a`) deployed 04:30; **0 poll errors in the
-10 hours since** (baseline was 2–4/hr, 40/day). Original record:
+### 1d. Memory writer persists inferences as facts
+After a failed Asana search, Lexi invented an explanation ("the Anju project
+isn't indexed"), wrote it to `/home/lexi/.hermes/memories/MEMORY.md`, and would
+have loaded it every session. **It was false** — the real cause was the
+`mine_only` ownership filter. Entry deleted (backup:
+`MEMORY.md.bak.before-false-asana-removal`); 5 entries remain.
 
-36 `outlook_poll` failures since go-live (~2–4/hr): 20 APITimeout, 10 `CommandConcurrencyLimitReached`, 4 `ErrorTooManyObjectsOpened`, 2 `ApplicationThrottled`. The poll is the **safety net** for webhook drops (Graph 404s just-arrived message ids, ~14/48h; recovery ≤5 min). If both degrade together, mail sits unseen longer.
+The writer should record Kory's preferences, not its own theories about why a
+tool failed. Audit that file periodically. One surviving entry — *"Kory approves
+Asana writes freely… pass `confirm='true'` directly"* — is a learned habit worth
+revisiting.
 
-**Fix BUILT 2026-08-08 (`ce73e7a`, pushed to origin/main): one Kory folder per poll cycle, alternating inbox/sentitems** — each folder still swept every ~10 min inside the 24h window; 4 new tests in `tests/test_outlook_poll_stagger.py`. **Not yet live: the `deploy_lexi.sh` run was blocked by the permission classifier** — run `ssh root@srv1686061.hstgr.cloud 'bash -s' < scripts/deploy_lexi.sh` from the repo root. Skipping sentitems entirely stays on the table if errors persist (86 of the first 374 triaged messages were Kory's own outbound YPO mail).
+### 1e. Staged-ask backlog (carried over)
+26 threads in `awaiting_reply_prompt` since Aug 3. Any inbound reply re-pings
+Kory. Decide: TTL, or bulk-close with his sign-off.
 
-## 2b. PREFERENCE AUDIT COMPLETE + FIX BATCH (2026-08-08, commit `0c3fd56`)
+### 1f. 27 duplicate HubSpot contact pairs found
+Real cleanup nobody knew about (e.g. `clay.harris@eosworldwide.com` ↔
+`clay@clayharris.com`). **Staged proposals only — nothing merged.** Merges are
+permanent and require naming each pair. Worth showing Kory rather than either of
+us applying them.
 
-All three sweeps of `docs/PREFERENCES_AUDIT.md` are done (the paused meeting-type sweep
-included) and a 14-file fix batch shipped: warnings now render in Teams (E-6 remedy copy
-was being dropped), pending_invite holds no longer age out, Friday sweep waits for 5 PM MT,
-re-remind-on-release implemented, reschedules = 2 options + queue priority + 1-day holds,
-venue addresses on invites, stated durations honored, lunch books 60, and more — the
-authoritative fixed-vs-open list is the audit doc's "2026-08-08 RESOLUTION" section.
-Suite 626. **NOT yet deployed — needs a `deploy_lexi.sh` run.** Open decisions for
-Kory/Anjana are listed there too (urgent-keyword breadth, Tue/Thu early-morning policy,
-Matt-on-coffees default, visible coffee buffer block, venue address verification).
+### 1g. Smaller
+- Outlook reads have **no pagination** and Composio ignores `OUTLOOK_LIST_MESSAGES`'
+  `filter`, so searches fetch the top 50 and filter client-side. An older email
+  is invisible. Backup poll uses `top: 15` (≈6× headroom at current volume).
+- `search_contacts` still returns `total` from a HubSpot response that may omit
+  it; now `None` when unknown, but every caller must treat `None` as unknown.
+- CI has been pushed with branch-protection bypass all session (runs pass after
+  the fact).
 
-## 3. OPEN WORK LIST (rough order, refreshed post-sweep 2026-08-08)
+---
 
-1. **M-2** — Anjana verifies morning-briefing content. **Delivery is now proven fully automated:** the 08-08 10:30 UTC timer run completed SUCCESS and sent at 10:35:01 (first untouched timer send since the thinking fix). Only the content review remains.
-2. ~~Stagger full-day re-check~~ **DONE 2026-08-08 14:36 UTC**: 0 outlook_poll errors in the 10h since the 04:30 deploy (pre-fix baseline 2–4/hr, 40/day). Graph throttling issue CLOSED.
-3. **Activity-id persistence for Teams messages** (priority raised): stale Aug-5 cards are not just inert clutter — one RESURFACED with a fresh timestamp during the 07:56 restart resync (see RUN 15). Persist ids on send; update cards/messages to a decided/expired state on decision. Until built: any card in the chat is old — ignore; `pending` is the source of truth.
-4. **Log + fix Kory's change requests** as they arrive (he had still used nothing as of 08-08 ~08:00 UTC; proposal 6218 still waits)
-5. **M-3 redo** against `logs/lexi.log` (the journalctl sweep was void)
-6. **Per-tool deadline** — the event-loop fix (`17b8b62`) stops one slow tool freezing the server, but a single tool doing 3×30s Composio retries can still blow the 120s MCP budget
-7. **HubSpot step 5** — Kory sign-off package (never built)
-8. **Design item (accepted risk):** HubSpot/Asana write approval is a model-supplied boolean; scheduling's typed `approve #N` + audited `decision_source` is the pattern to copy
-9. **Decide the Aug-3 staged-ask backlog:** 26 REAL threads sit in `awaiting_reply_prompt` since 08-03 — any inbound reply re-pings Teams (that's what 6218 did). Options: expire staged asks after N days (no TTL exists) or bulk-close with Kory's sign-off.
-10. **Suite isolation:** 3 pre-existing failures (`test_api_v1` aged-asks ×2, `test_prebrief_attendees`) come from Aug 5-6 history in the shared `data/lexi_test.db` window; ages out alone, real fix is isolating the suite from live-DB state.
-11. ~~Systemd stop-timeout mismatch~~ **DONE 2026-08-08 08:48 UTC**: drop-in `/etc/systemd/system/lexi-hermes.service.d/stop-timeout.conf` sets `TimeoutStopSec=210` (was the 90s default vs a 180s drain — SIGKILL risk mid-drain). daemon-reload + restart verified: warning gone from the new startup, service healthy.
-12. **Benign leftover:** one orphaned chat-path `[TEST]` note object in HubSpot (its contact is archived; no note-search slug exists to find it). Hidden from the UI.
+## 2. FIXED THIS SESSION
 
-## 4. HARD-WON FACTS (do not relearn)
+**Infrastructure**
+- Disk 45% → 38% (7 GB). 96 unpruned per-deploy DB backups; `deploy_lexi.sh` now
+  keeps 3. Note `git checkout HEAD --` (not `checkout --`) is required to clear a
+  *staged* change — the old stash/pop path stranded one on the box.
+- **CI ran zero tests while reporting failure.** Bare `pytest` matched
+  `*_test.py`, sweeping in `scripts/hs_bcc_test.py`, which `sys.exit()`s at
+  import → `INTERNALERROR`. `pytest.ini` pins `testpaths`/`python_files`.
+  0 → 689 tests. The phase suite and approval-safety gates had **never run**.
+- Suite now owns `data/lexi_pytest.db`, rebuilt each run. Previously it wrote to
+  whatever `.env` named — a live orchestrator polled the same file, saw a fixture
+  proposal in `pending_invite`, and **pushed real Adaptive Cards into Kory's
+  Teams chat**. Also killed a stale local `uvicorn` (running since 20 Jul).
+- Three scripts that could reach live Teams now force it off before config loads.
+- `data/kory_voice_profile.json` untracked + gitignored (held verbatim excerpts of
+  real correspondence); a failed fetch no longer wipes a good profile, with a
+  30-min backoff. That loop was hammering a throttled mailbox on every compose.
 
-- **Validate Composio payloads against `get_raw_composio_tools(...).input_parameters`, never vendor REST docs.** `HUBSPOT_CREATE_NOTE` wants `hs_note_body`/`hs_timestamp`/`associations` (not `contactId`/`body` — the feature had never worked before `b84f301`); `HUBSPOT_CREATE_CONTACT` is flat and silently ignores nested `properties`; `UPDATE_CONTACT` *does* nest. Dry-run stubs cannot catch wrong shapes.
-- **Two HubSpot search indexes:** EQ property filters are consistent immediately; free-text `query` lags minutes. `contacts_by_ids()` is search-backed despite the name; `HUBSPOT_READ_CONTACT` is the only true by-id read. Archive (recycle bin), never GDPR-delete — GDPR blacklists the address from the portal forever.
-- **fastmcp runs sync tools inline on the event loop** — every tool must stay async (the `_tool` decorator); a test enforces this.
-- **HubSpot portal is one shared space** — owner id is a property, not a partition; test records are company-visible until archived.
-- Frozen `settings` dataclass reads env at import — flag changes need both services restarted (also the answer to the "stale UAT card copy" mystery — not a bug).
-- Sends are live: **never approve old proposal numbers; never re-approve after a timeout without checking the DB first.**
-- E-6's confirm-time conflict guard (`a597756`) fails CLOSED and deliberately has **no override flag** — resolution is "clear the clash, re-approve".
-- Readiness sweep: `scripts/go_live_readiness.py` (read-only, ~15s, probes calendar/mail/HubSpot/Asana/prefs).
+**Production bugs**
+- **4 MCP decision tools were silent no-ops** — `get_pending_decisions`,
+  `approve_decision`, `modify_and_approve_decision`, `reject_decision` called
+  another `@_tool` function without awaiting it, returning a coroutine. Kory's
+  typed `approve #N` was unaffected, but the guide tells him numbers are optional.
+- **Asana** (6): project-only move filed into an unrelated default section;
+  "move" never removed the old project; all writes hardcoded `ok: True`;
+  unassigned tasks invisible (`mine_only`); no assignment support; **reads
+  truncated to one page** (9-task project returned 4).
+- **HubSpot** (5): duplicate scan sampled 50 of 2,207 and said "clean" (a full
+  scan finds **27 pairs**); enrichment previewed 12 while approving 25; writes
+  never checked the response; descriptions claimed writes were blocked while they
+  were live; unknown totals rendered as row counts.
+- **All-day events blocked timed meetings.** An all-day "Kory in Chicago" made
+  the whole Thursday unbookable and the confirm-time guard fails closed with no
+  override, so Kory was locked out of his own calendar by a travel banner. The old
+  exemption list (`good friday`, `tax day`, `"stay at "`) was this bug patched one
+  name at a time.
+- **"You're booked until September."** `MIN_SLOT_OPTIONS = 2` discarded any week
+  holding exactly one opening. Happy hour only generates candidates at 15:30/16:00
+  and skips Fridays, so next week only Tuesday survived — one slot, treated as
+  none. Recurring Mon/Wed/Fri meetings reproduced the collision every week, so the
+  ladder walked to Sept 7. Chat availability now passes `min_options=1`; automated
+  offers keep 2.
 
-## 5. UNCOMMITTED
+---
 
-`data/kory_voice_profile.json` is modified locally — runtime state, deliberately left uncommitted all session. Leave it.
+## 3. HARD-WON FACTS (do not relearn)
+
+- **A deploy alone is not enough for Lexi to notice a new/changed tool.** The
+  session must turn over too — a clean gateway restart *resumes* the prior
+  session with its stale tool list. Clear `~/.hermes/sessions/sessions.json` and
+  restart as part of every deploy that touches a tool signature. Symptom: Lexi
+  says a capability doesn't exist right after you shipped it.
+- `get_raw_composio_tools()` **pages at 20 by default** — pass `limit=500`.
+  Without it, `ASANA_UPDATE_A_TASK` looks like it doesn't exist (153 tools exist).
+- Composio returns **200 with `successful: false`** and no `error`. `execute_tool`
+  raises only on `error`, so check `successful`.
+- Asana tasks are **multi-homed**: `ADD_TASK_TO_SECTION`/`ADD_PROJECT_FOR_TASK`
+  add, they don't move. A real move needs `ASANA_REMOVE_PROJECT_FROM_TASK`.
+- Asana `list_asana_tasks` / `search_asana_tasks` default `mine_only=True`;
+  unassigned tasks are invisible.
+- HubSpot `search_contacts` **has no owner filter by default** in the duplicate
+  path — it scans the whole portal (2,207), not Kory's 1,016.
+- Kory-channel replies go to the **sender only**; Lexi-channel replies are
+  **reply-all**. Chat-initiated offers compose a fresh email (synthetic thread id).
+- Logs are files: `logs/lexi.log` (orchestrator) and `~/.hermes/logs/agent.log`
+  (tool calls, `api_calls`, `tool_turns`). **`api_calls=1` with no tool calls means
+  Lexi answered from context without checking anything.**
+- Scheduling diagnostics are the fast diagnostic: `scheduling_window`,
+  `candidates_scored`, `window_expanded`, `expanded_window`, `block_minutes`.
+
+---
+
+## 4. PRODUCTION POSTURE (unchanged, live)
+
+`LEXI_DRY_RUN=false` · `LEXI_WRITE_MODE=kory` · `LEXI_KORY_OUTBOUND_BLOCKED=false`
+· `LEXI_REQUIRE_KORY_APPROVAL=true` · `LEXI_AUTO_EXECUTE_ENABLED=false` ·
+`LEXI_ALLOW_IMMEDIATE_SEND=false` · Asana + HubSpot live writes **on** ·
+`LEXI_TEAMS_TEXT_ONLY=true`
+
+**`LEXI_ALLOWED_RECIPIENTS` is unset — there is no recipient allowlist.** Name
+your own address explicitly in any send test.
+
+Email sends require typed `approve #N`. Asana/HubSpot writes do **not** — they're
+gated by a model-supplied boolean (accepted-risk design item).
+
+---
+
+## 5. COST (measured)
+
+- Anthropic **$8.25 total ever** (Jul 23 – Aug 11); ~$0.33–0.43/day → **$11–13/mo**
+  at Kory-idle volume. Triage (Haiku 4.5) is ~93% of calls.
+- **Blind spot:** the Hermes gateway (`claude-sonnet-4-6`) writes nothing to
+  `llm_cost_log`. Kory's actual chat turns are unmeasured. Estimate **$40–75/mo**
+  all-in once he's active.
+- Composio **~12% of a 200k monthly budget**. Tonight's full-book scans are
+  negligible (~23 calls each).
+- Prompt caching shows zero on triage — correct, not a bug: prompts are 440–650
+  tokens, below Haiku 4.5's 4096-token cacheable minimum.
+
+---
+
+## 6. TESTING STATE
+
+Asana and HubSpot verified end-to-end. **Scheduling is mid-test** — the engine
+is the remaining surface. Ground truth for next week, for verifying answers:
+
+| Day | Committed |
+|---|---|
+| Mon 17 | Trainer 06:30–08:30 · Pipeline 09:00–10:00 · WOB 11:00–13:00 · Inbox review 14:30–15:30 · Sujash 16:00–16:30 |
+| **Tue 18** | **nothing after 15:00** |
+| Wed 19 | Sujash 16:00–16:30 · Kory‑Jonny 16:00–17:30 |
+| Thu 20 | Dan Phillips 16:00–16:30 |
+| Fri 21 | Inbox review 15:00–16:00 · Sujash 16:00–16:30 |
+
+Still to test: meeting types (coffee/drinks/lunch venue vs Teams link, durations),
+hard blocks (before 08:30, Doug Mon 13:15–14:15), timezone handling ("mornings her
+time" = recipient's zone), reschedule (2 options), and the full offer → reply →
+book lifecycle. Prompt list is in the session transcript.
+
+**Watch for:** a slot offered inside a hard block, and any "no availability"
+claim. The second is where confident wrongness hides.
