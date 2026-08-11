@@ -592,13 +592,22 @@ def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, 
         payload={"pairs": pairs},
     )
     scanned = raw.get("count") or len(contacts)
-    portal = raw.get("total")
-    complete = not portal or scanned >= portal
+    # Not raw["total"]: search_contacts falls back to len(contacts) when HubSpot
+    # returns no total, so an UNKNOWN total is indistinguishable from a known one
+    # and "scanned >= total" is trivially true. That reported a capped scan as
+    # complete. count_contacts is an exact portal-wide count (one extra call).
+    portal = count_contacts()
+    # Unknown coverage is not complete. Never claim the book is clean on a guess.
+    complete = portal is not None and scanned >= portal
     scope = f"{scanned} contact(s)" + (f" of {portal}" if portal and portal > scanned else "")
     coverage_line = (
         f"scanned all {scanned} contact(s)"
         if complete
-        else f"scanned {scanned} of {portal} contact(s) — PARTIAL"
+        else (
+            f"scanned {scanned} of {portal} contact(s) — PARTIAL"
+            if portal is not None
+            else f"scanned {scanned} contact(s); portal total UNKNOWN — coverage unverified"
+        )
     )
     lines = [f"**HubSpot duplicate proposals** ({len(pairs)}) — {coverage_line}\n"]
     for row in pairs[:12]:
@@ -612,8 +621,9 @@ def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, 
             f"_No duplicates found in the full book ({scanned} contact(s) scanned)._"
             if complete
             else (
-                f"_No duplicates among the {scanned} of {portal} checked. This is a "
-                "PARTIAL scan — it is not evidence the book is clean._"
+                f"_No duplicates among the {scanned} checked"
+                + (f" of {portal}" if portal is not None else "; portal total unknown")
+                + ". This is a PARTIAL scan — it is not evidence the book is clean._"
             )
         )
     lines.append(
