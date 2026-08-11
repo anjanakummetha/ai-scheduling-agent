@@ -659,6 +659,79 @@ def create_asana_task_from_chat(
     return result
 
 
+def _asana_write_ok(result: dict[str, Any]) -> tuple[bool, str]:
+    """Did the Asana call actually do anything?
+
+    execute_asana_tool only raises when Composio sets `error`. A vendor refusal
+    comes back as successful=false with no error, which every writer here used
+    to discard in favour of a hardcoded ok:True — so a task filed into the wrong
+    section, or not filed at all, still reported "Done!" to Kory.
+    """
+    if not isinstance(result, dict):
+        return False, f"unexpected Asana response: {type(result).__name__}"
+    if result.get("dry_run"):
+        return True, ""
+    if result.get("successful") is False:
+        data = result.get("data")
+        detail = ""
+        if isinstance(data, dict):
+            detail = str(data.get("error") or data.get("message") or "").strip()
+        return False, detail or "Asana rejected the request"
+    return True, ""
+
+
+def _write_result(result: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    """Build a writer's return value from what Asana actually reported."""
+    ok, detail = _asana_write_ok(result)
+    payload: dict[str, Any] = {"ok": ok, "dry_run": bool(result.get("dry_run")), **extra}
+    if not ok:
+        payload["error"] = detail
+    return payload
+
+
+def resolve_asana_user_gid(name_or_email: str) -> tuple[str, str]:
+    """Resolve a person to an Asana user gid. Returns (gid, display_name)."""
+    needle = (name_or_email or "").strip().lower()
+    if not needle:
+        return "", ""
+    if needle.isdigit():
+        return needle, ""
+    if needle in {"me", "kory", "my", "myself"}:
+        try:
+            me = execute_asana_tool("ASANA_GET_CURRENT_USER", {})
+            payload = (me.get("data") or {}).get("data") or {}
+            if payload.get("gid"):
+                return str(payload["gid"]), str(payload.get("name") or "")
+        except Exception as exc:  # fall through to the workspace search
+            logger.warning("ASANA_GET_CURRENT_USER failed: %s", exc)
+    workspace = os.getenv("ASANA_WORKSPACE_GID", "").strip()
+    if not workspace:
+        try:
+            spaces = execute_asana_tool("ASANA_GET_MULTIPLE_WORKSPACES", {"limit": 5})
+            rows = (spaces.get("data") or {}).get("data") or []
+            if rows:
+                workspace = str(rows[0].get("gid") or "")
+        except Exception as exc:
+            logger.warning("Could not resolve Asana workspace: %s", exc)
+    if not workspace:
+        return "", ""
+    try:
+        users = execute_asana_tool(
+            "ASANA_GET_USERS_FOR_WORKSPACE",
+            {"workspace_gid": workspace, "limit": 100, "opt_fields": ["name", "email"]},
+        )
+    except Exception as exc:
+        logger.warning("ASANA_GET_USERS_FOR_WORKSPACE failed: %s", exc)
+        return "", ""
+    rows = (users.get("data") or {}).get("data") or []
+    for row in rows if isinstance(rows, list) else []:
+        name = str(row.get("name") or "").lower()
+        email = str(row.get("email") or "").lower()
+        if needle == email or needle == name or needle in name.split():
+            return str(row.get("gid") or ""), str(row.get("name") or "")
+    return "", ""
+
+
 def complete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: bool = False) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
@@ -672,14 +745,13 @@ def complete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: boo
         "ASANA_UPDATE_A_TASK",
         {"task_gid": task_gid, "data": {"completed": True}},
     )
-    return {
-        "ok": True,
-        "task_gid": task_gid,
-        "dry_run": bool(result.get("dry_run")),
-        "blocked_reason": (result.get("data") or {}).get("blocked_reason")
+    return _write_result(
+        result,
+        task_gid=task_gid,
+        blocked_reason=(result.get("data") or {}).get("blocked_reason")
         if isinstance(result.get("data"), dict)
         else None,
-    }
+    )
 
 
 # Anything staler than this is treated as a wrong-year resolution, not a
@@ -729,10 +801,11 @@ def update_asana_task(
     title: str = "",
     notes: str = "",
     due_on: str = "",
+    assignee: str = "",
     approved: bool = False,
     owner_ack: bool = False,
 ) -> dict[str, Any]:
-    """Update title/notes/due date — blocked unless live writes enabled."""
+    """Update title/notes/due date/assignee — blocked unless live writes enabled."""
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana update task")
@@ -746,6 +819,21 @@ def update_asana_task(
         data["notes"] = notes.strip()
     if due_on.strip():
         data["due_on"] = normalize_due_on(due_on)
+    assignee_name = ""
+    if assignee.strip():
+        # ASANA_UPDATE_A_TASK's `data` takes assignee (schema-checked), but it
+        # wants a user gid — a display name is silently ignored, which is how
+        # "assign to Kory" appeared to work while nothing changed.
+        user_gid, assignee_name = resolve_asana_user_gid(assignee)
+        if not user_gid:
+            return {
+                "ok": False,
+                "error": (
+                    f"No Asana user matching {assignee!r} in this workspace. "
+                    "Use their full name or email as it appears in Asana."
+                ),
+            }
+        data["assignee"] = user_gid
     if not data:
         return {"ok": False, "error": "No fields to update."}
     if _should_simulate_asana():
@@ -754,6 +842,9 @@ def update_asana_task(
         "ASANA_UPDATE_A_TASK",
         {"task_gid": task_gid, "data": data},
     )
+    written = _write_result(result, task_gid=task_gid, assignee=assignee_name or None)
+    if not written.get("ok"):
+        return written
     return {
         "ok": True,
         "task_gid": task_gid,
@@ -772,11 +863,11 @@ def delete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: bool 
     if _should_simulate_asana():
         return {"ok": True, "task_gid": task_gid, "simulated": True, "dry_run": True}
     result = execute_asana_tool("ASANA_DELETE_TASK", {"task_gid": task_gid})
-    return {"ok": True, "task_gid": task_gid, "dry_run": bool(result.get("dry_run"))}
+    return _write_result(result, task_gid=task_gid)
 
 
 def search_asana_tasks(
-    *, query: str, limit: int = 15, mine_only: bool = True
+    *, query: str, limit: int = 15, mine_only: bool = False
 ) -> dict[str, Any]:
     """Search tasks by name across configured / related projects (read-only)."""
     needle = query.strip().lower()
@@ -837,6 +928,26 @@ def move_asana_task_to_section(
                 "ok": False,
                 "error": f"No board named '{section_name}'. Available boards: {names}.",
             }
+    # A project was named but no section. Previously `target` fell through to the
+    # global ASANA_SECTION_GID default — a section in the *original* project — so
+    # "move it to <other project>" filed the task under "Reservation Reminders"
+    # and reported success. Route through the project instead; Asana picks that
+    # project's default section.
+    if project_gid and not target:
+        if _should_simulate_asana():
+            return {
+                "ok": True,
+                "task_gid": task_gid,
+                "project_gid": project_gid,
+                "simulated": True,
+                "dry_run": True,
+            }
+        added = execute_asana_tool(
+            "ASANA_ADD_PROJECT_FOR_TASK",
+            {"task_gid": task_gid, "project": project_gid},
+        )
+        return _write_result(added, task_gid=task_gid, project_gid=project_gid)
+
     if not target:
         target = settings.asana_section_gid or ""
     if not target:
@@ -853,12 +964,44 @@ def move_asana_task_to_section(
         "ASANA_ADD_TASK_TO_SECTION",
         {"task_gid": task_gid, "section_gid": target},
     )
-    return {
-        "ok": True,
-        "task_gid": task_gid,
-        "section_gid": target,
-        "dry_run": bool(result.get("dry_run")),
-    }
+    return _write_result(result, task_gid=task_gid, section_gid=target)
+
+
+def remove_asana_task_from_project(
+    *,
+    task_gid: str,
+    project: str,
+    approved: bool = False,
+    owner_ack: bool = False,
+) -> dict[str, Any]:
+    """Unfile a task from one project.
+
+    Asana tasks are multi-homed, so adding to a project never removed the old
+    one — every "move" silently accumulated another project. This is the missing
+    half; pair it with move_asana_task_to_section for a real move.
+    """
+    from app.safety.approval_gate import assert_kory_approved_write
+
+    assert_kory_approved_write(approved=approved, action="Asana remove task from project")
+    task_gid, _resolve_error = resolve_task_or_error(task_gid, owner_ack=owner_ack)
+    if _resolve_error:
+        return _resolve_error
+    project_gid, project_name = resolve_project_gid(project)
+    if not project_gid:
+        names = (
+            ", ".join(r["name"] for r in list_asana_project_options().get("projects", []))
+            or "none found"
+        )
+        return {"ok": False, "error": f"No Asana project matching {project!r}. Available: {names}."}
+    if _should_simulate_asana():
+        return {"ok": True, "task_gid": task_gid, "project_gid": project_gid, "dry_run": True}
+    result = execute_asana_tool(
+        "ASANA_REMOVE_PROJECT_FROM_TASK",
+        {"task_gid": task_gid, "project": project_gid},
+    )
+    return _write_result(
+        result, task_gid=task_gid, project_gid=project_gid, project=project_name
+    )
 
 
 def comment_on_asana_task(
@@ -890,12 +1033,7 @@ def comment_on_asana_task(
         # This tool takes task_id, unlike the update/delete tools which take task_gid.
         {"task_id": task_gid, "text": text},
     )
-    return {
-        "ok": True,
-        "task_gid": task_gid,
-        "comment": text,
-        "dry_run": bool(result.get("dry_run")),
-    }
+    return _write_result(result, task_gid=task_gid, comment=text)
 
 
 def list_asana_project_options() -> dict[str, Any]:

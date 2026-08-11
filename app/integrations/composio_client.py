@@ -289,16 +289,23 @@ def execute_tool(
         data = response.get("data")
         error = response.get("error")
         log_id = response.get("log_id")
+        successful = response.get("successful")
     else:
         data = getattr(response, "data", None)
         error = getattr(response, "error", None)
         log_id = getattr(response, "log_id", None)
+        successful = getattr(response, "successful", None)
 
     if error:
         raise RuntimeError(f"{tool_slug} failed: {error}")
 
+    # Composio can answer 200 with successful=false and no `error` — the request
+    # was well-formed but the vendor refused it. Dropping this flag here is why
+    # an Asana "move" into a section that never received the task still reported
+    # success all the way up to Kory. Callers cannot check what they never see.
     return {
         "data": data,
+        "successful": successful,
         "log_id": log_id,
         "connected_account_id": connection_id,
         "entity_id": entity_id,

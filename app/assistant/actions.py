@@ -966,6 +966,7 @@ def update_asana_task_action(
     title: str = "",
     notes: str = "",
     due_on: str = "",
+    assignee: str = "",
     confirm: bool = False,
     owner_ack: bool = False,
 ) -> dict[str, Any]:
@@ -973,6 +974,7 @@ def update_asana_task_action(
 
     return update_asana_task(
         task_gid=task_gid,
+        assignee=assignee,
         title=title,
         notes=notes,
         due_on=due_on,

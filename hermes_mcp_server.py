@@ -528,10 +528,11 @@ def lexi_update_asana_task(
     title: str = "",
     notes: str = "",
     due_on: str = "",
+    assignee: str = "",
     confirm: str = "false",
     owner_ack: str = "false",
 ) -> str:
-    """Update an Asana task's title, notes, or due date. Due dates must be absolute (YYYY-MM-DD) and in the future — resolve relative dates against the current year. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
+    """Update an Asana task's title, notes, due date, or assignee. Pass assignee='<full name or email>' to assign someone; it is resolved against the Asana workspace, and 'me'/'Kory' resolves to the connected user. Due dates must be absolute (YYYY-MM-DD) and in the future — resolve relative dates against the current year. Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_update_asana_task",
@@ -540,6 +541,7 @@ def lexi_update_asana_task(
         title=title,
         notes=notes,
         due_on=due_on,
+        assignee=assignee,
         confirm=approved,
         owner_ack=owner_ack.strip().lower() in {"1", "true", "yes"},
     )
