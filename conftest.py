@@ -36,6 +36,11 @@ _TEST_ENV = {
     "LEXI_SUPPRESS_TEAMS_PUSH": "true",
     "LEXI_EMBED_WORKER": "false",
     "LEXI_ORCHESTRATOR_ENABLED": "false",
+    # Identity default. config.py falls back to "kory" when this is unset, and .env
+    # is gitignored — so the send-channel tests read the developer's own .env and
+    # passed locally while failing on a runner that has none. Pinned to the
+    # production identity rule (Lexi voice unless a Kory sign-off is detected).
+    "LEXI_DEFAULT_SEND_CHANNEL": "lexi",
     # DB path is left to .env (local sqlite) — tests share the initialized local DB.
 }
 for _k, _v in _TEST_ENV.items():
