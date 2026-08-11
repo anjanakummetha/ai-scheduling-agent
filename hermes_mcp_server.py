@@ -693,7 +693,7 @@ def lexi_hubspot_outreach_batch(goal: str = "", limit: str = "10") -> str:
 
 @_tool
 def lexi_hubspot_duplicate_merges(limit: str = "50") -> str:
-    """Propose duplicate contact merges — staged only; HubSpot writes blocked for now."""
+    """Propose duplicate contact merges. Proposals are staged for Kory; applying a staged batch performs a REAL merge in the shared IFG portal, which cannot be undone — say so before applying."""
     try:
         n = max(1, min(100, int(limit.strip() or "50")))
     except ValueError:
@@ -705,8 +705,10 @@ def lexi_hubspot_duplicate_merges(limit: str = "50") -> str:
 def lexi_hubspot_enrich_contacts(limit: str = "25") -> str:
     """Propose job title/company fills from Kory's own email signatures.
 
-    Blank fields only — an existing value is never overwritten. Staged for
-    approval; nothing is written to HubSpot while writes are blocked.
+    Blank fields only — an existing value is never overwritten, and blankness is
+    re-checked at apply time so a stale batch cannot clobber something Kory
+    filled in himself. Proposals are staged; applying a batch writes to the real
+    shared IFG portal.
     """
     try:
         n = max(1, min(50, int(limit.strip() or "25")))
@@ -757,7 +759,7 @@ def lexi_hubspot_meeting_note(
     confirm: str = "false",
     owner_ack: str = "false",
 ) -> str:
-    """Stage a HubSpot note after a meeting (writes blocked for now).
+    """Log a HubSpot note on a contact after a meeting. This writes to the real shared IFG portal once confirmed.
 
     If the contact belongs to another IFG owner this returns
     owner_confirmation_required naming them; re-call with owner_ack=true only

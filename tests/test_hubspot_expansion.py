@@ -451,7 +451,10 @@ def test_merges_are_one_at_a_time_and_must_name_the_pair(
     assert out["applied"] == 0
     mock_tool.assert_not_called()
 
-    # Naming one pair merges exactly that pair.
+    # Naming one pair merges exactly that pair. The mock must answer with the
+    # real client's shape — writers now check `successful`, so a bare MagicMock
+    # would read as "HubSpot refused".
+    mock_tool.return_value = {"data": {}, "successful": True, "log_id": "log-1"}
     out = execute_hubspot_batch(batch_id=batch_id, approved=True, merge_pair="3:4")
     assert out["ok"] is True
     assert out["applied"] == 1
@@ -459,6 +462,42 @@ def test_merges_are_one_at_a_time_and_must_name_the_pair(
     tool, args = mock_tool.call_args[0]
     assert tool == "HUBSPOT_MERGE_CONTACTS"
     assert args == {"primaryObjectId": "3", "objectIdToMerge": "4"}
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_a_refused_merge_is_reported_not_counted_as_applied(
+    _blocked, mock_tool, tmp_path, monkeypatch
+):
+    """HubSpot answering successful=false must not read as a completed merge.
+
+    Every writer here used to return a hardcoded ok:True and ignore the
+    response, so a refusal surfaced to Kory as "done".
+    """
+    monkeypatch.setenv("LEXI_DATABASE_PATH", str(tmp_path / "lexi.db"))
+    import importlib
+    import app.config
+    import app.storage.lexi_db as lexi_db
+
+    importlib.reload(app.config)
+    importlib.reload(lexi_db)
+    from scripts.init_lexi_db import init_lexi_db
+    from app.integrations.hubspot_manager import _stage_hubspot_batch
+
+    init_lexi_db(tmp_path / "lexi.db")
+    batch_id = _stage_hubspot_batch(
+        batch_type="duplicate_merge",
+        payload={"pairs": [{"primary_id": "5", "duplicate_id": "6"}]},
+    )
+    mock_tool.return_value = {
+        "data": {"error": "cannot merge across owners"},
+        "successful": False,
+        "log_id": "log-2",
+    }
+    out = execute_hubspot_batch(batch_id=batch_id, approved=True, merge_pair="5:6")
+    assert out["ok"] is False
+    assert out["applied"] == 0
+    assert out["errors"]
 
     # An unknown pair is refused rather than guessed at.
     out = execute_hubspot_batch(batch_id=batch_id, approved=True, merge_pair="9:9")

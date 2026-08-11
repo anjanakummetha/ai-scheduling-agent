@@ -1441,8 +1441,10 @@ def stage_meeting_note(
         }
 
     result = execute_hubspot_tool(HUBSPOT_CREATE_NOTE, note_payload(contact_id=contact_id, body=body))
+    wrote, refusal = _hubspot_write_ok(result)
     return {
-        "ok": True,
+        "ok": wrote,
+        **({"error": refusal} if not wrote else {}),
         "batch_id": batch_id,
         "dry_run": bool(result.get("dry_run")),
         "composio_log_id": result.get("log_id"),
@@ -1766,12 +1768,15 @@ def execute_hubspot_batch(
                 errors.append(str(exc))
     elif batch_type == "meeting_note":
         try:
-            execute_hubspot_tool(
-                HUBSPOT_CREATE_NOTE,
-                note_payload(
-                    contact_id=str(payload.get("contact_id") or ""),
-                    body=str(payload.get("note") or ""),
+            _raise_if_refused(
+                execute_hubspot_tool(
+                    HUBSPOT_CREATE_NOTE,
+                    note_payload(
+                        contact_id=str(payload.get("contact_id") or ""),
+                        body=str(payload.get("note") or ""),
+                    ),
                 ),
+                "Create meeting note",
             )
             applied = 1
         except Exception as exc:
@@ -1786,14 +1791,44 @@ def execute_hubspot_batch(
     }
 
 
+def _hubspot_write_ok(result: dict[str, Any]) -> tuple[bool, str]:
+    """Did HubSpot actually accept the write?
+
+    execute_hubspot_tool only raises when Composio sets `error`. A vendor refusal
+    arrives as successful=false with no error, which every writer here discarded
+    in favour of a hardcoded ok:True — the same shape that let a malformed
+    CREATE_NOTE payload report success while nothing reached the contact.
+    """
+    if not isinstance(result, dict):
+        return False, f"unexpected HubSpot response: {type(result).__name__}"
+    if result.get("dry_run"):
+        return True, ""
+    if result.get("successful") is False:
+        data = result.get("data")
+        detail = ""
+        if isinstance(data, dict):
+            detail = str(data.get("error") or data.get("message") or "").strip()
+        return False, detail or "HubSpot rejected the request"
+    return True, ""
+
+
+def _raise_if_refused(result: dict[str, Any], action: str) -> None:
+    ok, detail = _hubspot_write_ok(result)
+    if not ok:
+        raise RuntimeError(f"{action} failed: {detail}")
+
+
 def _apply_merge_row(row: dict[str, Any]) -> None:
     primary = row.get("primary_id")
     duplicate = row.get("duplicate_id")
     if not primary or not duplicate:
         return
-    execute_hubspot_tool(
-        HUBSPOT_MERGE_CONTACTS,
-        {"primaryObjectId": primary, "objectIdToMerge": duplicate},
+    _raise_if_refused(
+        execute_hubspot_tool(
+            HUBSPOT_MERGE_CONTACTS,
+            {"primaryObjectId": primary, "objectIdToMerge": duplicate},
+        ),
+        f"Merge {duplicate} into {primary}",
     )
 
 
@@ -1821,9 +1856,12 @@ def _apply_field_fill(row: dict[str, Any]) -> bool:
         }
     if not props:
         return False
-    execute_hubspot_tool(
-        HUBSPOT_UPDATE_CONTACT,
-        {"contactId": contact_id, "properties": props},
+    _raise_if_refused(
+        execute_hubspot_tool(
+            HUBSPOT_UPDATE_CONTACT,
+            {"contactId": contact_id, "properties": props},
+        ),
+        f"Enrich contact {contact_id}",
     )
     return True
 
