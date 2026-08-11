@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -25,6 +26,18 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# The "no network I/O" promise above is not self-enforcing. This script runs as a
+# subprocess (phase suite P5-01), so pytest's conftest guard never covers it, and
+# app.config calls load_dotenv(override=False) — meaning it would otherwise inherit
+# the developer's live .env, Teams credentials and all. A dev whose .env has
+# LEXI_TEAMS_ENABLED=true could push real Adaptive Cards from a "simulation" run.
+# Set before app.config is imported so these win over .env.
+for _key, _value in {
+    "LEXI_TEAMS_ENABLED": "false",
+    "LEXI_SUPPRESS_TEAMS_PUSH": "true",
+}.items():
+    os.environ[_key] = _value
 
 from app.agents.comms_agent import execute_lexi_approval, get_lexi_pending_queue
 from app.agents.scheduler_agent import ScheduleResult, process_pending_schedules
