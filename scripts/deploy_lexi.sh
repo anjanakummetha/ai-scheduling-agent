@@ -15,10 +15,19 @@ APP=/home/lexi/AI_Scheduling_Agent
 G="git -c safe.directory=$APP"
 cd "$APP" || exit 1
 STAMP=$(date +%Y%m%d-%H%M%S)
+KEEP_DEPLOY_BACKUPS=3
 
 echo "########## BACKUP ##########"
 cp .env ".env.bak.deploy.$STAMP" && echo "  env -> .env.bak.deploy.$STAMP"
 sqlite3 data/lexi.db ".backup data/lexi-deploy-$STAMP.db" && echo "  db  -> data/lexi-deploy-$STAMP.db"
+
+# Each deploy snapshots the whole DB (~90MB and growing). Without this, a heavy
+# deploy day adds >1GB and never gives it back — 96 files reached 7.3GB before the
+# first prune. Only the `.deploy.` env backups rotate here; named rollback
+# checkpoints (.env.bak.<label>.<stamp>) are deliberate and must survive.
+ls -t data/lexi-deploy-*.db 2>/dev/null | tail -n +$((KEEP_DEPLOY_BACKUPS + 1)) | xargs -r rm -f
+ls -t .env.bak.deploy.*   2>/dev/null | tail -n +$((KEEP_DEPLOY_BACKUPS + 1)) | xargs -r rm -f
+echo "  kept newest $KEEP_DEPLOY_BACKUPS deploy backups ($(df -h / | awk 'NR==2{print $4}') free)"
 
 echo
 echo "########## DEPLOY ##########"
