@@ -152,9 +152,15 @@ us applying them.
 
 - **A deploy alone is not enough for Lexi to notice a new/changed tool.** The
   session must turn over too — a clean gateway restart *resumes* the prior
-  session with its stale tool list. Clear `~/.hermes/sessions/sessions.json` and
-  restart as part of every deploy that touches a tool signature. Symptom: Lexi
-  says a capability doesn't exist right after you shipped it.
+  session with its stale tool list. Symptom: Lexi says a capability doesn't
+  exist right after you shipped it.
+  `deploy_lexi.sh` now handles this: run it as
+  `ssh root@<host> 'NEW_SESSION=1 bash -s' < scripts/deploy_lexi.sh` on any deploy
+  that touches a tool signature. It backs the file up rather than deleting it, and
+  keeps the newest 3. Left off by default because clearing the session also ends
+  whatever thread Kory is mid-conversation on — so if the merge touched
+  `hermes_mcp_server.py` and the flag was *not* set, the script says so loudly
+  instead of restarting quietly into a stale tool list.
 - `get_raw_composio_tools()` **pages at 20 by default** — pass `limit=500`.
   Without it, `ASANA_UPDATE_A_TASK` looks like it doesn't exist (153 tools exist).
 - Composio returns **200 with `successful: false`** and no `error`. `execute_tool`
