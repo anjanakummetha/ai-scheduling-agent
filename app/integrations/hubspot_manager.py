@@ -331,7 +331,11 @@ def search_contacts(
     return {
         "ok": True,
         "count": len(contacts),
-        "total": total if total is not None else len(contacts),
+        # None means "HubSpot didn't tell us". Falling back to len(contacts) made
+        # an unknown total indistinguishable from a known one, so `scanned >=
+        # total` was trivially true and a capped scan reported full coverage.
+        # Callers must treat None as unknown — count_contacts() is the exact count.
+        "total": total,
         "truncated": bool(total is not None and total > len(contacts)),
         "contacts": contacts,
         "composio_log_id": log_id,
@@ -818,7 +822,11 @@ def propose_field_enrichment(*, limit: int = 25, owner_id: str | None = None) ->
     )
     lines = [
         f"**Contact enrichment — {len(proposals)} fill(s) proposed** "
-        f"from {found.get('total')} contact(s) missing a title\n"
+        + (
+            f"from {found['total']} contact(s) missing a title\n"
+            if found.get("total") is not None
+            else f"from the {found.get('count') or 0} contact(s) sampled\n"
+        )
     ]
     for row in proposals[:12]:
         fields = ", ".join(f"{k} = {v}" for k, v in (row.get("proposed_fields") or {}).items())

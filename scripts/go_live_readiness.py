@@ -46,7 +46,9 @@ def hubspot():
     from app.integrations import hubspot_manager as hs
 
     found = hs.search_contacts(limit=3, owner_id=hs.kory_owner_id())
-    return f"{found.get('count')} of {found.get('total')} Kory-owned contacts"
+    total = found.get("total")
+    scope = f"of {total}" if total is not None else "of an unreported total"
+    return f"{found.get('count')} {scope} Kory-owned contacts"
 
 
 def asana():
