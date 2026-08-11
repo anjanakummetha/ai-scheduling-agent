@@ -458,8 +458,17 @@ def propose_meeting_slots(
     meeting_format: str | None = None,
     urgent: bool | None = None,
     plan: SchedulingPlan | None = None,
+    min_options: int | None = None,
 ) -> SlotProposal:
-    """Public entry — returns validated slots or empty list."""
+    """Public entry — returns validated slots or empty list.
+
+    min_options lets a caller ask for whatever exists instead of the 2-option
+    offer pattern. Kory asking "when am I free next week?" is not an offer: with
+    the minimum at 2, a week holding exactly one good window was discarded whole
+    and the ladder walked on, so a free Tuesday was reported as "fully booked
+    until September". Automated offers to a counterparty still default to 2 —
+    nobody should be sent a single take-it-or-leave-it slot.
+    """
     from app.scheduling.scheduling_plan import SchedulingPlan
     from app.scheduling.window_fallback import _plan_without_window, _shift_plan_window
 
@@ -471,9 +480,13 @@ def propose_meeting_slots(
     from app.scheduling.preferences import guidance_relaxes_slot_minimum
 
     required = (
-        1
-        if (plan is not None and guidance_relaxes_slot_minimum(plan.kory_guidance))
-        else MIN_SLOT_OPTIONS
+        min_options
+        if min_options is not None
+        else (
+            1
+            if (plan is not None and guidance_relaxes_slot_minimum(plan.kory_guidance))
+            else MIN_SLOT_OPTIONS
+        )
     )
 
     result = find_valid_slots(

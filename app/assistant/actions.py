@@ -576,6 +576,12 @@ def find_slots_for_request(
         intent=intent.strip() or None,
         sender_email=sender_email.strip() or None,
         meeting_format=meeting_format.strip() or None,
+        # Kory is asking about his own calendar and sees the answer himself, so
+        # one real window is a useful answer. The 2-option offer pattern belongs
+        # to the automated inbound path, which composes an email to a
+        # counterparty; applied here it discarded a week holding exactly one
+        # opening and reported "booked until September" over a free Tuesday.
+        min_slot_options=1,
     )
     payload = result.to_dict()
     payload["kory_chat"] = (

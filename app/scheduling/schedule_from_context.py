@@ -134,6 +134,7 @@ def schedule_from_context(
     internet_headers: list[dict[str, Any]] | None = None,
     received_at: str | None = None,
     use_llm_plan: bool | None = None,
+    min_slot_options: int | None = None,
     try_inbound_availability: bool = True,
     format_slots: bool = True,
     calendar_context: dict[str, Any] | None = None,
@@ -252,6 +253,7 @@ def schedule_from_context(
         body=scheduling_body,
         meeting_format=meeting_format,
         plan=plan,
+        min_options=min_slot_options,
     )
     meeting_fmt = engine.meeting_format or meeting_format or ""
 
