@@ -520,7 +520,14 @@ def crm_health_report(
     }
 
 
-def propose_duplicate_merges(*, limit: int = 50) -> dict[str, Any]:
+# A duplicate is only detectable when BOTH records are in the sample, so a
+# partial scan misses almost everything: sampling 50 of ~1,000 finds a given
+# pair roughly 0.2% of the time, then reports "no duplicates". Scan the book.
+# 20 pages at _MAX_PAGE=100; ~20 Composio calls against a 200k monthly budget.
+DUPLICATE_SCAN_LIMIT = 2000
+
+
+def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, Any]:
     """Find likely duplicate contacts by email/name — stage merge proposals only."""
     raw = search_contacts(limit=limit)
     contacts = raw.get("contacts") or []
@@ -586,8 +593,14 @@ def propose_duplicate_merges(*, limit: int = 50) -> dict[str, Any]:
     )
     scanned = raw.get("count") or len(contacts)
     portal = raw.get("total")
+    complete = not portal or scanned >= portal
     scope = f"{scanned} contact(s)" + (f" of {portal}" if portal and portal > scanned else "")
-    lines = [f"**HubSpot duplicate proposals** ({len(pairs)}) — checked {scope}\n"]
+    coverage_line = (
+        f"scanned all {scanned} contact(s)"
+        if complete
+        else f"scanned {scanned} of {portal} contact(s) — PARTIAL"
+    )
+    lines = [f"**HubSpot duplicate proposals** ({len(pairs)}) — {coverage_line}\n"]
     for row in pairs[:12]:
         lines.append(
             f"• {row.get('primary_name') or row.get('primary_email')} "
@@ -595,7 +608,14 @@ def propose_duplicate_merges(*, limit: int = 50) -> dict[str, Any]:
             f"— **{row['suggested_action']}** ({row['reason']})"
         )
     if not pairs:
-        lines.append(f"_No duplicates among the {scope} checked._")
+        lines.append(
+            f"_No duplicates found in the full book ({scanned} contact(s) scanned)._"
+            if complete
+            else (
+                f"_No duplicates among the {scanned} of {portal} checked. This is a "
+                "PARTIAL scan — it is not evidence the book is clean._"
+            )
+        )
     lines.append(
         "\n_Merges are staged only — no HubSpot changes until live writes + approval. "
         "HubSpot merges cannot be undone, so each one needs its own approval._"
@@ -605,6 +625,14 @@ def propose_duplicate_merges(*, limit: int = 50) -> dict[str, Any]:
         "batch_id": batch_id,
         "pair_count": len(pairs),
         "pairs": pairs,
+        # Structured, so coverage survives being summarised. The prose version of
+        # this got dropped in paraphrase once and "checked 50 of 1016" reached
+        # Kory as "your book looks clean".
+        "coverage": {
+            "scanned": scanned,
+            "portal_total": portal,
+            "complete": complete,
+        },
         "writes_blocked": hubspot_writes_blocked(),
         "kory_message": "\n".join(lines),
     }
@@ -783,6 +811,12 @@ def propose_field_enrichment(*, limit: int = 25, owner_id: str | None = None) ->
     for row in proposals[:12]:
         fields = ", ".join(f"{k} = {v}" for k, v in (row.get("proposed_fields") or {}).items())
         lines.append(f"• {row.get('name') or row['email']} — {fields}")
+    if len(proposals) > 12:
+        # One approval applies the whole batch, so never imply the list is all of it.
+        lines.append(
+            f"\n_Showing 12 of {len(proposals)} proposed fills — approving applies all "
+            f"{len(proposals)}._"
+        )
     if not proposals:
         lines.append("_No usable signatures found in the sampled contacts._")
     if no_source:

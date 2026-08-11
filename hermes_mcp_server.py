@@ -692,12 +692,12 @@ def lexi_hubspot_outreach_batch(goal: str = "", limit: str = "10") -> str:
 
 
 @_tool
-def lexi_hubspot_duplicate_merges(limit: str = "50") -> str:
-    """Propose duplicate contact merges. Proposals are staged for Kory; applying a staged batch performs a REAL merge in the shared IFG portal, which cannot be undone — say so before applying."""
+def lexi_hubspot_duplicate_merges(limit: str = "0") -> str:
+    """Propose duplicate contact merges across Kory's whole contact book. Leave limit empty to scan everything — a partial scan only finds a duplicate when both records land in the same sample, so it reports "none" almost regardless of the truth. The result carries a coverage object; report scanned vs portal_total and never call the book clean unless complete is true. Proposals are staged; applying a staged batch performs a REAL merge in the shared IFG portal, which cannot be undone — say so before applying."""
     try:
-        n = max(1, min(100, int(limit.strip() or "50")))
+        n = max(0, int(limit.strip() or "0"))
     except ValueError:
-        n = 50
+        n = 0
     return _wrap("lexi_hubspot_duplicate_merges", lexi.hubspot_duplicate_merges_action, limit=n)
 
 

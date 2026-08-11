@@ -1040,10 +1040,14 @@ def hubspot_outreach_batch_action(*, goal: str = "", limit: int = 10) -> dict[st
     return propose_outreach_batch(goal=goal, limit=limit)
 
 
-def hubspot_duplicate_merges_action(*, limit: int = 50) -> dict[str, Any]:
-    from app.integrations.hubspot_manager import propose_duplicate_merges
+def hubspot_duplicate_merges_action(*, limit: int = 0) -> dict[str, Any]:
+    from app.integrations.hubspot_manager import (
+        DUPLICATE_SCAN_LIMIT,
+        propose_duplicate_merges,
+    )
 
-    return propose_duplicate_merges(limit=limit)
+    # 0 means "the whole book" — a partial duplicate scan is close to useless.
+    return propose_duplicate_merges(limit=limit or DUPLICATE_SCAN_LIMIT)
 
 
 def hubspot_lead_source_fills_action(*, limit: int = 25) -> dict[str, Any]:
