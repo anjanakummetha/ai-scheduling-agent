@@ -26,6 +26,11 @@ class McpSmokeTestError(RuntimeError):
     """Raised when MCP wire format or response shape is invalid."""
 
 
+# Deliberately out of range of any real proposal id, so approve_decision returns a
+# well-formed "not found" envelope instead of acting on someone's actual meeting.
+_NO_SUCH_PROPOSAL_ID = 999999999
+
+
 def _extract_tool_text(content: list[Any]) -> str:
     for item in content:
         item_type = getattr(item, "type", None)
@@ -55,6 +60,11 @@ async def _run_smoke_test(decision_id: int | None) -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root)
     env.setdefault("LEXI_EMBED_WORKER", "false")
+    # The server inherits this env and calls load_dotenv(override=False), so these
+    # win over the developer's .env. Without them a smoke test run on a machine
+    # with LEXI_TEAMS_ENABLED=true posts into the real Teams chat.
+    env["LEXI_TEAMS_ENABLED"] = "false"
+    env["LEXI_SUPPRESS_TEAMS_PUSH"] = "true"
 
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -100,13 +110,16 @@ async def _run_smoke_test(decision_id: int | None) -> int:
             pending_envelope = _parse_backend_envelope(_extract_tool_text(pending_result.content))
             print(f"[ok] get_pending_decisions -> {pending_envelope}")
 
-            target_decision = decision_id
-            if target_decision is None and pending_envelope.get("ok"):
-                decisions = pending_envelope.get("decisions", [])
-                if isinstance(decisions, list) and decisions:
-                    target_decision = int(decisions[0]["id"])
-                else:
-                    target_decision = 999999999
+            # Never auto-target a live proposal. This is a wire-format smoke test;
+            # approving a real one sends a real email and books a real slot. It was
+            # safe only by accident — the envelope's key is "queue", not "decisions",
+            # so the old lookup always missed and fell through to the sentinel.
+            # Renaming that key would silently have started approving the first
+            # pending proposal, and approve_decision now actually executes (it used
+            # to return an un-awaited coroutine and do nothing). A nonexistent id
+            # exercises the same tool and validates the same envelope shape.
+            # Pass --decision-id to target a real one deliberately.
+            target_decision = decision_id if decision_id is not None else _NO_SUCH_PROPOSAL_ID
 
             approve_result = await session.call_tool(
                 "approve_decision",

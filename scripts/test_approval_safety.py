@@ -10,6 +10,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+# This script attempts sends to exercise the approval gate, and CI runs it with
+# dry-run deliberately OFF — so it must never also be able to talk to Teams. Set
+# before load_dotenv/app.config so these beat a developer .env. Dry-run and the
+# write mode are intentionally NOT forced here: turning dry-run on would defeat
+# the gate this script exists to test. The real-send risk stays covered by the
+# COMPOSIO_API_KEY check below.
+os.environ["LEXI_TEAMS_ENABLED"] = "false"
+os.environ["LEXI_SUPPRESS_TEAMS_PUSH"] = "true"
+
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
