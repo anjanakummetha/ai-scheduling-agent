@@ -8,8 +8,23 @@ inbound offers carry "no availability for <window> — offering <dates> instead"
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from app.agents.outbound_agent import _outbound_disclosure_note
 from app.scheduling.scheduling_window import infer_time_of_day_window
+
+
+def _day_in_week_after_next(weekday: int) -> date:
+    """A date guaranteed to fall outside a "next week" ask.
+
+    `scheduling_window` reads "next week" as the Monday-Sunday week after the
+    current one, so it ends 13 days past this Monday. Anchoring to the week
+    after that keeps these slots outside the window on whatever weekday the
+    suite happens to run, with two days of slack for MT-vs-UTC skew.
+    """
+    today = date.today()
+    this_monday = today - timedelta(days=today.weekday())
+    return this_monday + timedelta(days=14 + weekday)
 
 
 def test_mornings_her_time_shifts_to_recipient_zone():
@@ -100,13 +115,19 @@ def test_gate_honors_east_coast_cue_like_the_engine():
 
 
 def test_note_drops_redundant_window_entries():
+    # Tue/Thu of the week after next: the body asks for "next week", so these
+    # slots miss the window and the note must disclose that. Previously hardcoded
+    # to Aug 18/20, which silently stopped testing anything once the calendar
+    # reached the point where those dates *were* next week.
+    tue = _day_in_week_after_next(1)
+    thu = _day_in_week_after_next(3)
     note = _outbound_disclosure_note(
         subject="[TEST] intro call",
         body="Outbound delegation by kory. mornings her time, she is in Boston (Eastern time), next week",
         intent="meeting",
         slots=[
-            {"start": "2026-08-18T06:00:00-06:00", "end": "2026-08-18T06:30:00-06:00"},
-            {"start": "2026-08-20T06:00:00-06:00", "end": "2026-08-20T06:30:00-06:00"},
+            {"start": f"{tue}T06:00:00-06:00", "end": f"{tue}T06:30:00-06:00"},
+            {"start": f"{thu}T06:00:00-06:00", "end": f"{thu}T06:30:00-06:00"},
         ],
         calendar_context={"status": "available", "busy_events": []},
     )

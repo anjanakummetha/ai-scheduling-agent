@@ -8,6 +8,7 @@ actually corresponded with read as a known relationship.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from app.assistant.briefings import _guess_external_attendee
@@ -257,16 +258,26 @@ def test_date_in_the_request_is_understood():
 
 
 def test_a_date_picks_between_two_people_with_the_same_first_name():
-    """Two Justins: Aug 4 and Aug 7. "August 7th" must resolve to the right one."""
+    """Two Justins on different days: the date in the ask must resolve to one.
+
+    The meetings have to be in the future. A bare "August 7th" means the *next*
+    August 7th, so once the hardcoded fixtures aged into the past the query
+    resolved a year beyond them, matched neither, and fell back to returning
+    both Justins — the disambiguation under test never ran.
+    """
     from app.assistant.precall_brief import match_meetings
 
+    earlier = date.today() + timedelta(days=7)
+    target = date.today() + timedelta(days=10)
     events = [
-        _event("Follow-Up: Endurance Plumbing", "2026-08-04T14:00:00",
+        _event("Follow-Up: Endurance Plumbing", f"{earlier}T14:00:00",
                [("justin@yetiark.com", "Justin Bond")]),
-        _event("Intro Call - Justin", "2026-08-07T12:00:00",
+        _event("Intro Call - Justin", f"{target}T12:00:00",
                [("jbertram@agilityep.com", "Justin Bertram")]),
     ]
-    matched = match_meetings("justin who I am meeting August 7th", events)
+    matched = match_meetings(
+        f"justin who I am meeting {target.strftime('%B')} {target.day}th", events
+    )
     assert len(matched) == 1
     assert matched[0]["subject"] == "Intro Call - Justin"
 
