@@ -696,7 +696,7 @@ def resolve_asana_user_gid(name_or_email: str) -> tuple[str, str]:
         return "", ""
     if needle.isdigit():
         return needle, ""
-    if needle in {"me", "kory", "my", "myself"}:
+    if needle in {"me", "kory", "my", "myself", "mine"}:
         try:
             me = execute_asana_tool("ASANA_GET_CURRENT_USER", {})
             payload = (me.get("data") or {}).get("data") or {}
@@ -704,6 +704,10 @@ def resolve_asana_user_gid(name_or_email: str) -> tuple[str, str]:
                 return str(payload["gid"]), str(payload.get("name") or "")
         except Exception as exc:  # fall through to the workspace search
             logger.warning("ASANA_GET_CURRENT_USER failed: %s", exc)
+        # ASANA_GET_CURRENT_USER came back empty in production, which left
+        # "assign it to me" searching the workspace for a user literally named
+        # "me". This is Kory's assistant — first person always means Kory.
+        needle = "kory"
     workspace = os.getenv("ASANA_WORKSPACE_GID", "").strip()
     if not workspace:
         try:

@@ -37,7 +37,11 @@ echo "  before: $($G log --oneline -1)"
 # fast-forward. This replaced a stash/pop dance, which failed on the very commit
 # that untracked the file: the pop conflicted, left it tracked and un-ignored,
 # and stranded a stash entry on the box.
-$G checkout -q -- data/kory_voice_profile.json 2>/dev/null || true
+# Must be `checkout HEAD --`, not `checkout --`: the box carried a *staged*
+# modification (git status "M " — index, not working tree), left behind by the
+# old stash/pop path. `checkout --` restores the working tree from the index, so
+# it cannot clear a staged change and the merge still aborted.
+$G checkout -q HEAD -- data/kory_voice_profile.json 2>/dev/null || true
 $G fetch origin main -q
 if ! $G merge --ff-only origin/main; then
   echo "  !!! MERGE FAILED — nothing restarted."
