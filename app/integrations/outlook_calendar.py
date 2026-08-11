@@ -240,8 +240,27 @@ def is_scheduling_hold(event: dict[str, Any]) -> bool:
 
 
 def is_blocking_event(event: dict[str, Any]) -> bool:
-    """Busy events that block scheduling — includes Lexi HOLD: blocks on Master/work calendars."""
-    return _is_busy(event) and not _is_demo_observance(event)
+    """Busy events that block scheduling — includes Lexi HOLD: blocks on Master/work calendars.
+
+    All-day entries never block a timed meeting. They say *where Kory is*, not
+    that he is unavailable: an all-day "Kory in Chicago" made every hour of that
+    Thursday unbookable, and the confirm-time guard fails closed with no override,
+    so he could not place a 1:00pm event at all. The old exemption list
+    (good friday / palm sunday / tax day / "stay at ") was this same problem being
+    patched one event name at a time; handling all-day as a class retires it.
+    """
+    return _is_busy(event) and not _is_all_day(event)
+
+
+def _is_all_day(event: dict[str, Any]) -> bool:
+    """True for all-day / multi-day entries, however Outlook expresses them."""
+    if event.get("isAllDay"):
+        return True
+    event_start = _event_datetime(event.get("start"))
+    event_end = _event_datetime(event.get("end"))
+    if not event_start or not event_end:
+        return False
+    return event_end - event_start >= timedelta(hours=23)
 
 
 def _is_busy(event: dict[str, Any]) -> bool:

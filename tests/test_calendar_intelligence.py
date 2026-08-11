@@ -239,3 +239,36 @@ def test_scheduling_hold_events_block_conflicts() -> None:
     }
     assert is_scheduling_hold(hold)
     assert is_blocking_event(hold) is True
+
+
+def test_all_day_location_markers_do_not_block_timed_meetings() -> None:
+    """An all-day entry says where Kory is, not that he is busy.
+
+    An all-day "Kory in Chicago" made every hour of that Thursday unbookable,
+    and the confirm-time guard fails closed with no override — so he could not
+    place a 1:00pm event at all, even after explicitly saying to go ahead.
+    """
+    from app.integrations.outlook_calendar import is_blocking_event
+
+    travel = {"subject": "Kory in Chicago", "showAs": "busy", "isCancelled": False, "isAllDay": True}
+    assert is_blocking_event(travel) is False
+
+    # Multi-day entries reach us without the isAllDay flag set.
+    spanning = {
+        "subject": "Kory in Chicago",
+        "showAs": "busy",
+        "isCancelled": False,
+        "start": {"dateTime": "2026-08-13T00:00:00", "timeZone": "America/Denver"},
+        "end": {"dateTime": "2026-08-14T00:00:00", "timeZone": "America/Denver"},
+    }
+    assert is_blocking_event(spanning) is False
+
+    # A real timed meeting still blocks — the guard must stay closed for those.
+    timed = {
+        "subject": "Doug (Executive Coach)",
+        "showAs": "busy",
+        "isCancelled": False,
+        "start": {"dateTime": "2026-08-13T13:15:00", "timeZone": "America/Denver"},
+        "end": {"dateTime": "2026-08-13T14:15:00", "timeZone": "America/Denver"},
+    }
+    assert is_blocking_event(timed) is True
