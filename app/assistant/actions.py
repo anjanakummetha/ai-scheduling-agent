@@ -1001,6 +1001,7 @@ def move_asana_task_action(
     section_gid: str = "",
     section_name: str = "",
     project: str = "",
+    unfile_others: bool = True,
     confirm: bool = False,
 ) -> dict[str, Any]:
     from app.integrations.asana_manager import move_asana_task_to_section
@@ -1010,6 +1011,7 @@ def move_asana_task_action(
         section_gid=section_gid,
         section_name=section_name,
         project=project,
+        unfile_others=unfile_others,
         approved=confirm,
     )
 

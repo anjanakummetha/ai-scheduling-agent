@@ -900,6 +900,7 @@ def move_asana_task_to_section(
     section_gid: str = "",
     section_name: str = "",
     project: str = "",
+    unfile_others: bool = False,
     approved: bool = False,
     owner_ack: bool = False,
 ) -> dict[str, Any]:
@@ -950,7 +951,12 @@ def move_asana_task_to_section(
             "ASANA_ADD_PROJECT_FOR_TASK",
             {"task_gid": task_gid, "project": project_gid},
         )
-        return _write_result(added, task_gid=task_gid, project_gid=project_gid)
+        out = _write_result(added, task_gid=task_gid, project_gid=project_gid)
+        if out.get("ok") and unfile_others:
+            out.update(unfile_task_from_other_projects(
+                task_gid=task_gid, keep_project_gid=project_gid
+            ))
+        return out
 
     if not target:
         target = settings.asana_section_gid or ""
@@ -968,7 +974,50 @@ def move_asana_task_to_section(
         "ASANA_ADD_TASK_TO_SECTION",
         {"task_gid": task_gid, "section_gid": target},
     )
-    return _write_result(result, task_gid=task_gid, section_gid=target)
+    out = _write_result(result, task_gid=task_gid, section_gid=target)
+    if out.get("ok") and unfile_others and project_gid:
+        out.update(unfile_task_from_other_projects(
+            task_gid=task_gid, keep_project_gid=project_gid
+        ))
+    return out
+
+
+def _task_project_gids(task_gid: str) -> list[str]:
+    """Project gids a task currently belongs to (read-only)."""
+    try:
+        res = execute_asana_tool("ASANA_GET_A_TASK", {"task_gid": task_gid})
+    except Exception as exc:
+        logger.warning("Could not read projects for task %s: %s", task_gid, exc)
+        return []
+    payload = (res.get("data") or {}).get("data") or {}
+    return [str(p.get("gid")) for p in (payload.get("projects") or []) if p.get("gid")]
+
+
+def unfile_task_from_other_projects(
+    *, task_gid: str, keep_project_gid: str
+) -> dict[str, Any]:
+    """Drop every project membership except keep_project_gid.
+
+    Asana tasks are multi-homed, so adding one never displaced the old — "move
+    it to X" left the task on its previous board too, and Kory had no way to
+    undo that from chat. This is what makes a move a move.
+    """
+    removed, failed = [], []
+    for gid in _task_project_gids(task_gid):
+        if gid == keep_project_gid:
+            continue
+        try:
+            res = execute_asana_tool(
+                "ASANA_REMOVE_PROJECT_FROM_TASK", {"task_gid": task_gid, "project": gid}
+            )
+        except Exception as exc:
+            failed.append({"project_gid": gid, "error": str(exc)[:160]})
+            continue
+        ok, detail = _asana_write_ok(res)
+        (removed if ok else failed).append(
+            {"project_gid": gid} if ok else {"project_gid": gid, "error": detail}
+        )
+    return {"removed_from": removed, "remove_failures": failed}
 
 
 def remove_asana_task_from_project(

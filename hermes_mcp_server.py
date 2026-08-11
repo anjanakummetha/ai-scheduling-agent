@@ -574,9 +574,10 @@ def lexi_move_asana_task(
     section_gid: str = "",
     section_name: str = "",
     project: str = "",
+    keep_in_current: str = "false",
     confirm: str = "false",
 ) -> str:
-    """Move an Asana task to a section. Section names resolve within Kory's personal project unless project='<name>' says which project's boards to use. Pass confirm='true' once Kory has asked for or agreed to this."""
+    """Move an Asana task to a section or project. This is a real move: the task is unfiled from every other project. Pass keep_in_current='true' only when Kory wants it to appear in both places (Asana tasks can be multi-homed). Section names resolve within Kory's personal project unless project='<name>' says which project's boards to use. Pass confirm='true' once Kory has asked for or agreed to this."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_move_asana_task",
@@ -585,6 +586,7 @@ def lexi_move_asana_task(
         section_gid=section_gid,
         section_name=section_name,
         project=project,
+        unfile_others=keep_in_current.strip().lower() not in {"1", "true", "yes"},
         confirm=approved,
     )
 
