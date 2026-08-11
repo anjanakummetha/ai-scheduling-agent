@@ -16,3 +16,7 @@ data/*.db
 # The CEO Executive Dashboard lives in its own repo (github.com/anjanakummetha/CEO_Executive_Dashboard-).
 # It is checked out here for local joint testing/deploy but must never be committed into this repo.
 CEO_Executive_Dashboard--main/
+
+# Runtime cache rebuilt from Kory sent mail; holds verbatim excerpts of real
+# correspondence. Same class as .env and data/*.db — never commit it.
+data/kory_voice_profile.json

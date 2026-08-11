@@ -32,17 +32,17 @@ echo "  kept newest $KEEP_DEPLOY_BACKUPS deploy backups ($(df -h / | awk 'NR==2{
 echo
 echo "########## DEPLOY ##########"
 echo "  before: $($G log --oneline -1)"
-STASHED=0
-if ! $G diff --quiet -- data/kory_voice_profile.json 2>/dev/null; then
-  $G stash push -q -- data/kory_voice_profile.json && STASHED=1
-fi
+# data/kory_voice_profile.json is a regenerable cache — rebuilt from sent mail on
+# first use — that used to be tracked. Discard any local edit so the merge can
+# fast-forward. This replaced a stash/pop dance, which failed on the very commit
+# that untracked the file: the pop conflicted, left it tracked and un-ignored,
+# and stranded a stash entry on the box.
+$G checkout -q -- data/kory_voice_profile.json 2>/dev/null || true
 $G fetch origin main -q
 if ! $G merge --ff-only origin/main; then
   echo "  !!! MERGE FAILED — nothing restarted."
-  [ "$STASHED" = "1" ] && $G stash pop -q
   exit 1
 fi
-[ "$STASHED" = "1" ] && $G stash pop -q
 echo "  after:  $($G log --oneline -1)"
 
 echo
