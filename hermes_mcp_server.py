@@ -1499,9 +1499,14 @@ def lexi_research_person(
 # ── Inbound email approval queue (existing Teams / dashboard flow) ────────────
 
 
-@_tool
-def get_lexi_pending_queue_tool() -> str:
-    """Return Lexi proposals awaiting CEO approval (pending_approval) from inbound email."""
+def _pending_queue_payload() -> str:
+    """Plain sync body shared by the pending-queue tools.
+
+    A tool must never call another @_tool function: the decorator replaces its
+    target with an async wrapper, so the inner call returns an un-awaited
+    coroutine and the body never runs. The caller gets a coroutine repr back and
+    the work is silently skipped. Shared plain helpers keep the aliases honest.
+    """
     try:
         items = get_lexi_pending_queue()
         from app.bot.teams_text import format_pending_approval_digest
@@ -1523,20 +1528,30 @@ def get_lexi_pending_queue_tool() -> str:
 
 
 @_tool
-def get_pending_decisions() -> str:
-    """Alias for get_lexi_pending_queue_tool."""
-    return get_lexi_pending_queue_tool()
+def get_lexi_pending_queue_tool() -> str:
+    """Return Lexi proposals awaiting CEO approval (pending_approval) from inbound email."""
+    return _pending_queue_payload()
 
 
 @_tool
-def execute_lexi_approval_tool(
+def get_pending_decisions() -> str:
+    """Alias for get_lexi_pending_queue_tool."""
+    return _pending_queue_payload()
+
+
+def _execute_lexi_approval_payload(
     proposal_id: str,
     decision: str,
     selected_slot: str,
     authorized_by: str,
     modification_notes: str = "",
 ) -> str:
-    """Approve, modify-approve, or reject an inbound-email Lexi proposal."""
+    """Plain sync body shared by every approval entry point.
+
+    See _pending_queue_payload for why the approve/modify/reject tools call this
+    rather than each other — an un-awaited inner tool call made those three
+    silent no-ops that still looked like they had succeeded.
+    """
     try:
         parsed = ExecuteLexiApprovalInput(
             proposal_id=int(proposal_id),
@@ -1585,6 +1600,24 @@ def execute_lexi_approval_tool(
 
 
 @_tool
+def execute_lexi_approval_tool(
+    proposal_id: str,
+    decision: str,
+    selected_slot: str,
+    authorized_by: str,
+    modification_notes: str = "",
+) -> str:
+    """Approve, modify-approve, or reject an inbound-email Lexi proposal."""
+    return _execute_lexi_approval_payload(
+        proposal_id=proposal_id,
+        decision=decision,
+        selected_slot=selected_slot,
+        authorized_by=authorized_by,
+        modification_notes=modification_notes,
+    )
+
+
+@_tool
 def approve_decision(
     decision_id: str,
     selected_slot: str = "",
@@ -1608,7 +1641,7 @@ def approve_decision(
                 "selected_slot is required when the proposal has scheduling slots.",
                 code="validation_error",
             )
-    return execute_lexi_approval_tool(
+    return _execute_lexi_approval_payload(
         proposal_id=decision_id,
         decision="approved",
         selected_slot=slot_value,
@@ -1626,7 +1659,7 @@ def modify_and_approve_decision(
     """Modify and approve using new_time as selected slot start. The end time
     is derived from the proposal's offered-slot duration — never send end==start."""
     slot_payload = json.dumps({"start": new_time.strip()})
-    return execute_lexi_approval_tool(
+    return _execute_lexi_approval_payload(
         proposal_id=decision_id,
         decision="modified",
         selected_slot=slot_payload,
@@ -1638,7 +1671,7 @@ def modify_and_approve_decision(
 @_tool
 def reject_decision(decision_id: str, reason: str, authorized_by: str = "kory") -> str:
     """Reject a pending inbound proposal."""
-    return execute_lexi_approval_tool(
+    return _execute_lexi_approval_payload(
         proposal_id=decision_id,
         decision="rejected",
         selected_slot="",
