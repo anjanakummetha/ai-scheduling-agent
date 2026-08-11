@@ -1166,6 +1166,54 @@ def _discover_workspace_projects() -> list[dict[str, str]]:
     return found
 
 
+ASANA_PAGE_SIZE = 100  # Asana's per-page maximum
+ASANA_MAX_PAGES = 6  # 600 tasks; bounds Composio spend on a huge project
+
+
+def _fetch_project_tasks_paged(project_gid: str) -> dict[str, Any]:
+    """All tasks in a project, following Asana's next_page cursor.
+
+    Returns the same shape as a single execute_asana_tool call so callers are
+    unchanged, with `truncated` set if we stopped at ASANA_MAX_PAGES — a cap
+    that is reported rather than silently applied.
+    """
+    rows: list[Any] = []
+    offset = ""
+    log_id = None
+    dry_run = False
+    truncated = False
+    for page in range(ASANA_MAX_PAGES):
+        args: dict[str, Any] = {
+            "project_gid": project_gid,
+            "limit": ASANA_PAGE_SIZE,
+            # Without opt_fields Asana returns only gid and name, so due_on and
+            # completed came back empty and every date bucket was empty: 29
+            # overdue tasks reported as "you're all clear".
+            "opt_fields": TASK_FIELDS,
+        }
+        if offset:
+            args["offset"] = offset
+        result = execute_asana_tool("ASANA_GET_TASKS_FROM_A_PROJECT", args)
+        log_id = result.get("log_id") or log_id
+        dry_run = bool(result.get("dry_run")) or dry_run
+        data = result.get("data")
+        if not isinstance(data, dict):
+            break
+        page_rows = data.get("data")
+        rows.extend(page_rows if isinstance(page_rows, list) else [])
+        offset = str(((data.get("next_page") or {}) or {}).get("offset") or "")
+        if not offset:
+            break
+        if page == ASANA_MAX_PAGES - 1:
+            truncated = True
+            logger.warning(
+                "Asana project %s has more than %s tasks; list truncated.",
+                project_gid,
+                ASANA_MAX_PAGES * ASANA_PAGE_SIZE,
+            )
+    return {"data": {"data": rows}, "log_id": log_id, "dry_run": dry_run, "truncated": truncated}
+
+
 def list_asana_tasks(
     *,
     bucket: TaskBucket = "all",
@@ -1187,17 +1235,13 @@ def list_asana_tasks(
         return {"ok": False, "tasks": [], "error": "ASANA_PROJECT_GID not set"}
 
     try:
-        result = execute_asana_tool(
-            "ASANA_GET_TASKS_FROM_A_PROJECT",
-            {
-                "project_gid": target_gid,
-                "limit": max(1, min(limit, 100)),
-                # Without opt_fields Asana returns only gid and name, so due_on
-                # and completed came back empty and every date bucket was empty:
-                # 29 overdue tasks reported as "you're all clear".
-                "opt_fields": TASK_FIELDS,
-            },
-        )
+        # Page through. Asana caps a page at 100 and hands back next_page.offset;
+        # the old code took page one and dropped the cursor, so a project with
+        # more tasks than one page silently under-reported — and *which* tasks
+        # you saw depended on where the page happened to fall. A 9-task project
+        # returned 4 at limit=50 because the first 50 rows were mostly completed.
+        # Fetch pages, then filter — never filter a single arbitrary page.
+        result = _fetch_project_tasks_paged(target_gid)
     except Exception:
         try:
             result = execute_asana_tool(
@@ -1225,6 +1269,7 @@ def list_asana_tasks(
         "project_gid": target_gid,
         "project_name": project_name or ASANA_PARENT_PROJECT_NAME,
         "tasks": filtered[:limit],
+        "truncated": bool(result.get("truncated")),
         "composio_log_id": result.get("log_id"),
         "dry_run": result.get("dry_run", False),
     }
