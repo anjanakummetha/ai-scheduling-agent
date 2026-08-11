@@ -523,8 +523,10 @@ def crm_health_report(
 # A duplicate is only detectable when BOTH records are in the sample, so a
 # partial scan misses almost everything: sampling 50 of ~1,000 finds a given
 # pair roughly 0.2% of the time, then reports "no duplicates". Scan the book.
-# 20 pages at _MAX_PAGE=100; ~20 Composio calls against a 200k monthly budget.
-DUPLICATE_SCAN_LIMIT = 2000
+# Portal held 2,207 contacts when this was set, and a 2,000 cap read as PARTIAL.
+# 50 pages at _MAX_PAGE=100 leaves room to grow; ~23 calls at today's size,
+# against a 200k monthly budget sitting near 12%.
+DUPLICATE_SCAN_LIMIT = 5000
 
 
 def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, Any]:
