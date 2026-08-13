@@ -25,6 +25,9 @@ from app.scheduling.lexi_html_signature import (
 )
 
 _IFG_WEBSITE = "https://www.iconicfounders.com/"
+# The podcast has its own site — the company site is a different destination and
+# sending listeners there is a dead end for this line.
+_PODCAST_WEBSITE = "https://www.theturnpodcast.com/"
 _KORY_NAME = "Kory Mitchell"
 _KORY_TITLE = "CEO"
 _KORY_COMPANY = "Iconic Founders Group"
@@ -35,7 +38,7 @@ _PODCAST_LINE_PREFIX = (
     "- available at "
 )
 _PODCAST_LINE_SUFFIX = " and all podcast channels."
-_WEBSITE_LABEL = "www.iconicfounders.com"
+_PODCAST_LABEL = "The Turn Podcast"
 
 
 def kory_html_signature_enabled() -> bool:
@@ -61,15 +64,15 @@ def _strip_kory_plain_signoff(text: str) -> str:
 
 def build_kory_html_signature_block(*, use_cid: bool = True) -> str:
     """Sign-off, podcast line, then logo-left / contact-right block."""
-    website_link = (
-        f'<a href="{html.escape(_IFG_WEBSITE, quote=True)}" '
-        f'style="color:#0563c1;text-decoration:underline;">{html.escape(_WEBSITE_LABEL)}</a>'
+    podcast_link = (
+        f'<a href="{html.escape(_PODCAST_WEBSITE, quote=True)}" '
+        f'style="color:#0563c1;text-decoration:underline;">{html.escape(_PODCAST_LABEL)}</a>'
     )
     signoff = (
         '<p style="margin:16px 0 0 0;">Let\'s Win!</p>'
         '<p style="margin:16px 0 0 0;">Kory</p>'
         '<p style="margin:16px 0 0 0;"><em>'
-        f"{html.escape(_PODCAST_LINE_PREFIX)}{website_link}{html.escape(_PODCAST_LINE_SUFFIX)}"
+        f"{html.escape(_PODCAST_LINE_PREFIX)}{podcast_link}{html.escape(_PODCAST_LINE_SUFFIX)}"
         "</em></p>"
     )
 
