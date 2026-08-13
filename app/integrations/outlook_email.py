@@ -371,6 +371,13 @@ def create_draft_reply(
     if channel == "lexi":
         return _create_lexi_reply_all_draft(message_id, body)
 
+    from app.scheduling.kory_html_signature import kory_html_signature_enabled
+
+    if kory_html_signature_enabled():
+        drafted = _create_kory_html_reply_draft(message_id, body)
+        if drafted is not None:
+            return drafted
+
     result = execute_tool(
         "OUTLOOK_CREATE_DRAFT_REPLY",
         {
@@ -382,6 +389,67 @@ def create_draft_reply(
     )
     data = _coerce_data(result["data"])
     return _extract_id(data), result.get("log_id")
+
+
+def _create_kory_html_reply_draft(
+    message_id: str,
+    body: str,
+) -> tuple[str | None, str | None] | None:
+    """Reply draft from Kory's mailbox carrying his branded HTML signature.
+
+    Graph's reply `comment` field is plain text only, so the branded block has to
+    be written in a second step: create the draft, replace its body with HTML,
+    attach the logo inline by CID, and let the caller send it. Kory-channel
+    replies go to the sender only — never reply-all, which is the Lexi path.
+
+    Returns None to fall back to the plain-text reply if any step fails; a
+    missing signature is worth far less than a lost reply.
+    """
+    from app.scheduling.kory_html_signature import kory_html_email_package
+
+    try:
+        result = execute_tool(
+            "OUTLOOK_CREATE_DRAFT_REPLY",
+            {"message_id": message_id, "user_id": "me", "comment": ""},
+            role="write",
+        )
+        draft_id = _extract_draft_message_id(result.get("data")) or _extract_id(
+            _coerce_data(result.get("data"))
+        )
+        if not draft_id:
+            return None
+
+        html_body, inline_attachments, _ = kory_html_email_package(body)
+        execute_tool(
+            "OUTLOOK_UPDATE_USER_MAIL_FOLDER_MESSAGE",
+            {
+                "user_id": "me",
+                "mail_folder_id": "drafts",
+                "message_id": draft_id,
+                "body": {"contentType": "html", "content": html_body},
+            },
+            role="write",
+        )
+        if inline_attachments:
+            attachment = inline_attachments[0]
+            execute_tool(
+                "OUTLOOK_ADD_MAIL_ATTACHMENT",
+                {
+                    "user_id": "me",
+                    "message_id": draft_id,
+                    "odata_type": attachment["@odata.type"],
+                    "name": attachment["name"],
+                    "contentType": attachment["contentType"],
+                    "content_bytes": attachment["contentBytes"],
+                    "isInline": True,
+                    "contentId": attachment["contentId"],
+                },
+                role="write",
+            )
+        return draft_id, result.get("log_id")
+    except Exception as exc:  # noqa: BLE001 — never lose a reply over a signature
+        logger.warning("Kory HTML reply draft failed (%s); falling back to plain text", exc)
+        return None
 
 
 def send_reply_in_thread(
@@ -963,6 +1031,23 @@ def send_outbound_email(
 
         if lexi_html_signature_enabled():
             send_body, inline_attachments, use_draft_inline_send = lexi_html_email_package(pilot_body)
+            is_html = True
+    elif not html_body and recipient.strip().lower() not in kory_thread_addresses():
+        # Kory's own mailbox gets his branded block too — podcast line, logo and
+        # contact details, the same signature he signs with by hand.
+        #
+        # Two exclusions. Caller-supplied HTML is not a person-to-person note (the
+        # morning briefing is markup, and appending a sign-off corrupts it). And
+        # mail addressed to Kory himself is a system notification, not something
+        # he is sending — signing his own briefing with his own contact card reads
+        # as a bug.
+        from app.scheduling.kory_html_signature import (
+            kory_html_email_package,
+            kory_html_signature_enabled,
+        )
+
+        if kory_html_signature_enabled():
+            send_body, inline_attachments, use_draft_inline_send = kory_html_email_package(pilot_body)
             is_html = True
 
     write_role: ConnectionRole = "lexi" if channel == "lexi" else "write"
