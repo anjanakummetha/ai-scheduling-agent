@@ -28,22 +28,35 @@ def test_signature_carries_every_line_kory_signs_with():
     assert "M: 720-561-0611" in html
 
 
-def test_links_point_at_the_real_website():
-    """'make sure it goes to the actual website' — both links, not a placeholder."""
+def test_the_two_links_go_to_different_places():
+    """The podcast line points at the podcast; the company line at the company.
+
+    Both pointed at iconicfounders.com first time round, which sent anyone
+    following the podcast line to the wrong site.
+    """
     html = build_kory_html_signature_block(use_cid=True)
-    assert html.count('href="https://www.iconicfounders.com/"') == 2
-    assert "www.iconicfounders.com</a>" in html
+    assert html.count('href="https://www.theturnpodcast.com/"') == 1
+    assert html.count('href="https://www.iconicfounders.com/"') == 1
     assert "example.com" not in html
 
 
-def test_podcast_line_is_italic_and_links_the_url():
+def test_podcast_line_is_italic_and_links_the_podcast_site():
     html = build_kory_html_signature_block(use_cid=True)
     start = html.index("<em>")
     end = html.index("</em>")
     podcast = html[start:end]
-    assert "The Turn" in podcast
-    assert "https://www.iconicfounders.com/" in podcast
+    assert "The Turn Podcast</a>" in podcast
+    assert "https://www.theturnpodcast.com/" in podcast
+    assert "iconicfounders.com" not in podcast, "podcast line must not link the company site"
     assert "and all podcast channels." in podcast
+
+
+def test_company_line_still_links_the_company():
+    html = build_kory_html_signature_block(use_cid=True)
+    contact_start = html.index("Kory Mitchell - CEO")
+    contact = html[contact_start:]
+    assert 'href="https://www.iconicfounders.com/"' in contact
+    assert "Iconic Founders Group</a>" in contact
 
 
 def test_logo_is_referenced_by_cid_and_scaled_on_width_only():
