@@ -583,6 +583,54 @@ def _event_iso(value: Any) -> str | None:
     return parsed.isoformat(timespec="seconds") if parsed else None
 
 
+def save_email_to_drafts(
+    *,
+    to_email: str,
+    subject: str,
+    body: str,
+    cc_emails: str = "",
+) -> dict[str, Any]:
+    """Park an email in Kory's Outlook Drafts for him to review and send himself.
+
+    No send approval: nothing leaves the mailbox, and the draft is the review step.
+    """
+    from app.integrations.outlook_email import create_kory_review_draft
+
+    cc = [a.strip() for a in (cc_emails or "").replace(";", ",").split(",") if a.strip()]
+    try:
+        result = create_kory_review_draft(
+            to_email=to_email, subject=subject, body=body, cc_emails=cc
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc(),
+        }
+
+    if result.get("ok"):
+        _audit(
+            "hermes_save_draft",
+            reference_id=str(result.get("draft_id") or "unknown"),
+            message=f"Draft saved for review: {subject}",
+            payload=result,
+        )
+        recipient = result.get("to")
+        if result.get("dry_run"):
+            result["kory_message"] = f"(test mode) Would have saved a draft to {recipient}."
+        elif result.get("verified"):
+            result["kory_message"] = (
+                f"Saved to your Drafts — \"{result.get('subject')}\" to {recipient}. "
+                "Review and send it from Outlook whenever you're ready."
+            )
+        else:
+            result["kory_message"] = (
+                f"I created the draft to {recipient}, but couldn't confirm it landed in "
+                "your Drafts folder. Worth checking Outlook before relying on it."
+            )
+    return result
+
+
 def infer_outbound_send_channel(body: str, *, explicit: str = "") -> str:
     """Pick kory vs lexi mailbox for chat-initiated outbound mail."""
     from app.integrations.outlook_email import infer_outbound_send_channel as _infer

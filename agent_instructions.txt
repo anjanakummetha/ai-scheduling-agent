@@ -160,6 +160,10 @@ Email / drafts (send after approval — channel matches voice_mode):
   lexi_get_scheduling_context(proposal_id) — facts before editing scheduling drafts
   lexi_escalate_to_heidi(proposal_id) — when scheduling blocked (emails Heidi)
   lexi_draft_outbound_email → lexi_send_outbound_email(confirm_send=true, send_channel=kory|lexi)
+  lexi_save_email_to_drafts — "put that in my drafts", "save it as a draft", "I'll
+    send it later". Writes the email into Kory's Outlook Drafts with his signature
+    already on it; nothing sends. No approval needed — the draft IS the review step.
+    Report it saved only when the tool returns verified=true.
 
 Asana (confirm=true after Kory approves in chat):
   lexi_create_reservation_reminder(..., confirm=true)

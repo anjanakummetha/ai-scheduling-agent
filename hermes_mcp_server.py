@@ -1133,6 +1133,35 @@ def lexi_draft_outbound_email(
 
 
 @_tool
+def lexi_save_email_to_drafts(
+    to_email: str,
+    subject: str,
+    body: str,
+    cc_emails: str = "",
+) -> str:
+    """Save an email to Kory's Outlook Drafts for him to review and send himself.
+
+    Triggers: "put that in my drafts", "save this as a draft", "draft it and I'll
+    send it later", "add it to my drafts so I can review it".
+
+    Nothing is sent — the draft sits in his Drafts folder with his signature
+    already applied, and he sends it from Outlook when ready. No approval needed,
+    because nothing leaves the mailbox. cc_emails is a comma-separated list.
+
+    Returns verified=true only once the draft is read back from the mailbox; say
+    it is saved only when that is true.
+    """
+    return _wrap(
+        "lexi_save_email_to_drafts",
+        lexi.save_email_to_drafts,
+        to_email=to_email,
+        subject=subject,
+        body=body,
+        cc_emails=cc_emails,
+    )
+
+
+@_tool
 def lexi_send_outbound_email(
     to_email: str,
     subject: str,

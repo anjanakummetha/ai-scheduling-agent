@@ -935,6 +935,138 @@ def create_outbound_draft(
     return message_id, result.get("log_id")
 
 
+def kory_review_drafts_enabled() -> bool:
+    import os
+
+    return os.getenv("LEXI_KORY_REVIEW_DRAFTS_ENABLED", "true").lower() in {"1", "true", "yes"}
+
+
+def create_kory_review_draft(
+    *,
+    to_email: str,
+    subject: str,
+    body: str,
+    cc_emails: list[str] | None = None,
+) -> dict[str, Any]:
+    """Park an email in Kory's Outlook Drafts for him to review and send himself.
+
+    Nothing leaves the mailbox: this only creates the draft. That is the whole
+    point — the draft *is* the review step, so it carries no send approval.
+
+    Deliberately not `create_outbound_draft`, which is the parked outreach-campaign
+    path: it is gated on that feature's flag, sends plain text with no signature,
+    and routes through _build_outlook_draft_arguments, which merges Kory's own CC
+    in — correct for Lexi's outbound mail, wrong for a draft sitting in his own
+    mailbox, where it would CC him on his own message.
+
+    Returns the observed draft, read back from the mailbox. A draft nobody can
+    find is not a saved draft.
+    """
+    recipient = (to_email or "").strip()
+    if not recipient or "@" not in recipient:
+        return {"ok": False, "error": "A valid recipient address is required."}
+    if not (subject or "").strip():
+        return {"ok": False, "error": "The draft needs a subject."}
+    if not (body or "").strip():
+        return {"ok": False, "error": "The draft needs a body."}
+
+    if not kory_review_drafts_enabled():
+        return {"ok": False, "error": "Saving drafts is disabled (LEXI_KORY_REVIEW_DRAFTS_ENABLED=false)."}
+
+    if settings.lexi_dry_run:
+        logger.info("[DRY RUN] Would save draft to=%s subject=%s", recipient, subject)
+        return {
+            "ok": True,
+            "dry_run": True,
+            "verified": False,
+            "to": recipient,
+            "subject": subject,
+        }
+
+    from app.scheduling.email_format import finalize_outbound_email_body
+    from app.scheduling.kory_html_signature import (
+        kory_html_email_package,
+        kory_html_signature_enabled,
+    )
+
+    plain = finalize_outbound_email_body(body)
+    if kory_html_signature_enabled():
+        html_body, inline_attachments, _ = kory_html_email_package(plain)
+    else:
+        html_body, inline_attachments = plain, []
+
+    cc_list = _plain_email_list(
+        [a for a in (cc_emails or []) if a.strip().lower() != recipient.lower()]
+    )
+    args: dict[str, Any] = {
+        "user_id": "me",
+        "subject": subject,
+        "body": html_body,
+        "is_html": bool(kory_html_signature_enabled()),
+        "to_recipients": _plain_email_list([recipient]),
+    }
+    if cc_list:
+        args["cc_recipients"] = cc_list
+
+    result = execute_tool("OUTLOOK_CREATE_DRAFT", args, role="write")
+    draft_id = _extract_draft_message_id(result.get("data")) or _extract_id(
+        _coerce_data(result.get("data"))
+    )
+    if not draft_id:
+        return {
+            "ok": False,
+            "error": "Outlook did not return a draft id — nothing was saved.",
+            "composio_log_id": result.get("log_id"),
+        }
+
+    if inline_attachments:
+        attachment = inline_attachments[0]
+        try:
+            execute_tool(
+                "OUTLOOK_ADD_MAIL_ATTACHMENT",
+                {
+                    "user_id": "me",
+                    "message_id": draft_id,
+                    "odata_type": attachment["@odata.type"],
+                    "name": attachment["name"],
+                    "contentType": attachment["contentType"],
+                    "content_bytes": attachment["contentBytes"],
+                    "isInline": True,
+                    "contentId": attachment["contentId"],
+                },
+                role="write",
+            )
+        except Exception as exc:  # noqa: BLE001 — a logo is not worth losing the draft
+            logger.warning("Draft logo attach failed (%s); draft kept without it", exc)
+
+    observed = _read_back_draft(draft_id)
+    return {
+        "ok": True,
+        "verified": bool(observed),
+        "draft_id": draft_id,
+        "to": recipient,
+        "cc": cc_list,
+        "subject": observed.get("subject") if observed else subject,
+        "is_draft": observed.get("isDraft") if observed else None,
+        "composio_log_id": result.get("log_id"),
+        **({} if observed else {"warning": "Saved, but the draft could not be read back to confirm it."}),
+    }
+
+
+def _read_back_draft(draft_id: str) -> dict[str, Any] | None:
+    """Confirm a draft exists in the mailbox. None means unverified, not absent."""
+    try:
+        result = execute_tool(
+            "OUTLOOK_GET_MESSAGE", {"user_id": "me", "message_id": draft_id}, role="write"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Draft read-back failed for %s: %s", draft_id, exc)
+        return None
+    data = _coerce_data(result.get("data"))
+    message = data.get("message") if isinstance(data.get("message"), dict) else data
+    return message if isinstance(message, dict) and message.get("id") else None
+
+
 def send_outbound_email(
     *,
     to_email: str,
