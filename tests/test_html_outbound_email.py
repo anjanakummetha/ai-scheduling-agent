@@ -17,6 +17,11 @@ def _settings(mock):
     mock.cc_kory_enabled = False
     mock.hubspot_bcc_enabled = False
     mock.lexi_require_kory_approval = True
+    # Real values, not MagicMocks: the Kory HTML signature is skipped for mail
+    # addressed to Kory himself, and that check reads these. Left as mocks, every
+    # address looks external and the briefing would get signed as if he sent it.
+    mock.kory_cc_email = "kory.mitchell@iconicfounders.com"
+    mock.kory_sender_emails = ("kory@ifg.vc", "kory@iconicfounders.com")
     return mock
 
 
