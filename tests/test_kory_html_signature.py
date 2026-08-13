@@ -48,7 +48,9 @@ def test_podcast_line_is_italic_and_links_the_podcast_site():
     assert "The Turn Podcast</a>" in podcast
     assert "https://www.theturnpodcast.com/" in podcast
     assert "iconicfounders.com" not in podcast, "podcast line must not link the company site"
-    assert "and all podcast channels." in podcast
+    # The line ends on the link — nothing trails it.
+    assert "and all podcast channels" not in podcast
+    assert podcast.rstrip().endswith("The Turn Podcast</a>")
 
 
 def test_company_line_still_links_the_company():

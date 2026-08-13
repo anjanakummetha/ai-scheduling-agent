@@ -37,7 +37,7 @@ _PODCAST_LINE_PREFIX = (
     "See amazing founders who sold their businesses on my podcast The Turn "
     "- available at "
 )
-_PODCAST_LINE_SUFFIX = " and all podcast channels."
+# The line ends on the link — no trailing "and all podcast channels."
 _PODCAST_LABEL = "The Turn Podcast"
 
 
@@ -72,7 +72,7 @@ def build_kory_html_signature_block(*, use_cid: bool = True) -> str:
         '<p style="margin:16px 0 0 0;">Let\'s Win!</p>'
         '<p style="margin:16px 0 0 0;">Kory</p>'
         '<p style="margin:16px 0 0 0;"><em>'
-        f"{html.escape(_PODCAST_LINE_PREFIX)}{podcast_link}{html.escape(_PODCAST_LINE_SUFFIX)}"
+        f"{html.escape(_PODCAST_LINE_PREFIX)}{podcast_link}"
         "</em></p>"
     )
 
