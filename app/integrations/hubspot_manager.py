@@ -409,6 +409,75 @@ def assert_contact_writable(
     }
 
 
+def _owner_annotation(*contacts: dict[str, Any]) -> dict[str, Any]:
+    """Whose records a proposed pair touches.
+
+    Duplicate scanning is portal-wide on purpose: a duplicate of Kory's contact
+    is very often the copy a colleague filed. But the proposal has to say so.
+    He approves merges one at a time off this list, and "Angelo ↔ Angelo" reads
+    identical whether both records are his or one is Heidi's — and a HubSpot
+    merge is permanent.
+    """
+    foreign = sorted(
+        {
+            owner_name(str(c.get("hubspot_owner_id") or "").strip())
+            for c in contacts
+            if str(c.get("hubspot_owner_id") or "").strip() and not kory_owns(c)
+        }
+    )
+    return {"foreign_owners": foreign, "kory_owns_all": not foreign}
+
+
+def _merge_owner_block(
+    row: dict[str, Any], *, owner_ack: bool = False
+) -> dict[str, Any] | None:
+    """Refuse a merge that would consume a record Kory does not own.
+
+    Read live rather than trusting the staged row: a batch can sit for days, and
+    the staged copy is whatever the scan happened to see.
+
+    This guard fails CLOSED, unlike the Asana owner check, which lets a read
+    failure through so an Asana outage cannot lock Kory out of his own tasks.
+    The trade is different here — an Asana mistake is reopened in one call, and
+    a HubSpot merge is not undone at all. If ownership cannot be established,
+    the merge does not happen.
+    """
+    if owner_ack:
+        return None
+    ids = [
+        str(row.get("primary_id") or "").strip(),
+        str(row.get("duplicate_id") or "").strip(),
+    ]
+    ids = [i for i in ids if i]
+    live = contacts_by_ids(ids)
+    if len(live) < len(ids):
+        return {
+            "ok": False,
+            "error_code": "owner_check_unavailable",
+            "error": (
+                "Could not read both contacts to check who owns them — "
+                "not merging. A HubSpot merge cannot be undone."
+            ),
+            "kory_message": (
+                "I couldn't confirm who owns both of these records, so I haven't "
+                "merged them. Merges are permanent — worth a look in HubSpot first."
+            ),
+        }
+    for contact in live:
+        blocked = assert_contact_writable(contact)
+        if blocked:
+            label = contact.get("name") or contact.get("email") or "one of these records"
+            return {
+                **blocked,
+                "kory_message": (
+                    f"**{label}** is owned by {blocked['owner']}, not you — and a "
+                    "HubSpot merge is permanent, so I've stopped.\n\n"
+                    "Say you want it merged anyway and I'll go ahead."
+                ),
+            }
+    return None
+
+
 def contacts_by_ids(contact_ids: list[str]) -> list[dict[str, Any]]:
     """Fetch full records for specific contact ids (so opt-out status is known)."""
     ids = [str(cid).strip() for cid in contact_ids if str(cid).strip()]
@@ -567,6 +636,7 @@ def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, 
                     "duplicate_id": dupe.get("id"),
                     "duplicate_name": dupe.get("name"),
                     "suggested_action": "merge",
+                    **_owner_annotation(primary, dupe),
                 }
             )
     for name, group in by_name.items():
@@ -590,6 +660,7 @@ def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, 
                     "duplicate_id": dupe.get("id"),
                     "duplicate_email": dupe.get("email"),
                     "suggested_action": "review_or_merge",
+                    **_owner_annotation(primary, dupe),
                 }
             )
 
@@ -617,10 +688,14 @@ def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, 
     )
     lines = [f"**HubSpot duplicate proposals** ({len(pairs)}) — {coverage_line}\n"]
     for row in pairs[:12]:
+        # Say whose records these are. He approves merges one at a time off this
+        # list, and it is the only place he sees the pair before it is permanent.
+        whose = row.get("foreign_owners") or []
+        owner_note = f" — ⚠️ owned by {', '.join(whose)}, not you" if whose else ""
         lines.append(
             f"• {row.get('primary_name') or row.get('primary_email')} "
             f"↔ {row.get('duplicate_name') or row.get('duplicate_email')} "
-            f"— **{row['suggested_action']}** ({row['reason']})"
+            f"— **{row['suggested_action']}** ({row['reason']}){owner_note}"
         )
     if not pairs:
         lines.append(
@@ -1794,7 +1869,11 @@ def propose_outreach_batch(
 
 
 def execute_hubspot_batch(
-    *, batch_id: str, approved: bool = False, merge_pair: str = ""
+    *,
+    batch_id: str,
+    approved: bool = False,
+    merge_pair: str = "",
+    owner_ack: bool = False,
 ) -> dict[str, Any]:
     """Apply staged batch only after approval; still blocked when live writes disabled."""
     assert_kory_approved_write(approved=approved, action="HubSpot batch update")
@@ -1833,6 +1912,7 @@ def execute_hubspot_batch(
             ],
         }
     skipped = 0
+    not_owned = 0
     if batch_type == "duplicate_merge":
         # A HubSpot merge cannot be undone, and the staging message promises Kory
         # that each one gets its own approval. Applying a whole batch on a single
@@ -1866,6 +1946,12 @@ def execute_hubspot_batch(
                 "pairs": pairs,
             }
         for row in chosen:
+            # Ownership is checked here rather than at proposal time: the scan is
+            # portal-wide by design, and this is the last point before the merge
+            # becomes permanent.
+            blocked = _merge_owner_block(row, owner_ack=owner_ack)
+            if blocked:
+                return {**blocked, "batch_id": batch_id, "applied": 0, "errors": []}
             try:
                 _apply_merge_row(row)
                 applied += 1
@@ -1874,8 +1960,13 @@ def execute_hubspot_batch(
     elif batch_type in {"field_enrichment", "lead_source_fill"}:
         for row in payload.get("proposals", []):
             try:
-                if _apply_field_fill(row):
+                outcome = _apply_field_fill(row, owner_ack=owner_ack)
+                if outcome == "applied":
                     applied += 1
+                elif outcome == "not_kory_owned":
+                    # Reported separately: telling him 3 were "skipped" reads as
+                    # "you'd already done those", not "those are someone else's".
+                    not_owned += 1
                 else:
                     # Field filled in by hand since staging — his value wins.
                     skipped += 1
@@ -1897,13 +1988,20 @@ def execute_hubspot_batch(
         except Exception as exc:
             errors.append(str(exc))
 
-    return {
+    result = {
         "ok": not errors,
         "applied": applied,
         "skipped": skipped,
         "errors": errors,
         "batch_id": batch_id,
     }
+    if not_owned:
+        result["not_kory_owned"] = not_owned
+        result["kory_message"] = (
+            f"Filled {applied}. Left {not_owned} alone — those records belong to "
+            "other people at IFG, so I didn't touch them."
+        )
+    return result
 
 
 def _hubspot_write_ok(result: dict[str, Any]) -> tuple[bool, str]:
@@ -1947,30 +2045,36 @@ def _apply_merge_row(row: dict[str, Any]) -> None:
     )
 
 
-def _apply_field_fill(row: dict[str, Any]) -> bool:
+def _apply_field_fill(row: dict[str, Any], *, owner_ack: bool = False) -> str:
     """Write proposed fields, re-checking at apply time that they are still blank.
 
     A batch can sit staged for days; if Kory filled the field himself in the
     meantime, his value wins. Blank-only is enforced here as well as at proposal
     time so a stale batch can never overwrite real data.
 
-    Returns True only when HubSpot was actually written to, so the caller's
-    "applied" count can't report work that was correctly skipped.
+    Returns why nothing was written, not just that nothing was — "he already
+    filled it in" and "that record is Heidi's" are different facts and the
+    caller reports them to him. Only "applied" means HubSpot was written to.
     """
     contact_id = row.get("contact_id")
     props = row.get("proposed_fields") or {}
     if not contact_id or not props:
-        return False
+        return "nothing_proposed"
     current = contacts_by_ids([str(contact_id)])
     if current:
         live = current[0]
+        # Enrichment is scoped to Kory's own contacts at proposal time, but the
+        # scope is a caller argument and the batch outlives it. Never write to a
+        # colleague's record just because a stale row said so.
+        if assert_contact_writable(live, owner_ack=owner_ack):
+            return "not_kory_owned"
         props = {
             key: value
             for key, value in props.items()
             if not str(live.get(key) or "").strip() or is_placeholder(live.get(key), field=key)
         }
     if not props:
-        return False
+        return "already_filled"
     _raise_if_refused(
         execute_hubspot_tool(
             HUBSPOT_UPDATE_CONTACT,
@@ -1978,7 +2082,7 @@ def _apply_field_fill(row: dict[str, Any]) -> bool:
         ),
         f"Enrich contact {contact_id}",
     )
-    return True
+    return "applied"
 
 
 def _draft_outreach_email(*, name: str, goal: str) -> dict[str, str]:
