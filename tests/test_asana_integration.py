@@ -483,3 +483,62 @@ def test_people_resolve_however_kory_refers_to_them(workspace, asked, expected):
 @pytest.mark.parametrize("nonsense", ["Zebedee", "xylophone", "asdfgh"])
 def test_a_stranger_still_matches_nobody(workspace, nonsense):
     assert workspace.resolve_asana_user_gid(nonsense) == ("", "")
+
+
+def _task_read(monkeypatch, *, name, assignee, completed=False):
+    from app.integrations import asana_manager as am
+
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(
+        am, "_read_task_state",
+        lambda gid: {"gid": gid, "name": name, "assignee": assignee, "completed": completed},
+    )
+    return am
+
+
+def test_a_gid_belonging_to_someone_else_is_stopped(monkeypatch):
+    """The live failure. Lexi searches first and then acts on the gid, so the
+    owner guard — which only ran on the name path — never fired, and "mark the
+    Steve Chanen pre-interview as done" closed Heidi's task on a shared board."""
+    am = _task_read(monkeypatch, name="Steve Chanen Pre-Interview", assignee="Heidi Heckler")
+    gid, err = am.resolve_task_or_error("1217473136883316")
+    assert gid == ""
+    assert err["error_code"] == "owner_confirmation_required"
+    assert "Heidi Heckler" in err["error"]
+
+
+def test_korys_own_task_passes_by_gid(monkeypatch):
+    am = _task_read(monkeypatch, name="Call Pete", assignee="Kory Mitchell")
+    assert am.resolve_task_or_error("123")[1] is None
+
+
+def test_an_unassigned_task_passes_by_gid(monkeypatch):
+    am = _task_read(monkeypatch, name="rusty", assignee=None)
+    assert am.resolve_task_or_error("123")[1] is None
+
+
+def test_owner_ack_lets_it_through(monkeypatch):
+    am = _task_read(monkeypatch, name="Steve Chanen Pre-Interview", assignee="Heidi Heckler")
+    assert am.resolve_task_or_error("123", owner_ack=True)[1] is None
+
+
+def test_an_unreadable_task_does_not_block_kory(monkeypatch):
+    """An Asana outage is not grounds to lock him out of his own tasks."""
+    from app.integrations import asana_manager as am
+
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(am, "_read_task_state", lambda gid: None)
+    assert am.resolve_task_or_error("123")[1] is None
+
+
+def test_completing_someone_elses_task_by_gid_writes_nothing(monkeypatch):
+    """End to end: the guard has to stop the write, not just the resolution."""
+    from app.integrations import asana_manager as am
+
+    calls = []
+    _task_read(monkeypatch, name="Steve Chanen Pre-Interview", assignee="Heidi Heckler")
+    monkeypatch.setattr(am, "execute_asana_tool", lambda slug, args=None: calls.append(slug))
+    out = am.complete_asana_task(task_gid="1217473136883316", approved=True)
+    assert out["ok"] is False
+    assert out["error_code"] == "owner_confirmation_required"
+    assert not calls, "must not touch Asana"
