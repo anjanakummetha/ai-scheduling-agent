@@ -419,10 +419,30 @@ def test_enrichment_applied_count_excludes_skipped_rows(
     mock_tool.assert_not_called()
 
 
+
+def _kory_owned(*contact_ids):
+    """Stub live contact reads with records Kory owns.
+
+    The merge guard re-reads both contacts to check ownership and fails closed
+    when it cannot. Tests about merge *mechanics* have to say whose records
+    these are, or they are really testing the ownership guard by accident.
+    """
+    from app.integrations.hubspot_manager import kory_owner_id
+
+    def _read(ids):
+        return [
+            {"id": str(i), "name": f"Contact {i}", "hubspot_owner_id": kory_owner_id()}
+            for i in ids
+        ]
+
+    return _read
+
+
+@patch("app.integrations.hubspot_manager.contacts_by_ids", side_effect=_kory_owned())
 @patch("app.integrations.hubspot_manager.execute_hubspot_tool")
 @patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
 def test_merges_are_one_at_a_time_and_must_name_the_pair(
-    _blocked, mock_tool, tmp_path, monkeypatch
+    _blocked, mock_tool, _contacts, tmp_path, monkeypatch
 ):
     """HubSpot merges are permanent; one approval must not apply a whole batch."""
     monkeypatch.setenv("LEXI_DATABASE_PATH", str(tmp_path / "lexi.db"))
@@ -464,10 +484,11 @@ def test_merges_are_one_at_a_time_and_must_name_the_pair(
     assert args == {"primaryObjectId": "3", "objectIdToMerge": "4"}
 
 
+@patch("app.integrations.hubspot_manager.contacts_by_ids", side_effect=_kory_owned())
 @patch("app.integrations.hubspot_manager.execute_hubspot_tool")
 @patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
 def test_a_refused_merge_is_reported_not_counted_as_applied(
-    _blocked, mock_tool, tmp_path, monkeypatch
+    _blocked, mock_tool, _contacts, tmp_path, monkeypatch
 ):
     """HubSpot answering successful=false must not read as a completed merge.
 
