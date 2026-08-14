@@ -31,6 +31,8 @@ def wired(monkeypatch):
     monkeypatch.setattr(am, "execute_asana_tool", fake_tool)
     monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
     monkeypatch.setattr(am, "list_asana_project_options", lambda: {"projects": PROJECTS})
+    # Duplicate detection has its own tests below; here it would fire on fixture data.
+    monkeypatch.setattr(am, "find_similar_open_task", lambda title, **kw: None)
     monkeypatch.setattr(
         am,
         "settings",
@@ -474,3 +476,104 @@ def test_all_three_questions_arrive_together(wired, monkeypatch):
     assert set(out["needs"]) == {"board", "due_on", "assignee"}
     message = out["kory_message"]
     assert "board" in message.lower() and "due" in message.lower() and "owns" in message.lower()
+
+
+# ── one task on two projects is not two tasks ────────────────────────────────
+
+
+def test_a_multi_homed_task_appears_once_and_names_both_projects(monkeypatch):
+    """Lexi saw the Bruce reminder listed under IFG Tasks and IFG Hubspot Tasks,
+    called it a duplicate, and offered to delete "the duplicate" — which would
+    have removed the only copy. Same gid, one task, two projects."""
+    monkeypatch.setattr(
+        am, "list_asana_project_options",
+        lambda: {"projects": [{"gid": "p1", "name": "IFG Tasks"},
+                              {"gid": "p2", "name": "IFG Hubspot Tasks"}]},
+    )
+
+    def fake_list(*, bucket, limit, project_gid, project_name, mine_only):
+        return {"tasks": [{"gid": "1211443820131693", "due_on": "2026-08-05",
+                           "name": "Remind me to send Bruce Krinksy a fractional CFO",
+                           "project": project_name}]}
+
+    monkeypatch.setattr(am, "list_asana_tasks", fake_list)
+    out = am._list_tasks_across_projects(bucket="overdue", limit=50, mine_only=True)
+    assert len(out["tasks"]) == 1, "one task, not two rows"
+    row = out["tasks"][0]
+    assert row["multi_homed"] is True
+    assert "IFG Tasks" in row["project"] and "IFG Hubspot Tasks" in row["project"]
+
+
+def test_genuinely_separate_tasks_are_not_collapsed(monkeypatch):
+    monkeypatch.setattr(
+        am, "list_asana_project_options",
+        lambda: {"projects": [{"gid": "p1", "name": "A"}, {"gid": "p2", "name": "B"}]},
+    )
+    seq = iter([
+        {"tasks": [{"gid": "1", "name": "one", "project": "A"}]},
+        {"tasks": [{"gid": "2", "name": "two", "project": "B"}]},
+    ])
+    monkeypatch.setattr(am, "list_asana_tasks", lambda **kw: next(seq))
+    out = am._list_tasks_across_projects(bucket="all", limit=50, mine_only=False)
+    assert len(out["tasks"]) == 2
+    assert not any(t.get("multi_homed") for t in out["tasks"])
+
+
+# ── don't create a second copy of open work ──────────────────────────────────
+
+
+def test_create_flags_an_existing_open_task(wired, monkeypatch):
+    """"test no questions" made a second copy of a task that already existed."""
+    monkeypatch.setattr(
+        am, "find_similar_open_task",
+        lambda title, **kw: {"gid": "9", "name": "Follow up with Angelo (Morgan Stanley)",
+                             "due_on": "2026-07-29", "project": "IFG Tasks"},
+    )
+    out = am.create_asana_task_from_chat(
+        title="Follow up with Angelo about the Affiliate Investment Bank programme",
+        project="IFG Tasks", approved=True,
+    )
+    assert out["ok"] is False
+    assert out["error_code"] == "possible_duplicate"
+    assert out["existing_task"]["gid"] == "9"
+    assert "re-date" in out["kory_message"]
+    assert not any(s == "ASANA_CREATE_A_TASK" for s, _ in wired), "nothing created"
+
+
+def test_kory_can_insist_on_a_separate_task(wired, monkeypatch):
+    _boards(monkeypatch)
+    monkeypatch.setattr(
+        am, "find_similar_open_task",
+        lambda title, **kw: {"gid": "9", "name": "x", "project": "IFG Tasks"},
+    )
+    out = am.create_asana_task_from_chat(
+        title="T", project="IFG Tasks", section="General", due_on="no due date",
+        assignee="unassigned", allow_duplicate=True, approved=True,
+    )
+    assert out["ok"] is True
+
+
+def test_a_completed_task_is_not_a_duplicate(monkeypatch):
+    """Finishing something and starting it again is normal."""
+    monkeypatch.setattr(
+        am, "search_asana_tasks",
+        lambda **kw: {"tasks": [{"gid": "1", "name": "Order prescription refills",
+                                 "completed": True}]},
+    )
+    assert am.find_similar_open_task("Order prescription refills") is None
+
+
+def test_an_unrelated_title_is_not_a_duplicate(monkeypatch):
+    monkeypatch.setattr(
+        am, "search_asana_tasks",
+        lambda **kw: {"tasks": [{"gid": "1", "name": "Book dinner", "completed": False}]},
+    )
+    assert am.find_similar_open_task("Renew my passport") is None
+
+
+def test_a_failed_duplicate_search_never_blocks_the_create(monkeypatch):
+    def boom(**kw):
+        raise RuntimeError("Asana 500")
+
+    monkeypatch.setattr(am, "search_asana_tasks", boom)
+    assert am.find_similar_open_task("anything") is None

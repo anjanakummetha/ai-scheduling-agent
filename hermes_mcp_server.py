@@ -492,6 +492,7 @@ def lexi_create_asana_task(
     section: str = "",
     project: str = "",
     assignee: str = "",
+    allow_duplicate: str = "false",
     confirm: str = "false",
 ) -> str:
     """Create an Asana task.
@@ -520,6 +521,7 @@ def lexi_create_asana_task(
         section=section,
         project=project,
         assignee=assignee,
+        allow_duplicate=allow_duplicate.strip().lower() in {"1", "true", "yes"},
         confirm=approved,
     )
 
