@@ -101,7 +101,10 @@ def test_enrichment_proposes_signature_fields_for_blank_only(
     first, second = out["proposals"]
     assert first["proposed_fields"] == {"jobtitle": "CEO", "company": "Signature Co"}
     assert second["proposed_fields"] == {"jobtitle": "CEO"}, "must not overwrite a real company"
-    assert first["provenance"]["message_id"] == "msg-1"
+    # Evidence is per field: one contact can be filled from HubSpot's own company
+    # record and from a signature in the same proposal.
+    assert first["evidence"]["jobtitle"]["source"] == "outlook_signature"
+    assert first["evidence"]["jobtitle"]["message_id"] == "msg-1"
 
 
 def test_signature_extraction_reads_the_senders_own_block():

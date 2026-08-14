@@ -211,7 +211,12 @@ def test_applying_a_batch_records_what_each_write_replaced(_blocked, db):
         [{
             "contact_id": "9",
             "proposed_fields": {"company": "Real Capital"},
-            "provenance": {"message_id": "m1"},
+            "evidence": {
+                "company": {
+                    "source": "hubspot_company_association",
+                    "detail": "HubSpot already links this contact to company #77 (Real Capital).",
+                }
+            },
         }]
     )
     live = {
@@ -236,7 +241,10 @@ def test_applying_a_batch_records_what_each_write_replaced(_blocked, db):
     assert len(rows) == 1
     assert rows[0]["old_value"] == "Prefer No Connection to Company"
     assert rows[0]["new_value"] == "Real Capital"
-    assert rows[0]["source"] == "m1"
+    # The log carries the human-readable reason, not an opaque id: six months on,
+    # "HubSpot already links this contact to company #77" is what makes a bad
+    # fill judgeable without re-deriving where it came from.
+    assert "links this contact to company #77" in rows[0]["source"]
 
 
 @patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)

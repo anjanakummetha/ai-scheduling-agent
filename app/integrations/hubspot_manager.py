@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from typing import Any
@@ -1001,6 +1003,78 @@ def _phone_from_signature(lines: list[str], *, start_at: int) -> str:
 
 ENRICHABLE_FIELDS = ("jobtitle", "company", "phone")
 
+# Mining one contact's signature costs an inbox search plus a body fetch per
+# candidate message — measured at ~3s. Eighty candidates is four minutes, which
+# is how this timed out in Teams on its first real run. The work is bounded two
+# ways: a hard cap on contacts per call, and a wall clock that returns whatever
+# has been found so far rather than dying with nothing.
+ENRICH_BATCH_DEFAULT = 12
+ENRICH_BATCH_MAX = 25
+ENRICH_TIME_BUDGET_SEC = 70
+# Most candidates have no mail from them at all — 20 of 21 in the first live run.
+# Without remembering that, every repeat call spends its whole budget on the
+# same misses and never reaches the contacts further down the list.
+ENRICH_MISS_TTL_DAYS = 14
+
+
+def _ensure_enrichment_checks_table(conn: Any) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS hubspot_enrichment_checks (
+            contact_id TEXT PRIMARY KEY,
+            checked_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+
+def _recent_enrichment_misses() -> set[str]:
+    """Contacts already searched with no usable signature, recently enough to skip."""
+    from app.storage.lexi_db import get_lexi_connection
+
+    try:
+        with get_lexi_connection() as conn:
+            _ensure_enrichment_checks_table(conn)
+            rows = conn.execute(
+                "SELECT contact_id FROM hubspot_enrichment_checks "
+                "WHERE checked_at > datetime('now', ?)",
+                (f"-{ENRICH_MISS_TTL_DAYS} days",),
+            ).fetchall()
+        return {str(r["contact_id"]) for r in rows}
+    except Exception:
+        # A cache miss must never stop the scan — worst case it redoes the work.
+        return set()
+
+
+def _record_enrichment_misses(contact_ids: list[str]) -> None:
+    if not contact_ids:
+        return
+    from app.storage.lexi_db import get_lexi_connection
+
+    try:
+        with get_lexi_connection() as conn:
+            _ensure_enrichment_checks_table(conn)
+            conn.executemany(
+                "INSERT INTO hubspot_enrichment_checks (contact_id, checked_at) "
+                "VALUES (?, datetime('now')) "
+                "ON CONFLICT(contact_id) DO UPDATE SET checked_at = datetime('now')",
+                [(str(cid),) for cid in contact_ids],
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def clear_enrichment_check_cache() -> int:
+    """Forget which contacts had no signature, so the next scan re-checks them."""
+    from app.storage.lexi_db import get_lexi_connection
+
+    with get_lexi_connection() as conn:
+        _ensure_enrichment_checks_table(conn)
+        removed = conn.execute("DELETE FROM hubspot_enrichment_checks").rowcount
+        conn.commit()
+    return removed
+
 
 def _needs_filling(contact: dict[str, Any], field: str) -> bool:
     """Blank, or populated with something that carries no information."""
@@ -1036,6 +1110,11 @@ def find_enrichment_candidates(
     totals: dict[str, int | None] = {}
 
     passes: list[tuple[str, list[dict[str, Any]]]] = [
+        # Company first: it is the gap HubSpot's own records can close outright,
+        # with no inference and no inbox reading. Title-first ordering meant a
+        # batch spent its whole budget on signature mining and never reached a
+        # contact whose employer was already sitting in the CRM.
+        ("missing_company", [{"propertyName": "company", "operator": "NOT_HAS_PROPERTY"}, contacted]),
         ("missing_jobtitle", [{"propertyName": "jobtitle", "operator": "NOT_HAS_PROPERTY"}, contacted]),
     ]
     if include_phone:
@@ -1078,54 +1157,151 @@ def find_enrichment_candidates(
 
 def propose_field_enrichment(
     *,
-    limit: int = 25,
+    limit: int = ENRICH_BATCH_DEFAULT,
     owner_id: str | None = None,
     include_phone: bool = False,
+    use_website: bool = True,
+    time_budget_seconds: int = ENRICH_TIME_BUDGET_SEC,
 ) -> dict[str, Any]:
     """Propose title/company/phone fills sourced from Kory's own email signatures.
 
     Read-only: proposals are staged for approval and never applied while writes
     are blocked. Only fields that are blank *or hold a placeholder* are ever
     proposed — a real existing value is never overwritten.
+
+    Works in batches, and says so. Reading one signature costs ~3 seconds, so a
+    scan of every candidate cannot finish inside a tool call; this returns what
+    it found within the budget along with how many are left, and remembers the
+    contacts that had no mail so the next call starts where this one stopped.
     """
     if not hubspot_configured():
         return {"ok": False, "kory_message": "**HubSpot:** not connected."}
 
+    batch = max(1, min(ENRICH_BATCH_MAX, limit))
     scope_owner = owner_id if owner_id is not None else kory_owner_id()
     try:
         contacts, coverage = find_enrichment_candidates(
-            limit=limit, owner_id=scope_owner, include_phone=include_phone
+            # Scan wider than we mine: the candidate list is cheap, the
+            # signatures are not.
+            limit=max(batch * 4, 100),
+            owner_id=scope_owner,
+            include_phone=include_phone,
         )
     except Exception as exc:
         return {"ok": False, "error": str(exc), "kory_message": "HubSpot lookup failed."}
 
-    proposals: list[dict[str, Any]] = []
-    no_source: list[str] = []
+    already_checked = _recent_enrichment_misses()
+    fresh = [c for c in contacts if str(c.get("id") or "") not in already_checked]
+    skipped_known = len(contacts) - len(fresh)
+    queue = fresh[:batch]
+    remaining = len(fresh) - len(queue)
 
-    for contact in contacts:
-        email = (contact.get("email") or "").strip()
-        if not email:
+    from app.integrations import hubspot_company_lookup as company_lookup
+
+    # Built from the contacts already read — no extra calls.
+    consensus = company_lookup.build_domain_consensus(contacts, is_placeholder=is_placeholder)
+
+    proposals: list[dict[str, Any]] = []
+    no_source: list[dict[str, Any]] = []
+    misses: list[str] = []
+    ran_out_of_time = False
+    started = time.monotonic()
+
+    # Phase 1 — the certain source, for every contact in the batch.
+    #
+    # Resolving a company out of HubSpot's own records is fast and its domain
+    # lookups are cached, so this runs to completion before any time is spent on
+    # the inbox. Doing it per-contact inside the expensive loop meant the time
+    # limit cut off contacts whose employer HubSpot already knew.
+    found_company: dict[str, dict[str, Any]] = {}
+    for contact in queue:
+        if not _needs_filling(contact, "company"):
             continue
-        known_company = str(contact.get("company") or "")
+        if time.monotonic() - started > time_budget_seconds:
+            ran_out_of_time = True
+            break
+        try:
+            resolved = company_lookup.resolve_company(
+                contact, consensus=consensus, use_website=use_website
+            )
+        except Exception:
+            resolved = None
+        if resolved:
+            found_company[str(contact.get("id") or "")] = resolved
+
+    # Phase 2 — the inbox, for whatever is still missing.
+    checked = 0
+    for contact in queue:
+        cid = str(contact.get("id") or "")
+        fields: dict[str, str] = {}
+        evidence: dict[str, dict[str, Any]] = {}
+
+        resolved = found_company.get(cid)
+        if resolved:
+            fields["company"] = resolved["value"]
+            evidence["company"] = {
+                "source": resolved["source"],
+                "detail": resolved["evidence"],
+                "confidence": "certain",
+            }
+
+        email = (contact.get("email") or "").strip()
+        known_company = fields.get("company") or str(contact.get("company") or "")
         if is_placeholder(known_company, field="company"):
             # Junk in the field must not act as a known company, or the miner
             # keeps the placeholder and proposes nothing.
             known_company = ""
-        fields, provenance = _signature_fields_for(
-            email,
-            known_company=known_company,
-            contact_name=str(contact.get("name") or ""),
-        )
-        # Never propose a value for a field that already holds real data.
-        fields = {
-            key: value
-            for key, value in fields.items()
-            if key in ENRICHABLE_FIELDS
-            and (include_phone or key != "phone")
-            and _needs_filling(contact, key)
-        }
+
+        still_missing = [
+            f
+            for f in ENRICHABLE_FIELDS
+            if (include_phone or f != "phone") and f not in fields and _needs_filling(contact, f)
+        ]
+        out_of_time = time.monotonic() - started > time_budget_seconds
+        if email and still_missing and not out_of_time:
+            checked += 1
+            mined, provenance = _signature_fields_for(
+                email,
+                known_company=known_company,
+                contact_name=str(contact.get("name") or ""),
+            )
+            for key, value in mined.items():
+                if key in fields or key not in still_missing:
+                    continue
+                fields[key] = value
+                evidence[key] = {
+                    "source": "outlook_signature",
+                    "detail": (
+                        f"From {provenance.get('sender') or email}'s own signature in "
+                        f"\"{provenance.get('subject') or 'a message to you'}\"."
+                    ),
+                    "confidence": "certain",
+                    "message_id": provenance.get("message_id"),
+                }
+        elif still_missing and out_of_time:
+            # Not searched, so not a miss — it must not be remembered as one or
+            # the next batch will skip it.
+            ran_out_of_time = True
+            remaining += 1
+            if fields:
+                # The certain part still stands; propose it and move on.
+                pass
+            else:
+                continue
+
         if not fields:
-            no_source.append(email)
+            no_source.append(
+                {
+                    "contact_id": contact.get("id"),
+                    "email": email,
+                    "name": contact.get("name"),
+                    "missing": [f for f in ENRICHABLE_FIELDS
+                                if (include_phone or f != "phone") and _needs_filling(contact, f)],
+                    "domain": company_lookup.domain_of(email),
+                    "corporate_domain": company_lookup.is_corporate_domain(email),
+                }
+            )
+            misses.append(str(contact.get("id") or ""))
             continue
         proposals.append(
             {
@@ -1138,32 +1314,38 @@ def propose_field_enrichment(
                 "replacing": {
                     key: str(contact.get(key) or "") for key in fields if str(contact.get(key) or "").strip()
                 },
-                "source": "outlook_signature",
-                "provenance": provenance,
+                # One record per field: what it is, where it came from, and how
+                # sure we are. Values from different sources land on the same
+                # contact, so provenance cannot be a single row-level fact.
+                "evidence": evidence,
+                "source": ",".join(sorted({e["source"] for e in evidence.values()})),
                 "suggested_action": "fill_blank_fields",
             }
         )
 
+    _record_enrichment_misses(misses)
+
     batch_id = _stage_hubspot_batch(
         batch_type="field_enrichment",
-        payload={"proposals": proposals, "source": "outlook_signature"},
+        payload={"proposals": proposals, "needs_research": no_source},
     )
     junk_fixes = sum(1 for row in proposals if row.get("replacing"))
+    by_source: Counter[str] = Counter(
+        ev["source"] for row in proposals for ev in (row.get("evidence") or {}).values()
+    )
+
     lines = [
         f"**Contact enrichment — {len(proposals)} fill(s) proposed** "
-        f"from {coverage['scanned']} contact(s) scanned\n"
+        f"from {checked} contact(s) checked this batch\n"
     ]
-    if junk_fixes:
-        lines.append(
-            f"_{junk_fixes} of these replace a placeholder value "
-            "(e.g. 'Prefer No Connection to Company') rather than a blank field._\n"
-        )
     for row in proposals[:12]:
         parts = []
         for key, value in (row.get("proposed_fields") or {}).items():
             was = (row.get("replacing") or {}).get(key)
-            parts.append(f"{key} = {value}" + (f" (was '{was}')" if was else ""))
+            parts.append(f"**{key}** = {value}" + (f" _(was '{was}')_" if was else ""))
         lines.append(f"• {row.get('name') or row['email']} — {', '.join(parts)}")
+        for key, ev in (row.get("evidence") or {}).items():
+            lines.append(f"    ↳ {key}: {ev['detail']}")
     if len(proposals) > 12:
         # One approval applies the whole batch, so never imply the list is all of it.
         lines.append(
@@ -1171,9 +1353,52 @@ def propose_field_enrichment(
             f"{len(proposals)}._"
         )
     if not proposals:
-        lines.append("_No usable signatures found in the sampled contacts._")
+        lines.append("_Nothing could be established for this batch._")
+
+    if by_source:
+        lines.append(
+            "\n**Where these came from:** "
+            + " · ".join(f"{_SOURCE_LABELS.get(s, s)} {n}" for s, n in by_source.most_common())
+        )
+    if junk_fixes:
+        lines.append(
+            f"_{junk_fixes} replace a placeholder value such as "
+            "'Prefer No Connection to Company' rather than filling a blank._"
+        )
+
+    # Say plainly what could not be established, and do not suggest a route
+    # Lexi does not have. She has no LinkedIn access and no web lookup here;
+    # offering one sends Kory chasing a capability that is not wired up.
     if no_source:
-        lines.append(f"\n_{len(no_source)} contact(s) had no readable signature._")
+        researchable = [r for r in no_source if r.get("corporate_domain")]
+        lines.append(
+            f"\n**{len(no_source)} I could not establish anything for.** Nothing in your inbox, "
+            "nothing in HubSpot's own company records, and nothing usable on their company's "
+            "website. I don't look people up individually — I have no LinkedIn access, and I "
+            "won't put a job title on someone from a web search I can't verify is the right person."
+        )
+        if researchable:
+            lines.append(
+                f"_{len(researchable)} are on a company domain "
+                f"({', '.join(sorted({r['domain'] for r in researchable})[:5])}…) — those are "
+                "the ones worth a manual look._"
+            )
+
+    if remaining or ran_out_of_time:
+        lines.append(
+            f"\n**{remaining} contact(s) still unchecked.** "
+            + (
+                "I stopped at the time limit for this batch. "
+                if ran_out_of_time
+                else "I work through these a batch at a time. "
+            )
+            + "Say _keep going_ and I'll pick up where I left off."
+        )
+    if skipped_known:
+        lines.append(
+            f"_Skipped {skipped_known} I already checked recently and found nothing for._"
+        )
+
     lines.append(
         f"\n_Staged only — HubSpot was not modified. Apply with batch `{batch_id}`; "
         "every value records where it came from and can be undone._"
@@ -1183,12 +1408,26 @@ def propose_field_enrichment(
         "batch_id": batch_id,
         "proposal_count": len(proposals),
         "proposals": proposals,
+        "needs_research": no_source,
         "no_source_count": len(no_source),
         "placeholder_replacements": junk_fixes,
+        "sources": dict(by_source),
+        "checked": checked,
+        "remaining": remaining,
+        "skipped_recently_checked": skipped_known,
+        "stopped_at_time_limit": ran_out_of_time,
         "coverage": coverage,
         "writes_blocked": hubspot_writes_blocked(),
         "kory_message": "\n".join(lines),
     }
+
+
+_SOURCE_LABELS = {
+    "hubspot_company_association": "HubSpot's own company link",
+    "hubspot_company_domain": "HubSpot company record for the domain",
+    "kory_book_consensus": "your other contacts at that domain",
+    "outlook_signature": "their email signature",
+}
 
 
 def _signature_fields_for(
@@ -2531,8 +2770,17 @@ def _apply_field_fill(
     # Recorded only after HubSpot accepted it, so the undo log never claims a
     # write that did not land.
     if batch_id:
-        source = str((row.get("provenance") or {}).get("message_id") or row.get("source") or "")
+        evidence = row.get("evidence") or {}
         for key, value in props.items():
+            # Per-field, because a single contact can be filled from HubSpot's
+            # own company record and from a signature in the same write.
+            per_field = evidence.get(key) or {}
+            source = str(
+                per_field.get("detail")
+                or per_field.get("source")
+                or row.get("source")
+                or ""
+            )[:300]
             _record_applied_write(
                 batch_id=batch_id,
                 contact_id=str(contact_id),

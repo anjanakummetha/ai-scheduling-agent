@@ -733,27 +733,44 @@ def lexi_hubspot_duplicate_merges(limit: str = "0") -> str:
 
 
 @_tool
-def lexi_hubspot_enrich_contacts(limit: str = "25", include_phone: str = "false") -> str:
-    """Propose job title / company / phone fills from Kory's own email signatures.
+def lexi_hubspot_enrich_contacts(limit: str = "12", include_phone: str = "false") -> str:
+    """Fill gaps in Kory's HubSpot contacts from sources that cannot be wrong.
 
     Call this first — the tool does the scanning and reports what it found.
 
-    Fills a field only when it is blank OR holds a placeholder such as
-    'Prefer No Connection to Company' (what LinkedIn writes when a member hides
-    their employer). A real value is never overwritten, and that is re-checked at
-    apply time so a stale batch cannot clobber something Kory filled in himself.
+    Two sources, both factual: HubSpot's own company records (an existing
+    company link, or a company record matching the contact's email domain), and
+    the contact's own email signature in Kory's inbox. Nothing is guessed or
+    inferred; every proposed value comes with the evidence behind it, which you
+    should pass on to Kory rather than summarising away.
 
-    Pass include_phone='true' to also propose phone numbers — 30% of his book has
-    none and LinkedIn cannot supply them, so his own inbox is the only source.
+    Fills a field only when it is blank OR holds a placeholder such as
+    'Prefer No Connection to Company'. A real value is never overwritten, and
+    that is re-checked at apply time so a stale batch cannot clobber something
+    Kory filled in himself.
+
+    **Works one batch at a time.** The result carries `remaining` and
+    `stopped_at_time_limit`. When contacts are left, say so and offer to keep
+    going — a second call continues rather than repeating, because contacts that
+    yielded nothing are remembered.
+
+    **You have no other source for the rest.** For contacts this cannot resolve,
+    report that plainly. Do NOT suggest checking LinkedIn or searching the web —
+    you have no access to either, and offering them sends Kory after a capability
+    that does not exist. Naming the ones on a company domain as worth a manual
+    look is fine.
+
+    Pass include_phone='true' to also propose phone numbers. Phone comes only
+    from signatures, never from any other source.
 
     Nothing is written here. This returns a batch_id; applying it is a separate,
     confirmed call to lexi_hubspot_apply_batch, and every applied value can be
     undone with lexi_hubspot_undo_batch.
     """
     try:
-        n = max(1, min(200, int(limit.strip() or "25")))
+        n = max(1, min(25, int(limit.strip() or "12")))
     except ValueError:
-        n = 25
+        n = 12
     return _wrap(
         "lexi_hubspot_enrich_contacts",
         lexi.hubspot_enrichment_action,
