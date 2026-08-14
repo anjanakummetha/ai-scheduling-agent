@@ -495,14 +495,26 @@ def lexi_create_asana_task(
     allow_duplicate: str = "false",
     confirm: str = "false",
 ) -> str:
-    """Create an Asana task.
+    """Create an Asana task. Call this FIRST — before you ask Kory anything.
 
-    project, section and due_on are all REQUIRED before anything is written.
-    Kory keeps several projects and each has several boards, and an undated task
-    never reaches his overdue list. If any is missing the tool returns
-    project_required or task_details_required with the options: ASK him, then
-    retry with his answer. Do not choose for him, and do not pass "default" or
-    "General" unless he said so. "no due date" is a valid answer to the date.
+    Call it the moment he asks for a task, with the title and whatever else he
+    already said. Do NOT ask him about the project, board or due date yourself,
+    and do not look up projects or boards first: this tool checks whether he
+    already has an open task covering it, and when he does those questions are
+    moot — he wants that one re-dated, not a second copy. Asking up front is how
+    "add a task to schedule a consultation with Brooke" got three questions about
+    a task he already had open.
+
+    project, section and due_on are all required before anything is written —
+    but the TOOL is what asks for them, not you. When one is missing it returns
+    project_required or task_details_required with the options and the question
+    to put to him: ask that, then retry with his answer. Do not choose for him,
+    and do not pass "default" or "General" unless he said so. "no due date" is a
+    valid answer to the date.
+
+    If it returns possible_duplicate, tell him about the task he already has and
+    ask whether to re-date it or create a second one. Pass allow_duplicate='true'
+    only after he says he wants both.
 
     assignee: full name or email to own the task ("assign it to Heidi"). Resolved
     against the workspace. Leave blank to leave it unassigned.
