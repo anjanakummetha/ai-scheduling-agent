@@ -181,3 +181,49 @@ def test_a_task_that_could_not_be_assigned_is_not_reported_as_assigned(wired, mo
     assert out["ok"] is False
     assert "assigning it to" in out["error"]
     assert "created" in out["error"], "must still say the task exists"
+
+
+def test_a_board_is_looked_for_in_the_project_holding_the_task(wired, monkeypatch):
+    """"move it to This Week" answered "no such board" — sections were resolved
+    against the home project, not the project the task actually lives in."""
+    looked_in = {}
+
+    def fake_sections(project_gid=""):
+        looked_in["gid"] = project_gid
+        return [{"gid": "sec-week", "name": "📌 This Week"}] if project_gid == "p-anju" else []
+
+    monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
+    monkeypatch.setattr(am, "_task_project_gids", lambda gid: ["p-anju"])
+    monkeypatch.setattr(am, "list_project_sections", fake_sections)
+
+    out = am.move_asana_task_to_section(task_gid="42", section_name="This Week", approved=True)
+    assert looked_in["gid"] == "p-anju", "must search the task's own project"
+    assert out["ok"] is True
+    assert out["section_gid"] == "sec-week"
+
+
+def test_an_emoji_prefixed_board_still_matches_what_kory_types(monkeypatch):
+    monkeypatch.setattr(
+        am, "list_project_sections",
+        lambda project_gid="": [
+            {"gid": "s1", "name": "📌 This Week"},
+            {"gid": "s2", "name": "📋 Backlog"},
+            {"gid": "s3", "name": "✅ Done"},
+        ],
+    )
+    assert am.resolve_section_gid("This Week", "p-anju") == "s1"
+    assert am.resolve_section_gid("backlog", "p-anju") == "s2"
+    assert am.resolve_section_gid("done", "p-anju") == "s3"
+
+
+def test_an_unknown_board_names_the_project_it_looked_in(wired, monkeypatch):
+    monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
+    monkeypatch.setattr(am, "_task_project_gids", lambda gid: ["p-anju"])
+    monkeypatch.setattr(
+        am, "list_project_sections",
+        lambda project_gid="": [{"gid": "s1", "name": "📌 This Week"}],
+    )
+    out = am.move_asana_task_to_section(task_gid="42", section_name="Nowhere", approved=True)
+    assert out["ok"] is False
+    assert "This Week" in out["error"], "say what boards exist"
+    assert "Anju" in out["error"], "and which project was searched"
