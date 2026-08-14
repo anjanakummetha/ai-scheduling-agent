@@ -1273,6 +1273,7 @@ def create_asana_task_action(
     section: str = "",
     project: str = "",
     assignee: str = "",
+    allow_duplicate: bool = False,
     confirm: bool = False,
 ) -> dict[str, Any]:
     from app.integrations.asana_manager import create_asana_task_from_chat
@@ -1284,6 +1285,7 @@ def create_asana_task_action(
         section=section,
         project=project,
         assignee=assignee,
+        allow_duplicate=allow_duplicate,
         approved=confirm,
     )
 

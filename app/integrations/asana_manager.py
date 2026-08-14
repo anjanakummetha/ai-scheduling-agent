@@ -635,7 +635,14 @@ _COMPANY_EMAIL_DOMAINS = ("@iconicfounders.com", "@ifg.vc")
 def _list_tasks_across_projects(
     *, bucket: TaskBucket, limit: int, mine_only: bool = True
 ) -> dict[str, Any]:
-    """Aggregate one bucket over every project Lexi can read."""
+    """Aggregate one bucket over every project Lexi can read.
+
+    Collapsed by task id. Asana tasks are multi-homed, so one reminder filed under
+    both IFG Tasks and IFG Hubspot Tasks appeared as two rows — and Lexi read that
+    as a duplicate and offered to delete "the duplicate", which would have removed
+    the only copy. One task on two projects says so; it does not appear twice.
+    """
+    by_gid: dict[str, dict[str, Any]] = {}
     collected: list[dict[str, Any]] = []
     for project in list_asana_project_options().get("projects", []):
         listed = list_asana_tasks(
@@ -645,7 +652,26 @@ def _list_tasks_across_projects(
             project_name=str(project.get("name") or ""),
             mine_only=mine_only,
         )
-        collected.extend(listed.get("tasks") or [])
+        for task in listed.get("tasks") or []:
+            gid = str(task.get("gid") or "")
+            if not gid:
+                collected.append(task)
+                continue
+            existing = by_gid.get(gid)
+            if existing is None:
+                row = dict(task)
+                row["projects"] = [p for p in [task.get("project")] if p]
+                by_gid[gid] = row
+                collected.append(row)
+                continue
+            if task.get("project") and task["project"] not in existing["projects"]:
+                existing["projects"].append(task["project"])
+    for row in collected:
+        names = row.get("projects") or []
+        if len(names) > 1:
+            # Make the shared filing explicit so it cannot be mistaken for copies.
+            row["multi_homed"] = True
+            row["project"] = " + ".join(names)
     collected.sort(key=lambda t: str(t.get("due_on") or "9999-12-31"))
     return {
         "ok": True,
@@ -744,6 +770,30 @@ def _missing_task_details(
     }
 
 
+def find_similar_open_task(title: str, *, threshold: float = 0.7) -> dict[str, Any] | None:
+    """An open task that already covers this, or None.
+
+    Kory asks for the same thing twice — he forgets, or the first one went stale.
+    Creating a second copy silently gives him two records of one commitment and
+    makes both easier to ignore. Re-dating the existing one is nearly always what
+    he meant.
+    """
+    from app.integrations.asana_task_match import rank_tasks
+
+    if not title.strip():
+        return None
+    try:
+        found = search_asana_tasks(query=title, limit=5, mine_only=False)
+    except Exception as exc:  # noqa: BLE001 — never block a create on a search
+        logger.warning("Duplicate check failed for %r: %s", title, exc)
+        return None
+    open_tasks = [t for t in (found.get("tasks") or []) if not t.get("completed")]
+    ranked = rank_tasks(title, open_tasks)
+    if ranked and ranked[0].get("match_score", 0) >= threshold:
+        return ranked[0]
+    return None
+
+
 def create_asana_task_from_chat(
     *,
     title: str,
@@ -752,11 +802,13 @@ def create_asana_task_from_chat(
     section: str = "",
     project: str = "",
     assignee: str = "",
+    allow_duplicate: bool = False,
     approved: bool = False,
 ) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana create task")
+
 
     # Kory keeps eight projects. "Create a task" without naming one used to file
     # silently into the default, so the task existed somewhere he wasn't looking
@@ -793,6 +845,29 @@ def create_asana_task_from_chat(
                     f"Available projects: {names}."
                 ),
             }
+# Say so before making a second copy of work he already has open.
+    if not allow_duplicate:
+        existing = find_similar_open_task(title)
+        if existing:
+            due = existing.get("due_on") or "no due date"
+            return {
+                "ok": False,
+                "error_code": "possible_duplicate",
+                "error": f"An open task already covers this: {existing.get('name')!r}.",
+                "existing_task": {
+                    "gid": existing.get("gid"),
+                    "name": existing.get("name"),
+                    "due_on": existing.get("due_on"),
+                    "project": existing.get("project"),
+                    "assignee": existing.get("assignee"),
+                },
+                "kory_message": (
+                    f"You already have an open task for this — \"{existing.get('name')}\" "
+                    f"in {existing.get('project')}, due {due}.\n\n"
+                    "Want me to re-date that one instead, or create a separate task anyway?"
+                ),
+            }
+
     # Ask for the board and the due date together before writing anything.
     #
     # Board: an unspecified section fell through to ASANA_SECTION_GID, which is
