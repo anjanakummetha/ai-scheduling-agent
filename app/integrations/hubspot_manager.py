@@ -954,6 +954,49 @@ def _describe_deals(deals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+_ORG_SUFFIXES = frozenset({"inc", "llc", "ltd", "co", "corp", "group", "partners", "capital"})
+
+
+def _split_name_and_org(text: str) -> tuple[str, str]:
+    """Separate a person from the company they were described with.
+
+    "Angelo (Morgan Stanley)" -> ("Angelo", "Morgan Stanley")
+    "Angelo Amitsis"          -> ("Angelo Amitsis", "")
+    """
+    raw = (text or "").strip()
+    parenthetical = re.search(r"\(([^)]+)\)", raw)
+    if parenthetical:
+        org = parenthetical.group(1).strip()
+        person = re.sub(r"\([^)]*\)", " ", raw)
+        return re.sub(r"\s+", " ", person).strip(" ,-–—"), org
+    for separator in (" at ", " from ", " of ", " — ", " - ", ", "):
+        if separator in raw:
+            person, _, org = raw.partition(separator)
+            if person.strip() and org.strip():
+                return person.strip(), org.strip()
+    return raw, ""
+
+
+def _org_matches(hint: str, contact: dict[str, Any]) -> bool:
+    """Does a stated company plausibly describe this contact?"""
+    def tokens(value: str) -> set[str]:
+        return {
+            t for t in re.split(r"[^a-z0-9]+", (value or "").lower())
+            if t and t not in _ORG_SUFFIXES
+        }
+
+    wanted = tokens(hint)
+    if not wanted:
+        return False
+    haystack = tokens(
+        " ".join(
+            str(contact.get(field) or "")
+            for field in ("company", "jobtitle", "email", "website")
+        )
+    )
+    return bool(wanted & haystack)
+
+
 def enrich_prebrief_from_hubspot(*, email: str = "", name: str = "") -> dict[str, Any]:
     """Read-only HubSpot context for a person Kory is about to meet."""
     if not hubspot_configured():
@@ -964,8 +1007,20 @@ def enrich_prebrief_from_hubspot(*, email: str = "", name: str = "") -> dict[str
     query = email.strip() or name.strip()
     if not query:
         return {"ok": False, "error": "email or name required"}
+
+    # People arrive described, not named: the briefing says "Angelo (Morgan
+    # Stanley)". Searching that whole string returned "No HubSpot contact" — the
+    # name filter below required every word, including "(morgan" and "stanley)",
+    # to appear in the contact's *name*. Lexi reported no CRM record and drafted
+    # to a placeholder address. The company belongs against the company field, as
+    # a way to tell two people apart, not as part of the name.
+    search_name, company_hint = (name.strip(), "") if not email.strip() else (name.strip(), "")
+    if search_name:
+        search_name, company_hint = _split_name_and_org(search_name)
+    lookup_query = email.strip() or search_name or query
+
     try:
-        found = search_contacts(limit=10, query=query)
+        found = search_contacts(limit=10, query=lookup_query)
     except Exception as exc:
         return {"ok": False, "error": str(exc), "kory_message": f"HubSpot lookup failed for {query}."}
 
@@ -983,12 +1038,18 @@ def enrich_prebrief_from_hubspot(*, email: str = "", name: str = "") -> dict[str
         # whose *name* actually contains every word asked for, and never guess
         # between several people: showing the wrong person's Do Not Contact
         # status is worse than asking which one Kory meant.
-        wanted = [w for w in re.split(r"\s+", (name or query).strip().lower()) if w]
+        wanted = [w for w in re.split(r"\s+", (search_name or query).strip().lower()) if w]
         plausible = [
             contact
             for contact in contacts
             if wanted and all(word in str(contact.get("name") or "").lower() for word in wanted)
         ]
+        # A stated company is evidence, not a guess: "Angelo (Morgan Stanley)"
+        # picks Angelo Amitsis over Chris Angelo without having to ask.
+        if len(plausible) > 1 and company_hint:
+            by_org = [c for c in plausible if _org_matches(company_hint, c)]
+            if len(by_org) == 1:
+                plausible = by_org
         if len(plausible) == 1:
             match = plausible[0]
         elif len(plausible) > 1:

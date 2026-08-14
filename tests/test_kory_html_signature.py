@@ -6,9 +6,11 @@ signs with: sign-off, podcast line linking to the real site, logo, and contact
 details — on both fresh sends and replies.
 """
 
+import pytest
 from unittest.mock import patch
 
 from app.scheduling.kory_html_signature import (
+    _strip_kory_plain_signoff,
     _strip_kory_plain_signoff,
     build_kory_html_email,
     build_kory_html_signature_block,
@@ -214,3 +216,56 @@ def test_lexi_channel_is_untouched():
     html = build_lexi_html_signature_block(use_cid=True)
     assert "Lexi Knightly" in html
     assert "Kory Mitchell - CEO" not in html
+
+
+# ── sign-off stripping (live defect: a doubled sign-off shipped in a draft) ───
+
+
+def test_one_line_signoff_with_a_title_is_stripped():
+    """The exact text that shipped: "Best, Kory Mitchell CEO," survived because
+    the pattern required a newline between the closing and the name, so the draft
+    carried it *and* the real signature block underneath."""
+    body = "Thanks again for your support on this."
+    assert _strip_kory_plain_signoff(f"{body}\n\nBest, Kory Mitchell CEO,") == body
+
+
+@pytest.mark.parametrize(
+    "closing",
+    [
+        "Best, Kory Mitchell CEO,",
+        "Best,\nKory",
+        "Let's Win,\nKory",
+        "Let's Win!\nKory",
+        "Thanks,\nKory Mitchell",
+        "Regards,\nKory Mitchell - CEO",
+        "Best regards, Kory Mitchell, CEO",
+        "Sincerely,\nKory Mitchell CEO.",
+        "Talk soon,\nKory",
+        "Kory",
+        "Kory Mitchell",
+        "Best,\nKory\n\nLet's Win,\nKory",     # composer's closing plus the appended one
+    ],
+)
+def test_every_signoff_spelling_is_stripped(closing):
+    body = "Here is the update you asked for."
+    assert _strip_kory_plain_signoff(f"{body}\n\n{closing}") == body
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Ask Kory about the deal.",
+        "I spoke with Kory Mitchell yesterday about it.",
+        "Best case we close in March.",
+        "Thanks to Kory the deal closed.",
+    ],
+)
+def test_mid_body_mentions_are_not_stripped(text):
+    assert _strip_kory_plain_signoff(text) == text
+
+
+def test_signature_appears_exactly_once_in_a_composed_draft():
+    body = "Hi Angelo,\n\nFollowing up on the program.\n\nBest, Kory Mitchell CEO,"
+    html = build_kory_html_email(body, use_cid=True)
+    assert html.count("Kory Mitchell - CEO") == 1
+    assert "Best, Kory Mitchell CEO," not in html

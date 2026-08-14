@@ -45,21 +45,43 @@ def kory_html_signature_enabled() -> bool:
     return os.getenv("LEXI_KORY_HTML_SIGNATURE_ENABLED", "true").lower() in {"1", "true", "yes"}
 
 
-def _strip_kory_plain_signoff(text: str) -> str:
-    """Remove a trailing "Let's Win, / Kory" so the HTML block doesn't double it.
+_CLOSING_WORDS = r"Let'?s\s+Win|Best(?:\s+regards)?|Thanks(?:\s+again)?|Thank\s+you|Warmly|Regards|Cheers|Sincerely|Talk\s+soon"
+_TITLES = r"CEO|Founder|President|Managing\s+Partner"
 
-    finalize_outbound_email_body appends the plain sign-off before this runs, and
-    the composer often writes one too, so both spellings have to go — with or
-    without the comma/exclamation, and with an optional surname.
+# One sign-off, however it is written. The separator between the closing and the
+# name is [\s,]* rather than a required newline: the composer wrote
+# "Best, Kory Mitchell CEO," all on one line, which slipped straight past a
+# newline-anchored pattern and shipped a doubled sign-off above the real block.
+_SIGNOFF_RE = re.compile(
+    rf"""(?:\A|\n)[^\S\n]*
+        (?:(?:{_CLOSING_WORDS})[,!.]?[\s,]*)?      # closing word (may be absent)
+        Kory(?:\s+Mitchell)?                        # the name itself
+        (?:[\s,\-–—]*(?:{_TITLES})\b[.,]?)?         # optional trailing title
+        [\s.,!]*\Z""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# A closing word left dangling once the name is gone ("Best," on its own line).
+_ORPHAN_CLOSING_RE = re.compile(
+    rf"(?:\A|\n)[^\S\n]*(?:{_CLOSING_WORDS})[,!.]?[\s]*\Z", re.IGNORECASE
+)
+
+
+def _strip_kory_plain_signoff(text: str) -> str:
+    """Remove a trailing sign-off so the HTML block doesn't double it.
+
+    finalize_outbound_email_body appends "Let's Win, / Kory" before this runs, and
+    the composer usually writes its own closing too — so a draft can arrive with
+    two. Both have to go, in any spelling, on one line or several.
     """
     normalized = (text or "").strip()
-    return re.sub(
-        r"\n*\s*(?:Let'?s\s+Win|Best|Thanks|Thank you|Warmly|Regards|Cheers)[,!.]?\s*\n+"
-        r"\s*Kory(?:\s+Mitchell)?\s*$",
-        "",
-        normalized,
-        flags=re.IGNORECASE,
-    ).rstrip()
+    for _ in range(3):  # a body can carry the composer's closing and the appended one
+        stripped = _SIGNOFF_RE.sub("", normalized).rstrip()
+        stripped = _ORPHAN_CLOSING_RE.sub("", stripped).rstrip()
+        if stripped == normalized:
+            break
+        normalized = stripped
+    return normalized
 
 
 def build_kory_html_signature_block(*, use_cid: bool = True) -> str:
