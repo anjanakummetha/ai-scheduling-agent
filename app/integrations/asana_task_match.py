@@ -99,14 +99,38 @@ def score_task_name(query: str, name: str) -> float:
     return round(min(score, 0.96), 4)
 
 
+# A hit in the description is real evidence but weaker than one in the title, so
+# it is capped below a title match rather than competing with it.
+_NOTES_WEIGHT = 0.82
+_NOTES_SCAN_CHARS = 600
+
+
+def score_task(query: str, task: dict[str, Any]) -> float:
+    """Score a task on its title and its description.
+
+    Title-only matching missed how Kory actually refers to work: "the FINRA task"
+    found nothing, because FINRA appears in the description of "Follow up with
+    Angelo (Morgan Stanley) — Affiliate Investment Bank program" and never in its
+    title. He names the substance; the title is whoever typed it that day.
+    """
+    best = score_task_name(query, str(task.get("name") or ""))
+    notes = str(task.get("notes") or "")[:_NOTES_SCAN_CHARS]
+    if notes:
+        best = max(best, round(score_task_name(query, notes) * _NOTES_WEIGHT, 4))
+    return best
+
+
 def rank_tasks(query: str, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Tasks ordered best-first, each with a `match_score`, weak ones dropped."""
     scored = []
     for task in tasks:
-        score = score_task_name(query, str(task.get("name") or ""))
+        score = score_task(query, task)
         if score >= MIN_SCORE:
             scored.append({**task, "match_score": score})
-    scored.sort(key=lambda t: (-t["match_score"], str(t.get("name") or "")))
+    # Open work first when scores tie — "mark X complete" means the live one.
+    scored.sort(
+        key=lambda t: (-t["match_score"], bool(t.get("completed")), str(t.get("name") or ""))
+    )
     return scored
 
 

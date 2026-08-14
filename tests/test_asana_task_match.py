@@ -118,3 +118,64 @@ def test_search_ranks_instead_of_substring_matching(monkeypatch):
     assert out["ok"] is True
     assert out["tasks"], "loose phrasing must still find the task"
     assert "Load Elevator" in out["tasks"][0]["name"]
+
+
+# ── audit findings: description text, completed tasks, duplicate accounts ────
+
+
+def test_a_word_only_in_the_description_still_finds_the_task():
+    """"the FINRA task" found nothing: FINRA appears in the description of
+    "Follow up with Angelo (Morgan Stanley) — Affiliate Investment Bank program"
+    and never in its title. Kory names the substance, not the title."""
+    tasks = [
+        {"gid": "1", "name": "Follow up with Angelo (Morgan Stanley) — Affiliate Investment Bank",
+         "notes": "Once IFG has its FINRA registration he can advocate for a listing."},
+        {"gid": "2", "name": "Book dinner reservation", "notes": ""},
+    ]
+    winner, _ = pick_task("the FINRA task", tasks)
+    assert winner is not None and winner["gid"] == "1"
+
+
+def test_a_title_match_outranks_a_description_match():
+    tasks = [
+        {"gid": "1", "name": "Dripify campaign setup", "notes": ""},
+        {"gid": "2", "name": "Unrelated", "notes": "mentions dripify once in passing"},
+    ]
+    ranked = rank_tasks("dripify", tasks)
+    assert ranked[0]["gid"] == "1"
+
+
+def test_open_work_sorts_above_finished_work_on_a_tie():
+    """"mark X complete" means the live one, not last year's copy."""
+    tasks = [
+        {"gid": "done", "name": "Elevator landing page", "completed": True},
+        {"gid": "open", "name": "Elevator landing page", "completed": False},
+    ]
+    assert rank_tasks("elevator landing page", tasks)[0]["gid"] == "open"
+
+
+def test_a_completed_task_is_still_findable():
+    """Search excluded completed tasks, so "did I finish X?" answered "no such
+    task" — denying it exists rather than saying it is done."""
+    tasks = [{"gid": "1", "name": "Send Matt the market study", "completed": True}]
+    winner, _ = pick_task("the market study task", tasks)
+    assert winner is not None and winner["completed"] is True
+
+
+def test_search_uses_a_single_pass_over_open_and_done(monkeypatch):
+    from app.integrations import asana_manager
+
+    calls = []
+    monkeypatch.setattr(
+        asana_manager, "list_asana_project_options",
+        lambda: {"projects": [{"gid": "p1", "name": "IFG Tasks"}]},
+    )
+
+    def fake_list(**kw):
+        calls.append(kw.get("bucket"))
+        return {"tasks": TASKS}
+
+    monkeypatch.setattr(asana_manager, "list_asana_tasks", fake_list)
+    asana_manager.search_asana_tasks(query="elevator")
+    # Buckets filter an already-fetched list, so asking twice fetched Asana twice.
+    assert calls == ["any"], calls

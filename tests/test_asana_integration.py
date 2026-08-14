@@ -340,3 +340,24 @@ def test_korys_own_task_needs_no_owner_ack(monkeypatch):
     })
     monkeypatch.setattr(am, "execute_asana_tool", lambda s, a: {"data": {}})
     assert am.complete_asana_task(task_gid="buy cigars", approved=True)["ok"] is True
+
+
+def test_a_person_with_two_accounts_resolves_to_the_work_one(monkeypatch):
+    """Sujash Barman has a company and a university account in the workspace.
+    First-match-wins silently picked the university one, so "assign it to Sujash"
+    landed on the wrong record and reported success."""
+    from unittest.mock import patch
+
+    from app.integrations import asana_manager
+
+    users = {"data": {"data": [
+        {"gid": "uni", "name": "Sujash Barman", "email": "sjbarman@ucdavis.edu"},
+        {"gid": "work", "name": "Sujash Barman", "email": "sujash.barman@iconicfounders.com"},
+        {"gid": "heidi", "name": "Heidi Heckler", "email": "heidi.heckler@iconicfounders.com"},
+    ]}}
+    monkeypatch.setenv("ASANA_WORKSPACE_GID", "ws1")
+    with patch.object(asana_manager, "execute_asana_tool", return_value=users):
+        assert asana_manager.resolve_asana_user_gid("Sujash")[0] == "work"
+        assert asana_manager.resolve_asana_user_gid("Heidi")[0] == "heidi"
+        # An explicit address still wins over the preference.
+        assert asana_manager.resolve_asana_user_gid("sjbarman@ucdavis.edu")[0] == "uni"

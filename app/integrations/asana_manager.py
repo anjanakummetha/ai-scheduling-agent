@@ -591,9 +591,12 @@ def _extract_task_id(data: Any) -> str | None:
     return None
 
 
-TaskBucket = Literal["overdue", "due_today", "upcoming", "all", "completed"]
+TaskBucket = Literal["overdue", "due_today", "upcoming", "all", "completed", "any"]
 
 TASK_FIELDS = ["name", "completed", "due_on", "notes", "assignee", "assignee.name"]
+
+# Work addresses win when one person has two Asana accounts.
+_COMPANY_EMAIL_DOMAINS = ("@iconicfounders.com", "@ifg.vc")
 
 
 def _list_tasks_across_projects(
@@ -735,6 +738,27 @@ def resolve_asana_user_gid(name_or_email: str) -> tuple[str, str]:
         logger.warning("ASANA_GET_USERS_FOR_WORKSPACE failed: %s", exc)
         return "", ""
     rows = (users.get("data") or {}).get("data") or []
+    # Sujash Barman has two accounts in this workspace — a company address and a
+    # university one. First-match-wins silently picked the university account, so
+    # "assign it to Sujash" landed on the wrong record and reported success. When
+    # a name matches more than one person, prefer the company address rather than
+    # whichever Asana happened to list first.
+    matches = [
+        row
+        for row in (rows if isinstance(rows, list) else [])
+        if needle == str(row.get("email") or "").lower()
+        or needle == str(row.get("name") or "").lower()
+        or needle in str(row.get("name") or "").lower().split()
+    ]
+    if len(matches) > 1:
+        company = [
+            row
+            for row in matches
+            if str(row.get("email") or "").lower().endswith(_COMPANY_EMAIL_DOMAINS)
+        ]
+        if len(company) == 1:
+            return str(company[0].get("gid") or ""), str(company[0].get("name") or "")
+
     for row in rows if isinstance(rows, list) else []:
         name = str(row.get("name") or "").lower()
         email = str(row.get("email") or "").lower()
@@ -894,15 +918,25 @@ def search_asana_tasks(
         return {"ok": False, "tasks": [], "error": "query is required"}
     projects = list_asana_project_options()
     pool: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for project in projects.get("projects", []):
+        # 500, not 50: one project already sits at 47 and a silent truncation here
+        # reads as "no such task". bucket="any" so completed tasks are searchable —
+        # "did I finish X?", "reopen X" and "mark X complete" (when it already is)
+        # all need to find a done task and say so rather than deny it exists.
         listed = list_asana_tasks(
-            bucket="all",
-            limit=50,
+            bucket="any",
+            limit=500,
             project_gid=str(project.get("gid") or ""),
             project_name=str(project.get("name") or ""),
             mine_only=mine_only,
         )
         for task in listed.get("tasks") or []:
+            gid = str(task.get("gid") or "")
+            if gid and gid in seen:
+                continue
+            if gid:
+                seen.add(gid)
             pool.append({**task, "project": project.get("name")})
     ranked = rank_tasks(query, pool)
     return {"ok": True, "query": query, "tasks": ranked[:limit], "scanned": len(pool)}
@@ -1356,6 +1390,10 @@ def _filter_tasks_by_bucket(tasks: list[dict[str, Any]], *, bucket: TaskBucket) 
     from datetime import date
 
     today = date.today().isoformat()
+    if bucket == "any":
+        # Open and done together. Search needs both, and the buckets are applied
+        # to an already-fetched list — asking twice fetched Asana twice.
+        return tasks
     if bucket == "completed":
         # Asana hides these from active views; Kory still needs to see them.
         done = [t for t in tasks if t.get("completed")]
