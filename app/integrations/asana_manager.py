@@ -1310,6 +1310,7 @@ def move_asana_task_to_section(
             {"task_gid": task_gid, "project": project_gid},
         )
         out = _write_result(added, task_gid=task_gid, project_gid=project_gid)
+        out = _with_placement(out, task_gid)
         if out.get("ok") and unfile_others:
             out.update(unfile_task_from_other_projects(
                 task_gid=task_gid, keep_project_gid=project_gid
@@ -1333,11 +1334,59 @@ def move_asana_task_to_section(
         {"task_gid": task_gid, "section_gid": target},
     )
     out = _write_result(result, task_gid=task_gid, section_gid=target)
+    out = _with_placement(out, task_gid)
     if out.get("ok") and unfile_others and project_gid:
         out.update(unfile_task_from_other_projects(
             task_gid=task_gid, keep_project_gid=project_gid
         ))
     return out
+
+
+def describe_task_placement(task_gid: str) -> dict[str, str]:
+    """Where a task actually sits now: project and board, read from Asana.
+
+    Moving a task to a project without naming a board lets Asana choose — it
+    picked "📋 Backlog" — and nothing said so, so Kory was told the task moved but
+    not where it went. A move he cannot find is not much better than one that did
+    not happen.
+    """
+    try:
+        res = execute_asana_tool(
+            "ASANA_GET_A_TASK",
+            {"task_gid": task_gid, "opt_fields": ["name", "memberships.section.name",
+                                                  "memberships.project.name"]},
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail a completed move on a read
+        logger.warning("Could not read placement for task %s: %s", task_gid, exc)
+        return {}
+    row = (res.get("data") or {}).get("data") or {}
+    for membership in row.get("memberships") or []:
+        if not isinstance(membership, dict):
+            continue
+        project = (membership.get("project") or {}).get("name")
+        section = (membership.get("section") or {}).get("name")
+        if project:
+            return {
+                "name": str(row.get("name") or ""),
+                "project": str(project),
+                "board": str(section or ""),
+            }
+    return {"name": str(row.get("name") or "")}
+
+
+def _with_placement(result: dict[str, Any], task_gid: str) -> dict[str, Any]:
+    """Attach where the task ended up, so the reply can name it."""
+    if not result.get("ok"):
+        return result
+    placement = describe_task_placement(task_gid)
+    if placement.get("project"):
+        result["landed_project"] = placement["project"]
+        result["landed_board"] = placement.get("board") or "(no board)"
+        result["kory_message"] = (
+            f"Moved \"{placement.get('name') or 'the task'}\" to "
+            f"{placement['project']} → {result['landed_board']}."
+        )
+    return result
 
 
 def _task_project_gids(task_gid: str) -> list[str]:
