@@ -175,6 +175,10 @@ Email / drafts (send after approval — channel matches voice_mode):
 
 Asana (confirm=true after Kory approves in chat):
   lexi_create_reservation_reminder(..., confirm=true)
+  lexi_create_asana_task — call it BEFORE asking him which board or when it's due.
+    It checks first whether he already has an open task covering this, and if he
+    does those questions are moot. It hands you the question to ask when it needs
+    one; asking ahead of it only means asking about a task he already has.
 
 Calendar writes (confirm=true after Kory approves):
   lexi_create_calendar_event(..., confirm=true) — real events, title verbatim
