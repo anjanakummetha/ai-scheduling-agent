@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import app.integrations.hubspot_manager as hs
 from app.integrations.hubspot_manager import (
     deals_snapshot_for_brief,
     enrich_prebrief_from_hubspot,
@@ -90,12 +91,17 @@ def test_enrichment_proposes_signature_fields_for_blank_only(
             {"id": "2", "email": "c@x.com", "name": "Cid", "jobtitle": "", "company": "Real Co"},
         ],
     }
-    mock_sig.return_value = {"jobtitle": "CEO", "company": "Signature Co"}
+    # (fields, provenance) — every value records the message it came from.
+    mock_sig.return_value = (
+        {"jobtitle": "CEO", "company": "Signature Co"},
+        {"source": "outlook_signature", "message_id": "msg-1"},
+    )
     out = propose_field_enrichment(limit=5)
     assert out["proposal_count"] == 2
     first, second = out["proposals"]
     assert first["proposed_fields"] == {"jobtitle": "CEO", "company": "Signature Co"}
     assert second["proposed_fields"] == {"jobtitle": "CEO"}, "must not overwrite a real company"
+    assert first["provenance"]["message_id"] == "msg-1"
 
 
 def test_signature_extraction_reads_the_senders_own_block():
@@ -237,10 +243,15 @@ def test_meeting_note_staged_not_written(mock_search, _blocked, tmp_path, monkey
     assert out["writes_blocked"] is True
 
 
+@patch("app.integrations.hubspot_manager.owner_is_known", return_value=True)
 @patch("app.integrations.hubspot_manager.owner_name", return_value="Natalie Asher")
 @patch("app.integrations.hubspot_manager.search_contacts")
-def test_meeting_note_on_someone_elses_contact_asks_first(mock_search, _owner):
-    """Mirrors the Asana guard: changing a colleague's record must be deliberate."""
+def test_meeting_note_on_someone_elses_contact_asks_first(mock_search, _owner, _known):
+    """Mirrors the Asana guard: changing a colleague's record must be deliberate.
+
+    `owner_is_known` is stubbed alongside `owner_name`: an id HubSpot cannot
+    resolve gets a different message, covered in test_hubspot_merge_ownership.
+    """
     mock_search.return_value = {
         "contacts": [
             {"id": "1", "email": "d@x.com", "name": "Dan", "hubspot_owner_id": "165157278"}
@@ -640,6 +651,88 @@ def test_meeting_note_falls_back_to_loose_search_only_for_suggestions(
     assert mock_search.call_args_list[1].kwargs.get("query") == "nobody@nowhere.com"
     # The loose hit is offered as a suggestion, never written to.
     assert out["near_matches"][0]["email"] == "someone.else@co.com"
+    mock_tool.assert_not_called()
+
+
+def _gate_that_refuses(**_kwargs):
+    raise PermissionError("Kory approval required in Teams before Lexi makes changes.")
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_meeting_note_looks_the_contact_up_before_asking_kory_to_confirm(
+    mock_search, mock_tool
+):
+    """A guard the model never reaches is not a guard.
+
+    The approval gate used to be the first line of stage_meeting_note, so an
+    unconfirmed call returned confirmation_required in 0.01s and the lookup, the
+    near-match list and the ownership check never ran. Kory asked for the note,
+    was asked to confirm, confirmed — and only then heard that nobody in HubSpot
+    has that address. Finding the contact is a read; it needs no approval.
+    """
+    mock_search.side_effect = [{"contacts": []}, {"contacts": []}]
+
+    with patch.object(hs, "assert_kory_approved_write", side_effect=_gate_that_refuses) as gate:
+        out = stage_meeting_note(email="nobody@nowhere.com", note="Note.", approved=False)
+
+    assert out["error_code"] == "contact_not_found"
+    gate.assert_not_called()
+    mock_tool.assert_not_called()
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_meeting_note_reports_a_colleagues_record_before_asking_kory_to_confirm(
+    mock_search, mock_tool
+):
+    """Confirming and *then* being told it is Natalie's is the wrong order."""
+    mock_search.return_value = {
+        "contacts": [
+            {"id": "7", "email": "her@lead.com", "name": "Her Lead",
+             "hubspot_owner_id": "not-kory"}
+        ]
+    }
+
+    with patch.object(hs, "assert_kory_approved_write", side_effect=_gate_that_refuses) as gate:
+        with patch.object(hs, "kory_owner_id", return_value="kory-id"):
+            with patch.object(hs, "owner_name", return_value="Natalie Asher"):
+                with patch.object(hs, "owner_is_known", return_value=True):
+                    out = stage_meeting_note(
+                        email="her@lead.com", note="Note.", approved=False
+                    )
+
+    assert out["error_code"] == "owner_confirmation_required"
+    assert "Natalie Asher" in out["error"]
+    gate.assert_not_called()
+    mock_tool.assert_not_called()
+
+
+@patch("app.integrations.hubspot_manager.execute_hubspot_tool")
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_meeting_note_still_needs_approval_once_the_contact_checks_out(
+    mock_search, mock_tool
+):
+    """Moving the gate must not remove it — his own contact still gets asked."""
+    mock_search.return_value = {
+        "contacts": [
+            {"id": "7", "email": "his@lead.com", "name": "His Lead",
+             "hubspot_owner_id": "kory-id"}
+        ]
+    }
+
+    with patch.object(hs, "assert_kory_approved_write", side_effect=_gate_that_refuses) as gate:
+        with patch.object(hs, "kory_owner_id", return_value="kory-id"):
+            try:
+                stage_meeting_note(email="his@lead.com", note="Note.", approved=False)
+            except PermissionError:
+                # The confirmation names the record, so Kory knows what he is
+                # agreeing to rather than just "a HubSpot meeting note".
+                assert "His Lead" in str(gate.call_args.kwargs["action"])
+            else:
+                raise AssertionError("an unapproved write must not reach HubSpot")
+
+    gate.assert_called_once()
     mock_tool.assert_not_called()
 
 

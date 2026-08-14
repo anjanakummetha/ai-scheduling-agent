@@ -58,6 +58,29 @@ DO_NOT_CONTACT = "do not contact"
 # Placeholder junk that is technically "populated" but carries no information.
 _PLACEHOLDER_VALUES = {"n/a", "na", "none", "unknown", "-", "--", ".", "?", "tbd", "null"}
 
+# Values a LinkedIn/Sales Navigator sync writes when the member has hidden the
+# field. They are not blank, so every NOT_HAS_PROPERTY scan skips them and every
+# blank-only guard treats them as real data — which is why ~30 of Kory's
+# contacts have never been offered for enrichment despite carrying no company at
+# all. Measured live 2026-08-14: "Prefer No Connection to Company" appears 12
+# times in a 400-contact sample of his book.
+#
+# Deliberately narrow. Marking a real value as a placeholder makes enrichment
+# overwrite genuine data, which is far worse than leaving junk in place, so
+# these match the whole field after normalisation — never a substring.
+_PLACEHOLDER_PATTERNS = (
+    r"prefer no connection to company",
+    r"prefer not to (?:say|share|disclose|answer)",
+    r"(?:no|not) (?:company|employer|title|available|provided|listed|specified|disclosed)",
+    r"unknown company",
+    r"n\.?/?a\.?",
+    r"(?:none|null|nil|tbd|tba|undefined|blank|empty|test)",
+    r"[-–—_.*#]+",
+    r"x{3,}",
+    r"\?+",
+)
+_PLACEHOLDER_RE = re.compile(r"^(?:%s)$" % "|".join(_PLACEHOLDER_PATTERNS), re.I)
+
 _MAX_PAGE = 100
 
 
@@ -75,10 +98,20 @@ _REAL_SHORT_TITLES = {"vp", "pm", "gm", "md", "cf", "ce", "hr", "it", "pa", "ea"
 
 
 def is_placeholder(value: Any, *, field: str = "") -> bool:
+    """Is this field populated with something that carries no information?
+
+    Matches the whole value, never a substring: "No Limits Consulting" is a real
+    company and "Not Available" is not, and only anchoring tells them apart.
+    """
     text = str(value or "").strip()
     if not text:
         return False
     if text.lower() in _PLACEHOLDER_VALUES:
+        return True
+    # Normalise punctuation and spacing before matching so "N / A", "n.a." and
+    # "Prefer No Connection To Company." all reduce to the same shape.
+    normalized = re.sub(r"\s+", " ", re.sub(r"[^\w\s/?.*#—–-]", " ", text)).strip(" .,")
+    if _PLACEHOLDER_RE.match(normalized):
         return True
     if len(text) <= 2:
         # "VP" is a real title; "WM" as a company name is not.
@@ -160,16 +193,44 @@ def owner_map(*, refresh: bool = False) -> dict[str, str]:
                 out[str(owner.get("id"))] = name or owner.get("email") or str(owner.get("id"))
         except Exception:
             continue
+    if not out:
+        # Never cache a failed lookup. The cache has no TTL, so one transient
+        # error at the wrong moment would make every owner unresolvable for the
+        # life of the process — and "I can't tell whose record this is" now
+        # changes what Lexi says to Kory about every contact he doesn't own.
+        return {}
     _owner_cache = out
     return out
 
 
+def owner_is_known(owner_id: Any) -> bool:
+    """Can this owner id be resolved to a person?
+
+    `owner_map` asks for archived owners too, but Composio ignores `archived` on
+    HUBSPOT_RETRIEVE_OWNERS (verified live: `True` and `"true"` both return the
+    same 8 active owners), so a deactivated user's id resolves to nothing. That
+    is not hypothetical — one such id owns 6 of Kory's 27 duplicate pairs.
+
+    Callers need this separately from `owner_name` because "owned by Natalie"
+    and "owned by an id nobody can resolve" call for different advice: the first
+    is a person he can ask, the second is a record he has to open HubSpot to
+    identify.
+    """
+    key = str(owner_id or "").strip()
+    return bool(key) and key in owner_map()
+
+
 def owner_name(owner_id: Any) -> str:
-    """Human name for an owner id, or an explicit 'unassigned/former' marker."""
+    """Human name for an owner id, or an explicit 'unassigned/unlisted' marker.
+
+    The fallback names the id rather than calling it "unknown owner": Kory's
+    only route to identifying it is to look the id up in HubSpot, so the id is
+    the actionable part of the message.
+    """
     key = str(owner_id or "").strip()
     if not key:
         return "unassigned"
-    return owner_map().get(key) or f"unknown owner ({key})"
+    return owner_map().get(key) or f"an unlisted owner (id {key})"
 
 
 def lifecycle_label(contact: dict[str, Any]) -> str:
@@ -395,16 +456,30 @@ def assert_contact_writable(
         # Unassigned records belong to nobody, so there is no one to confirm with.
         return None
     who = owner_name(owner_id)
+    known = owner_is_known(owner_id)
     label = contact.get("name") or contact.get("email") or "This contact"
+    if known:
+        message = (
+            f"'{label}' is owned by {who}, not you. "
+            "Confirm you want to change someone else's contact."
+        )
+    else:
+        # Saying "owned by unknown owner (159291600)" reads like a name and
+        # tells him nothing he can act on. Say plainly that the id doesn't
+        # resolve, and point at the one place that can answer it.
+        message = (
+            f"'{label}' is owned by someone else — owner id {owner_id} isn't in "
+            "HubSpot's owner list, most likely a deactivated user, so I can't tell "
+            "you whose it is. Look it up in HubSpot, or confirm you want to change "
+            "it anyway."
+        )
     return {
         "ok": False,
         "error_code": "owner_confirmation_required",
-        "error": (
-            f"'{label}' is owned by {who}, not you. "
-            "Confirm you want to change someone else's contact."
-        ),
+        "error": message,
         "owner": who,
         "owner_id": owner_id,
+        "owner_unknown": not known,
         "contact_id": contact.get("id"),
     }
 
@@ -418,14 +493,20 @@ def _owner_annotation(*contacts: dict[str, Any]) -> dict[str, Any]:
     identical whether both records are his or one is Heidi's — and a HubSpot
     merge is permanent.
     """
-    foreign = sorted(
-        {
-            owner_name(str(c.get("hubspot_owner_id") or "").strip())
-            for c in contacts
-            if str(c.get("hubspot_owner_id") or "").strip() and not kory_owns(c)
-        }
-    )
-    return {"foreign_owners": foreign, "kory_owns_all": not foreign}
+    foreign_ids = {
+        str(c.get("hubspot_owner_id") or "").strip()
+        for c in contacts
+        if str(c.get("hubspot_owner_id") or "").strip() and not kory_owns(c)
+    }
+    foreign = sorted(owner_name(oid) for oid in foreign_ids)
+    return {
+        "foreign_owners": foreign,
+        # Kept apart from the names so the proposal can flag the pairs whose
+        # owner cannot be resolved at all — those need a look in HubSpot, not a
+        # word with a colleague.
+        "unlisted_owner_ids": sorted(oid for oid in foreign_ids if not owner_is_known(oid)),
+        "kory_owns_all": not foreign,
+    }
 
 
 def _merge_owner_block(
@@ -467,10 +548,16 @@ def _merge_owner_block(
         blocked = assert_contact_writable(contact)
         if blocked:
             label = contact.get("name") or contact.get("email") or "one of these records"
+            whose = (
+                f"owner id {blocked['owner_id']}, which isn't in HubSpot's owner list "
+                "(most likely a deactivated user)"
+                if blocked.get("owner_unknown")
+                else blocked["owner"]
+            )
             return {
                 **blocked,
                 "kory_message": (
-                    f"**{label}** is owned by {blocked['owner']}, not you — and a "
+                    f"**{label}** is owned by {whose}, not you — and a "
                     "HubSpot merge is permanent, so I've stopped.\n\n"
                     "Say you want it merged anyway and I'll go ahead."
                 ),
@@ -692,11 +779,17 @@ def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, 
         # list, and it is the only place he sees the pair before it is permanent.
         whose = row.get("foreign_owners") or []
         owner_note = f" — ⚠️ owned by {', '.join(whose)}, not you" if whose else ""
-        lines.append(
-            f"• {row.get('primary_name') or row.get('primary_email')} "
-            f"↔ {row.get('duplicate_name') or row.get('duplicate_email')} "
-            f"— **{row['suggested_action']}** ({row['reason']}){owner_note}"
-        )
+        # Lead with the person. A same-name pair carries the name once and the
+        # two addresses separately, and rendering only the addresses made the
+        # list read as twenty-seven strangers — he approves merges off this.
+        left = row.get("primary_name") or row.get("primary_email") or ""
+        right = row.get("duplicate_name") or row.get("duplicate_email") or ""
+        shared = str(row.get("name") or "").strip()
+        if shared and left != right:
+            who = f"**{shared.title()}** ({left} ↔ {right})"
+        else:
+            who = f"{left} ↔ {right}"
+        lines.append(f"• {who} — **{row['suggested_action']}** ({row['reason']}){owner_note}")
     if not pairs:
         lines.append(
             f"_No duplicates found in the full book ({scanned} contact(s) scanned)._"
@@ -707,6 +800,17 @@ def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, 
                 + ". This is a PARTIAL scan — it is not evidence the book is clean._"
             )
         )
+    # An id that resolves to nobody is the one case he cannot settle by asking a
+    # colleague, and it is common enough here to warrant its own line: a single
+    # deactivated owner accounts for 6 of his duplicate pairs.
+    unlisted = sorted({oid for row in pairs for oid in (row.get("unlisted_owner_ids") or [])})
+    if unlisted:
+        affected = sum(1 for row in pairs if row.get("unlisted_owner_ids"))
+        lines.append(
+            f"\n_{affected} pair(s) belong to owner id(s) {', '.join(unlisted)}, which aren't "
+            "in HubSpot's owner list — most likely a deactivated user. I can't resolve them to "
+            "a name, so check those in HubSpot before merging._"
+        )
     lines.append(
         "\n_Merges are staged only — no HubSpot changes until live writes + approval. "
         "HubSpot merges cannot be undone, so each one needs its own approval._"
@@ -716,6 +820,7 @@ def propose_duplicate_merges(*, limit: int = DUPLICATE_SCAN_LIMIT) -> dict[str, 
         "batch_id": batch_id,
         "pair_count": len(pairs),
         "pairs": pairs,
+        "unlisted_owner_ids": unlisted,
         # Structured, so coverage survives being summarised. The prose version of
         # this got dropped in paraphrase once and "checked 50 of 1016" reached
         # Kory as "your book looks clean".
@@ -735,6 +840,23 @@ _TITLE_HINTS = (
     "head of", "chief", "advisor", "adviser", "consultant", "analyst",
     "associate", "controller", "supervisor", "lead ", "specialist",
 )
+
+
+# A signature phone: 10+ digits, optional country code, the usual separators.
+# Anchored on a word boundary so it cannot pick up the tail of a longer number.
+_PHONE_RE = re.compile(
+    r"(?<![\d-])(\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}(?![\d-])"
+)
+# Lines whose number is not the person's own reachable line.
+_PHONE_EXCLUDE = ("fax", "f:", "efax", "toll", "support", "office hours", "suite", "zip")
+# Toll-free prefixes. A company switchboard is never a person's contact number,
+# and writing one onto a contact record is worse than leaving the field blank —
+# it looks like a direct line. Caught by the live rehearsal: a signature offered
+# (800) 962-0418 as its owner's phone.
+_TOLL_FREE = {"800", "833", "844", "855", "866", "877", "888"}
+# Signature labels that mark a direct or mobile line — preferred over a
+# switchboard when a block lists several.
+_PHONE_PREFERRED = ("mobile", "cell", "m:", "c:", "direct", "d:")
 
 
 _QUOTE_MARKERS = (
@@ -804,6 +926,7 @@ def _extract_signature_fields(
         return all(part in words for part in name_parts)
 
     name_at = -99
+    title_at = -99
     for index, line in enumerate(lines):
         low = line.lower()
         if _is_name_line(line):
@@ -829,36 +952,153 @@ def _extract_signature_fields(
             company = split[1].strip(" ,-–—")
             if 2 < len(company) <= 60:
                 fields["company"] = company
+        title_at = index
         break
+
+    phone = _phone_from_signature(lines, start_at=max(name_at, title_at))
+    if phone:
+        fields["phone"] = phone
     return fields
 
 
-def propose_field_enrichment(*, limit: int = 25, owner_id: str | None = None) -> dict[str, Any]:
-    """Propose title/company fills sourced from Kory's own email signatures.
+def _phone_from_signature(lines: list[str], *, start_at: int) -> str:
+    """The contact's own phone number out of their signature block.
+
+    Phone is the biggest single gap in Kory's book — 306 of 1,022 contacts —
+    and LinkedIn structurally cannot supply it, so his own inbox is the best
+    source available.
+
+    Scoped to the lines just below the name/title for the same reason the title
+    is: further down a message is a reply chain, and the number there belongs to
+    whoever wrote that part. A switchboard number written onto a contact is not
+    a disaster, but a *wrong* one is, so a labelled mobile or direct line wins
+    over an unlabelled number and anything marked fax is skipped.
+    """
+    if start_at < -1:
+        return ""
+    window = lines[max(0, start_at) : max(0, start_at) + 9]
+    fallback = ""
+    for line in window:
+        low = line.lower()
+        if any(marker in low for marker in _PHONE_EXCLUDE):
+            continue
+        match = _PHONE_RE.search(line)
+        if not match:
+            continue
+        raw = match.group(0).strip()
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) < 10:
+            continue
+        # Drop a leading country code before reading the area code.
+        national = digits[1:] if len(digits) == 11 and digits[0] == "1" else digits
+        if national[:3] in _TOLL_FREE:
+            continue
+        if any(marker in low for marker in _PHONE_PREFERRED):
+            return raw
+        fallback = fallback or raw
+    return fallback
+
+
+ENRICHABLE_FIELDS = ("jobtitle", "company", "phone")
+
+
+def _needs_filling(contact: dict[str, Any], field: str) -> bool:
+    """Blank, or populated with something that carries no information."""
+    return not str(contact.get(field) or "").strip() or is_placeholder(
+        contact.get(field), field=field
+    )
+
+
+def find_enrichment_candidates(
+    *,
+    limit: int = 25,
+    owner_id: str | None = None,
+    include_phone: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Contacts with a gap a signature could close, plus what was scanned.
+
+    Three passes, because one HubSpot filter group cannot express them:
+
+    1. No job title — the original scan.
+    2. No phone, when asked. The biggest single gap in the book (306 of 1,022)
+       and the one LinkedIn structurally cannot fill.
+    3. A *sweep* for placeholder values. "Prefer No Connection to Company" is
+       not blank, so no NOT_HAS_PROPERTY filter will ever surface it, and every
+       contact carrying one was invisible to enrichment. There is no HubSpot
+       operator for "is junk", so this reads his book and decides client-side.
+
+    Every pass is scoped to people he has actually corresponded with: the rest
+    have no signature to read and no relationship to justify the work.
+    """
+    contacted = {"propertyName": "notes_last_contacted", "operator": "HAS_PROPERTY"}
+    by_id: dict[str, dict[str, Any]] = {}
+    scanned = 0
+    totals: dict[str, int | None] = {}
+
+    passes: list[tuple[str, list[dict[str, Any]]]] = [
+        ("missing_jobtitle", [{"propertyName": "jobtitle", "operator": "NOT_HAS_PROPERTY"}, contacted]),
+    ]
+    if include_phone:
+        passes.append(
+            ("missing_phone", [{"propertyName": "phone", "operator": "NOT_HAS_PROPERTY"}, contacted])
+        )
+
+    for label, filters in passes:
+        found = search_contacts(limit=limit, owner_id=owner_id or None, filters=filters)
+        totals[label] = found.get("total")
+        scanned += found.get("count") or 0
+        for contact in found.get("contacts") or []:
+            cid = str(contact.get("id") or "")
+            if cid:
+                by_id.setdefault(cid, contact)
+
+    # The placeholder sweep. Reads a wider slice because the junk is scattered
+    # and no filter narrows it.
+    sweep = search_contacts(limit=max(limit, 200), owner_id=owner_id or None, filters=[contacted])
+    totals["placeholder_sweep"] = sweep.get("total")
+    scanned += sweep.get("count") or 0
+    placeholders = 0
+    for contact in sweep.get("contacts") or []:
+        junk = [f for f in ENRICHABLE_FIELDS if str(contact.get(f) or "").strip() and is_placeholder(contact.get(f), field=f)]
+        if not junk:
+            continue
+        if not include_phone and junk == ["phone"]:
+            continue
+        placeholders += 1
+        cid = str(contact.get("id") or "")
+        if cid:
+            by_id.setdefault(cid, contact)
+
+    return list(by_id.values()), {
+        "scanned": scanned,
+        "totals": totals,
+        "placeholder_hits": placeholders,
+    }
+
+
+def propose_field_enrichment(
+    *,
+    limit: int = 25,
+    owner_id: str | None = None,
+    include_phone: bool = False,
+) -> dict[str, Any]:
+    """Propose title/company/phone fills sourced from Kory's own email signatures.
 
     Read-only: proposals are staged for approval and never applied while writes
-    are blocked. Only blank fields are ever proposed — an existing value is
-    never overwritten.
+    are blocked. Only fields that are blank *or hold a placeholder* are ever
+    proposed — a real existing value is never overwritten.
     """
     if not hubspot_configured():
         return {"ok": False, "kory_message": "**HubSpot:** not connected."}
 
     scope_owner = owner_id if owner_id is not None else kory_owner_id()
     try:
-        found = search_contacts(
-            limit=limit,
-            owner_id=scope_owner or None,
-            filters=[
-                {"propertyName": "jobtitle", "operator": "NOT_HAS_PROPERTY"},
-                # Only people he has actually corresponded with: the rest have
-                # no signature to read and no relationship to justify the work.
-                {"propertyName": "notes_last_contacted", "operator": "HAS_PROPERTY"},
-            ],
+        contacts, coverage = find_enrichment_candidates(
+            limit=limit, owner_id=scope_owner, include_phone=include_phone
         )
     except Exception as exc:
         return {"ok": False, "error": str(exc), "kory_message": "HubSpot lookup failed."}
 
-    contacts = found.get("contacts") or []
     proposals: list[dict[str, Any]] = []
     no_source: list[str] = []
 
@@ -866,16 +1106,23 @@ def propose_field_enrichment(*, limit: int = 25, owner_id: str | None = None) ->
         email = (contact.get("email") or "").strip()
         if not email:
             continue
-        fields = _signature_fields_for(
+        known_company = str(contact.get("company") or "")
+        if is_placeholder(known_company, field="company"):
+            # Junk in the field must not act as a known company, or the miner
+            # keeps the placeholder and proposes nothing.
+            known_company = ""
+        fields, provenance = _signature_fields_for(
             email,
-            known_company=str(contact.get("company") or ""),
+            known_company=known_company,
             contact_name=str(contact.get("name") or ""),
         )
-        # Never propose a value for a field that already has one.
+        # Never propose a value for a field that already holds real data.
         fields = {
             key: value
             for key, value in fields.items()
-            if not str(contact.get(key) or "").strip() or is_placeholder(contact.get(key), field=key)
+            if key in ENRICHABLE_FIELDS
+            and (include_phone or key != "phone")
+            and _needs_filling(contact, key)
         }
         if not fields:
             no_source.append(email)
@@ -886,7 +1133,13 @@ def propose_field_enrichment(*, limit: int = 25, owner_id: str | None = None) ->
                 "email": email,
                 "name": contact.get("name"),
                 "proposed_fields": fields,
+                # What each value is replacing, so a review can tell "was blank"
+                # from "was junk" without opening HubSpot.
+                "replacing": {
+                    key: str(contact.get(key) or "") for key in fields if str(contact.get(key) or "").strip()
+                },
                 "source": "outlook_signature",
+                "provenance": provenance,
                 "suggested_action": "fill_blank_fields",
             }
         )
@@ -895,17 +1148,22 @@ def propose_field_enrichment(*, limit: int = 25, owner_id: str | None = None) ->
         batch_type="field_enrichment",
         payload={"proposals": proposals, "source": "outlook_signature"},
     )
+    junk_fixes = sum(1 for row in proposals if row.get("replacing"))
     lines = [
         f"**Contact enrichment — {len(proposals)} fill(s) proposed** "
-        + (
-            f"from {found['total']} contact(s) missing a title\n"
-            if found.get("total") is not None
-            else f"from the {found.get('count') or 0} contact(s) sampled\n"
-        )
+        f"from {coverage['scanned']} contact(s) scanned\n"
     ]
+    if junk_fixes:
+        lines.append(
+            f"_{junk_fixes} of these replace a placeholder value "
+            "(e.g. 'Prefer No Connection to Company') rather than a blank field._\n"
+        )
     for row in proposals[:12]:
-        fields = ", ".join(f"{k} = {v}" for k, v in (row.get("proposed_fields") or {}).items())
-        lines.append(f"• {row.get('name') or row['email']} — {fields}")
+        parts = []
+        for key, value in (row.get("proposed_fields") or {}).items():
+            was = (row.get("replacing") or {}).get(key)
+            parts.append(f"{key} = {value}" + (f" (was '{was}')" if was else ""))
+        lines.append(f"• {row.get('name') or row['email']} — {', '.join(parts)}")
     if len(proposals) > 12:
         # One approval applies the whole batch, so never imply the list is all of it.
         lines.append(
@@ -916,13 +1174,18 @@ def propose_field_enrichment(*, limit: int = 25, owner_id: str | None = None) ->
         lines.append("_No usable signatures found in the sampled contacts._")
     if no_source:
         lines.append(f"\n_{len(no_source)} contact(s) had no readable signature._")
-    lines.append("\n_Staged only — HubSpot was not modified. Blank fields only; nothing is overwritten._")
+    lines.append(
+        f"\n_Staged only — HubSpot was not modified. Apply with batch `{batch_id}`; "
+        "every value records where it came from and can be undone._"
+    )
     return {
         "ok": True,
         "batch_id": batch_id,
         "proposal_count": len(proposals),
         "proposals": proposals,
         "no_source_count": len(no_source),
+        "placeholder_replacements": junk_fixes,
+        "coverage": coverage,
         "writes_blocked": hubspot_writes_blocked(),
         "kory_message": "\n".join(lines),
     }
@@ -930,22 +1193,27 @@ def propose_field_enrichment(*, limit: int = 25, owner_id: str | None = None) ->
 
 def _signature_fields_for(
     email: str, *, known_company: str = "", contact_name: str = ""
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, Any]]:
     """Read recent mail *from* this person and mine the signature (read-only).
 
     ``search_inbox`` returns a normalised summary whose ``preview`` is only the
     opening lines — signatures live at the foot of a message, so the full body
     has to be fetched per message.
+
+    Returns the fields *and* the message they came from. A value written into
+    the shared CRM has to be traceable to its source: without that, a wrong
+    title is indistinguishable from a right one six months later, and there is
+    no way to judge whether a whole batch should be rolled back.
     """
     target = email.strip().lower()
     if not target:
-        return {}
+        return {}, {}
     try:
         from app.integrations.outlook_inbox import search_inbox
 
         messages, _ = search_inbox(query=email, top=5)
     except Exception:
-        return {}
+        return {}, {}
 
     for summary in messages or []:
         # Only trust a signature in mail the contact actually sent.
@@ -970,8 +1238,14 @@ def _signature_fields_for(
             body, known_company=known_company, contact_name=contact_name
         )
         if fields:
-            return fields
-    return {}
+            return fields, {
+                "source": "outlook_signature",
+                "message_id": str(message_id),
+                "subject": str(summary.get("subject") or "")[:120],
+                "received": str(summary.get("received") or summary.get("received_at") or ""),
+                "sender": sender or target,
+            }
+    return {}, {}
 
 
 # Retired: `hs_analytics_source` is OFFLINE for every contact in this portal, so
@@ -1523,8 +1797,19 @@ def stage_meeting_note(
     approved: bool = False,
     owner_ack: bool = False,
 ) -> dict[str, Any]:
-    """Stage a HubSpot note after a meeting — no live write while blocked."""
-    assert_kory_approved_write(approved=approved, action="HubSpot meeting note")
+    """Stage a HubSpot note after a meeting — no live write while blocked.
+
+    The approval gate sits *after* the contact lookup on purpose. It used to be
+    the first line, which meant an unconfirmed call returned
+    `confirmation_required` in 0.01s and everything below — the address lookup,
+    the "did you mean one of these five people" list, the ownership check — never
+    ran. Kory asked for a note, was asked to confirm, confirmed, and only then
+    heard that nobody in HubSpot has that address or that the record is
+    Natalie's. Two round trips to learn something knowable in the first.
+
+    Finding the contact is a read. It needs no approval, and nothing below it
+    touches HubSpot until the gate passes.
+    """
     text = note.strip()
     if not text:
         return {"ok": False, "error": "note is required"}
@@ -1608,6 +1893,14 @@ def stage_meeting_note(
                 "Nothing was staged."
             ),
         }
+
+    # Everything above is a read. This is the last point before anything is
+    # staged or written, and the action names the record so the confirmation
+    # Kory sees says which contact he is agreeing to.
+    assert_kory_approved_write(
+        approved=approved,
+        action=f"HubSpot meeting note on {matched.get('name') or email}",
+    )
 
     batch_id = _stage_hubspot_batch(
         batch_type="meeting_note",
@@ -1960,7 +2253,7 @@ def execute_hubspot_batch(
     elif batch_type in {"field_enrichment", "lead_source_fill"}:
         for row in payload.get("proposals", []):
             try:
-                outcome = _apply_field_fill(row, owner_ack=owner_ack)
+                outcome = _apply_field_fill(row, owner_ack=owner_ack, batch_id=batch_id)
                 if outcome == "applied":
                     applied += 1
                 elif outcome == "not_kory_owned":
@@ -1995,12 +2288,29 @@ def execute_hubspot_batch(
         "errors": errors,
         "batch_id": batch_id,
     }
-    if not_owned:
-        result["not_kory_owned"] = not_owned
-        result["kory_message"] = (
-            f"Filled {applied}. Left {not_owned} alone — those records belong to "
-            "other people at IFG, so I didn't touch them."
+    message: list[str] = []
+    if batch_type in {"field_enrichment", "lead_source_fill"}:
+        message.append(f"Filled {applied} field(s) on your contacts.")
+        if not_owned:
+            result["not_kory_owned"] = not_owned
+            # Reported separately from `skipped`: "3 skipped" reads as "you'd
+            # already done those", not "those are someone else's".
+            message.append(
+                f"Left {not_owned} alone — those records belong to other people at IFG."
+            )
+        if skipped:
+            message.append(f"{skipped} already had a value, so I left yours in place.")
+        if applied:
+            result["undo_batch_id"] = batch_id
+            message.append(f"Say the word and I can undo all of it — batch `{batch_id}`.")
+    elif batch_type == "duplicate_merge" and applied:
+        message.append(
+            f"Merged {applied} pair. HubSpot merges are permanent — this one cannot be undone."
         )
+    if errors:
+        message.append(f"{len(errors)} failed: " + "; ".join(errors[:3]))
+    if message:
+        result["kory_message"] = " ".join(message)
     return result
 
 
@@ -2045,7 +2355,146 @@ def _apply_merge_row(row: dict[str, Any]) -> None:
     )
 
 
-def _apply_field_fill(row: dict[str, Any], *, owner_ack: bool = False) -> str:
+def ensure_applied_writes_table(conn: Any) -> None:
+    """One definition of the undo log, used by every reader and writer."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS hubspot_applied_writes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT NOT NULL,
+            contact_id TEXT NOT NULL,
+            field TEXT NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            source TEXT,
+            reverted_at TEXT,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_hs_applied_batch ON hubspot_applied_writes (batch_id)"
+    )
+
+
+def _record_applied_write(
+    *,
+    batch_id: str,
+    contact_id: str,
+    field: str,
+    old_value: str,
+    new_value: str,
+    source: str = "",
+) -> None:
+    """Log what a write replaced, so a batch can be undone.
+
+    A book-wide cleanup writes to hundreds of records in the shared IFG portal.
+    Without the prior value there is no undo: "put it back how it was" is
+    unanswerable, and the only remedy for a bad batch is opening each contact by
+    hand. HubSpot's own property history exists but is per-record and not
+    reachable through any tool here.
+    """
+    from app.storage.lexi_db import get_lexi_connection
+
+    with get_lexi_connection() as conn:
+        ensure_applied_writes_table(conn)
+        conn.execute(
+            """
+            INSERT INTO hubspot_applied_writes
+                (batch_id, contact_id, field, old_value, new_value, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (batch_id, str(contact_id), field, old_value, new_value, source),
+        )
+        conn.commit()
+
+
+def revert_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str, Any]:
+    """Put every field this batch wrote back to what it was.
+
+    Enrichment only. A merge cannot be undone by anything here — HubSpot itself
+    cannot undo one — which is exactly why merges are applied one pair at a time
+    and this refuses to pretend otherwise.
+    """
+    assert_kory_approved_write(approved=approved, action=f"HubSpot rollback of batch {batch_id}")
+    from app.storage.lexi_db import get_lexi_connection
+
+    with get_lexi_connection() as conn:
+        ensure_applied_writes_table(conn)
+        rows = conn.execute(
+            "SELECT id, contact_id, field, old_value FROM hubspot_applied_writes "
+            "WHERE batch_id = ? AND reverted_at IS NULL",
+            (batch_id,),
+        ).fetchall()
+
+    if not rows:
+        return {
+            "ok": False,
+            "batch_id": batch_id,
+            "error_code": "nothing_to_revert",
+            "kory_message": (
+                f"Nothing to undo for batch `{batch_id}` — either it was never applied, "
+                "or it has already been rolled back."
+            ),
+        }
+
+    if hubspot_writes_blocked():
+        return {
+            "ok": True,
+            "dry_run": True,
+            "batch_id": batch_id,
+            "would_revert": len(rows),
+            "kory_message": (
+                f"Would put back {len(rows)} field(s) from batch `{batch_id}`. "
+                "Nothing written — live HubSpot writes are blocked."
+            ),
+        }
+
+    # Group by contact so one record is one API call, not one per field.
+    by_contact: dict[str, dict[str, Any]] = {}
+    ids_by_contact: dict[str, list[int]] = {}
+    for row in rows:
+        by_contact.setdefault(row["contact_id"], {})[row["field"]] = row["old_value"] or ""
+        ids_by_contact.setdefault(row["contact_id"], []).append(row["id"])
+
+    reverted, errors = 0, []
+    done_ids: list[int] = []
+    for contact_id, props in by_contact.items():
+        try:
+            _raise_if_refused(
+                execute_hubspot_tool(
+                    HUBSPOT_UPDATE_CONTACT, {"contactId": contact_id, "properties": props}
+                ),
+                f"Revert contact {contact_id}",
+            )
+            reverted += len(props)
+            done_ids.extend(ids_by_contact[contact_id])
+        except Exception as exc:
+            errors.append(f"{contact_id}: {exc}")
+
+    if done_ids:
+        with get_lexi_connection() as conn:
+            conn.executemany(
+                "UPDATE hubspot_applied_writes SET reverted_at = datetime('now') WHERE id = ?",
+                [(i,) for i in done_ids],
+            )
+            conn.commit()
+
+    return {
+        "ok": not errors,
+        "batch_id": batch_id,
+        "reverted": reverted,
+        "errors": errors,
+        "kory_message": (
+            f"Put back {reverted} field(s) from batch `{batch_id}`."
+            + (f" {len(errors)} failed." if errors else "")
+        ),
+    }
+
+
+def _apply_field_fill(
+    row: dict[str, Any], *, owner_ack: bool = False, batch_id: str = ""
+) -> str:
     """Write proposed fields, re-checking at apply time that they are still blank.
 
     A batch can sit staged for days; if Kory filled the field himself in the
@@ -2060,6 +2509,7 @@ def _apply_field_fill(row: dict[str, Any], *, owner_ack: bool = False) -> str:
     props = row.get("proposed_fields") or {}
     if not contact_id or not props:
         return "nothing_proposed"
+    live: dict[str, Any] = {}
     current = contacts_by_ids([str(contact_id)])
     if current:
         live = current[0]
@@ -2068,11 +2518,7 @@ def _apply_field_fill(row: dict[str, Any], *, owner_ack: bool = False) -> str:
         # colleague's record just because a stale row said so.
         if assert_contact_writable(live, owner_ack=owner_ack):
             return "not_kory_owned"
-        props = {
-            key: value
-            for key, value in props.items()
-            if not str(live.get(key) or "").strip() or is_placeholder(live.get(key), field=key)
-        }
+        props = {key: value for key, value in props.items() if _needs_filling(live, key)}
     if not props:
         return "already_filled"
     _raise_if_refused(
@@ -2082,6 +2528,19 @@ def _apply_field_fill(row: dict[str, Any], *, owner_ack: bool = False) -> str:
         ),
         f"Enrich contact {contact_id}",
     )
+    # Recorded only after HubSpot accepted it, so the undo log never claims a
+    # write that did not land.
+    if batch_id:
+        source = str((row.get("provenance") or {}).get("message_id") or row.get("source") or "")
+        for key, value in props.items():
+            _record_applied_write(
+                batch_id=batch_id,
+                contact_id=str(contact_id),
+                field=key,
+                old_value=str(live.get(key) or ""),
+                new_value=str(value),
+                source=source,
+            )
     return "applied"
 
 
