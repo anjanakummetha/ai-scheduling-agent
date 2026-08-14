@@ -733,19 +733,81 @@ def lexi_hubspot_duplicate_merges(limit: str = "0") -> str:
 
 
 @_tool
-def lexi_hubspot_enrich_contacts(limit: str = "25") -> str:
-    """Propose job title/company fills from Kory's own email signatures.
+def lexi_hubspot_enrich_contacts(limit: str = "25", include_phone: str = "false") -> str:
+    """Propose job title / company / phone fills from Kory's own email signatures.
 
-    Blank fields only — an existing value is never overwritten, and blankness is
-    re-checked at apply time so a stale batch cannot clobber something Kory
-    filled in himself. Proposals are staged; applying a batch writes to the real
-    shared IFG portal.
+    Call this first — the tool does the scanning and reports what it found.
+
+    Fills a field only when it is blank OR holds a placeholder such as
+    'Prefer No Connection to Company' (what LinkedIn writes when a member hides
+    their employer). A real value is never overwritten, and that is re-checked at
+    apply time so a stale batch cannot clobber something Kory filled in himself.
+
+    Pass include_phone='true' to also propose phone numbers — 30% of his book has
+    none and LinkedIn cannot supply them, so his own inbox is the only source.
+
+    Nothing is written here. This returns a batch_id; applying it is a separate,
+    confirmed call to lexi_hubspot_apply_batch, and every applied value can be
+    undone with lexi_hubspot_undo_batch.
     """
     try:
-        n = max(1, min(50, int(limit.strip() or "25")))
+        n = max(1, min(200, int(limit.strip() or "25")))
     except ValueError:
         n = 25
-    return _wrap("lexi_hubspot_enrich_contacts", lexi.hubspot_enrichment_action, limit=n)
+    return _wrap(
+        "lexi_hubspot_enrich_contacts",
+        lexi.hubspot_enrichment_action,
+        limit=n,
+        include_phone=include_phone.strip().lower() in {"1", "true", "yes"},
+    )
+
+
+@_tool
+def lexi_hubspot_apply_batch(
+    batch_id: str,
+    confirm: str = "false",
+    merge_pair: str = "",
+    owner_ack: str = "false",
+) -> str:
+    """Apply a staged HubSpot batch. This writes to the real shared IFG portal.
+
+    Pass confirm='true' once Kory has asked for or agreed to it; if it returns
+    confirmation_required, ask him and call again — never report it as unsupported.
+
+    Enrichment batches apply every proposed fill and can be undone afterwards with
+    lexi_hubspot_undo_batch. Duplicate-merge batches are different: a HubSpot merge
+    is PERMANENT and cannot be undone by anyone, so they apply one pair at a time
+    and need merge_pair='<primary_id>:<duplicate_id>'. Tell Kory it is irreversible
+    before applying one.
+
+    If a record belongs to another IFG owner this returns owner_confirmation_required
+    naming them. Re-call with owner_ack='true' only after Kory confirms he means to
+    change someone else's record.
+    """
+    return _wrap(
+        "lexi_hubspot_apply_batch",
+        lexi.hubspot_apply_batch_action,
+        batch_id=batch_id.strip(),
+        confirm=confirm.strip().lower() in {"1", "true", "yes"},
+        merge_pair=merge_pair.strip(),
+        owner_ack=owner_ack.strip().lower() in {"1", "true", "yes"},
+    )
+
+
+@_tool
+def lexi_hubspot_undo_batch(batch_id: str, confirm: str = "false") -> str:
+    """Put back every field a staged enrichment batch wrote — the undo for apply_batch.
+
+    Restores each contact's previous value, including back to blank. Works only for
+    enrichment; a merge cannot be undone by this or anything else, in Lexi or in
+    HubSpot. Pass confirm='true' once Kory has asked for or agreed to it.
+    """
+    return _wrap(
+        "lexi_hubspot_undo_batch",
+        lexi.hubspot_undo_batch_action,
+        batch_id=batch_id.strip(),
+        confirm=confirm.strip().lower() in {"1", "true", "yes"},
+    )
 
 
 @_tool
@@ -792,9 +854,15 @@ def lexi_hubspot_meeting_note(
 ) -> str:
     """Log a HubSpot note on a contact after a meeting. This writes to the real shared IFG portal once confirmed.
 
-    If the contact belongs to another IFG owner this returns
-    owner_confirmation_required naming them; re-call with owner_ack=true only
-    after Kory confirms he means to touch someone else's record.
+    Call this as soon as Kory asks for the note — the tool finds the contact and
+    reports any problem before anything is written. Do not gather details first.
+    Pass confirm='true' once he has asked for or agreed to it; if it returns
+    confirmation_required, ask him and call again — never report it as unsupported.
+
+    Returns contact_not_found with near matches when no HubSpot record has that
+    address, and owner_confirmation_required naming the owner when the contact
+    belongs to another IFG person. Re-call with owner_ack='true' only after Kory
+    confirms he means to touch someone else's record.
     """
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     ack = owner_ack.strip().lower() in {"1", "true", "yes"}

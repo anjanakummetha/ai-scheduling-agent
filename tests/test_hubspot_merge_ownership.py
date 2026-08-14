@@ -20,12 +20,21 @@ import app.integrations.hubspot_manager as hs
 
 KORY = "kory-owner-id"
 HEIDI = "heidi-owner-id"
+# An owner id HubSpot will not resolve to a name. Not hypothetical: one such id
+# owns 6 of Kory's 27 duplicate pairs, because Composio ignores `archived` on
+# HUBSPOT_RETRIEVE_OWNERS and deactivated users never come back.
+GHOST = "159291600"
 
 
 @pytest.fixture(autouse=True)
 def _kory_is_kory(monkeypatch):
     monkeypatch.setattr(hs, "kory_owner_id", lambda: KORY)
-    monkeypatch.setattr(hs, "owner_name", lambda oid: "Heidi Ross" if oid == HEIDI else "Kory")
+    monkeypatch.setattr(
+        hs,
+        "owner_name",
+        lambda oid: {KORY: "Kory", HEIDI: "Heidi Ross"}.get(oid, f"an unlisted owner (id {oid})"),
+    )
+    monkeypatch.setattr(hs, "owner_is_known", lambda oid: oid in {KORY, HEIDI})
 
 
 def _contact(cid: str, owner: str) -> dict:
@@ -89,7 +98,61 @@ def test_proposal_marks_pairs_that_touch_a_colleagues_record():
 def test_proposal_is_quiet_when_every_record_is_his():
     annotated = hs._owner_annotation(_contact("1", KORY), _contact("2", KORY))
     assert annotated["foreign_owners"] == []
+    assert annotated["unlisted_owner_ids"] == []
     assert annotated["kory_owns_all"] is True
+
+
+# --- an owner id that resolves to nobody -----------------------------------
+
+
+def test_an_unresolvable_owner_is_flagged_separately_from_a_named_one():
+    """'Owned by Heidi' he can settle in a message. This he cannot."""
+    annotated = hs._owner_annotation(_contact("1", KORY), _contact("2", GHOST))
+    assert annotated["kory_owns_all"] is False
+    assert annotated["unlisted_owner_ids"] == [GHOST]
+
+
+def test_the_block_message_does_not_pass_off_an_id_as_a_name():
+    """"Owned by unknown owner (159291600)" reads like a person and isn't one."""
+    blocked = hs.assert_contact_writable(_contact("2", GHOST))
+    assert blocked is not None
+    assert blocked["owner_unknown"] is True
+    assert GHOST in blocked["error"]
+    assert "isn't in HubSpot's owner list" in blocked["error"]
+
+
+def test_a_named_owner_is_still_named():
+    blocked = hs.assert_contact_writable(_contact("2", HEIDI))
+    assert blocked is not None
+    assert blocked["owner_unknown"] is False
+    assert "Heidi Ross" in blocked["error"]
+
+
+def test_merge_refusal_says_the_id_is_unresolvable_rather_than_naming_it():
+    row = {"primary_id": "1", "duplicate_id": "2"}
+    with patch.object(hs, "contacts_by_ids", return_value=[_contact("1", KORY), _contact("2", GHOST)]):
+        blocked = hs._merge_owner_block(row)
+    assert blocked is not None
+    assert blocked["error_code"] == "owner_confirmation_required"
+    assert GHOST in blocked["kory_message"]
+    assert "deactivated" in blocked["kory_message"]
+
+
+def test_a_failed_owner_lookup_is_not_cached_forever():
+    """The cache has no TTL, so caching {} would make every owner unresolvable
+    for the life of the process — and that changes what Lexi tells Kory about
+    every record he does not own."""
+    hs._owner_cache = None
+    with patch.object(hs, "execute_hubspot_tool", side_effect=RuntimeError("Composio down")):
+        assert hs.owner_map() == {}
+    assert hs._owner_cache is None
+
+    owners = {"data": {"results": [{"id": HEIDI, "firstName": "Heidi", "lastName": "Ross"}]}}
+    try:
+        with patch.object(hs, "execute_hubspot_tool", return_value=owners):
+            assert hs.owner_map() == {HEIDI: "Heidi Ross"}
+    finally:
+        hs._owner_cache = None
 
 
 # --- enrichment reports the reason, not just the count ----------------------

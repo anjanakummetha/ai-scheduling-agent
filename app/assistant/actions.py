@@ -1391,10 +1391,33 @@ def hubspot_lead_source_fills_action(*, limit: int = 25) -> dict[str, Any]:
     return hubspot_enrichment_action(limit=limit)
 
 
-def hubspot_enrichment_action(*, limit: int = 25) -> dict[str, Any]:
+def hubspot_enrichment_action(*, limit: int = 25, include_phone: bool = False) -> dict[str, Any]:
     from app.integrations.hubspot_manager import propose_field_enrichment
 
-    return propose_field_enrichment(limit=limit)
+    return propose_field_enrichment(limit=limit, include_phone=include_phone)
+
+
+def hubspot_apply_batch_action(
+    *,
+    batch_id: str,
+    confirm: bool = False,
+    merge_pair: str = "",
+    owner_ack: bool = False,
+) -> dict[str, Any]:
+    from app.integrations.hubspot_manager import execute_hubspot_batch
+
+    return execute_hubspot_batch(
+        batch_id=batch_id,
+        approved=confirm,
+        merge_pair=merge_pair,
+        owner_ack=owner_ack,
+    )
+
+
+def hubspot_undo_batch_action(*, batch_id: str, confirm: bool = False) -> dict[str, Any]:
+    from app.integrations.hubspot_manager import revert_hubspot_batch
+
+    return revert_hubspot_batch(batch_id=batch_id, approved=confirm)
 
 
 def hubspot_health_report_action(*, all_owners: bool = False) -> dict[str, Any]:
