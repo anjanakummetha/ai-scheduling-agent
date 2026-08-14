@@ -1011,9 +1011,12 @@ ENRICHABLE_FIELDS = ("jobtitle", "company", "phone")
 ENRICH_BATCH_DEFAULT = 12
 ENRICH_BATCH_MAX = 25
 ENRICH_TIME_BUDGET_SEC = 70
-# Most candidates have no mail from them at all — 20 of 21 in the first live run.
-# Without remembering that, every repeat call spends its whole budget on the
-# same misses and never reaches the contacts further down the list.
+# A contact is remembered once it has been looked at, whether or not anything
+# was found. Remembering only the empty ones looks right and is not: a contact
+# that yielded a fill still has the gap until Kory applies the batch, so it comes
+# straight back in the next scan. A server-side sweep spun on the same 19
+# contacts for nine rounds that way, and "keep going" in Teams would have stalled
+# the same. `clear_enrichment_check_cache()` is the way back.
 ENRICH_MISS_TTL_DAYS = 14
 
 
@@ -1028,8 +1031,8 @@ def _ensure_enrichment_checks_table(conn: Any) -> None:
     )
 
 
-def _recent_enrichment_misses() -> set[str]:
-    """Contacts already searched with no usable signature, recently enough to skip."""
+def _recently_checked_contacts() -> set[str]:
+    """Contacts already looked at recently — hit or miss — so a scan can move on."""
     from app.storage.lexi_db import get_lexi_connection
 
     try:
@@ -1046,7 +1049,7 @@ def _recent_enrichment_misses() -> set[str]:
         return set()
 
 
-def _record_enrichment_misses(contact_ids: list[str]) -> None:
+def _record_contacts_checked(contact_ids: list[str]) -> None:
     if not contact_ids:
         return
     from app.storage.lexi_db import get_lexi_connection
@@ -1190,7 +1193,7 @@ def propose_field_enrichment(
     except Exception as exc:
         return {"ok": False, "error": str(exc), "kory_message": "HubSpot lookup failed."}
 
-    already_checked = _recent_enrichment_misses()
+    already_checked = _recently_checked_contacts()
     fresh = [c for c in contacts if str(c.get("id") or "") not in already_checked]
     skipped_known = len(contacts) - len(fresh)
     queue = fresh[:batch]
@@ -1203,7 +1206,7 @@ def propose_field_enrichment(
 
     proposals: list[dict[str, Any]] = []
     no_source: list[dict[str, Any]] = []
-    misses: list[str] = []
+    checked_ids: list[str] = []
     ran_out_of_time = False
     started = time.monotonic()
 
@@ -1301,7 +1304,7 @@ def propose_field_enrichment(
                     "corporate_domain": company_lookup.is_corporate_domain(email),
                 }
             )
-            misses.append(str(contact.get("id") or ""))
+            checked_ids.append(str(contact.get("id") or ""))
             continue
         proposals.append(
             {
@@ -1322,8 +1325,12 @@ def propose_field_enrichment(
                 "suggested_action": "fill_blank_fields",
             }
         )
+        # Remembered too. The gap is still open until Kory applies the batch, so
+        # without this the very contacts we just answered come back first in the
+        # next scan and the sweep never advances.
+        checked_ids.append(str(contact.get("id") or ""))
 
-    _record_enrichment_misses(misses)
+    _record_contacts_checked(checked_ids)
 
     batch_id = _stage_hubspot_batch(
         batch_type="field_enrichment",
@@ -1395,9 +1402,7 @@ def propose_field_enrichment(
             + "Say _keep going_ and I'll pick up where I left off."
         )
     if skipped_known:
-        lines.append(
-            f"_Skipped {skipped_known} I already checked recently and found nothing for._"
-        )
+        lines.append(f"_Skipped {skipped_known} I already went through recently._")
 
     lines.append(
         f"\n_Staged only — HubSpot was not modified. Apply with batch `{batch_id}`; "

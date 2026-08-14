@@ -45,6 +45,7 @@ def db():
         # Recreated empty, so "no rows" is a real answer rather than a missing
         # table — the tests that assert nothing was logged need to query it.
         hs.ensure_applied_writes_table(conn)
+        conn.execute("DROP TABLE IF EXISTS hubspot_enrichment_checks")
         conn.commit()
     return True
 
@@ -189,11 +190,55 @@ def test_phone_is_only_proposed_when_asked_for(mock_search, mock_sig, _cfg, db):
     without = hs.propose_field_enrichment(limit=5)
     assert without["proposals"][0]["proposed_fields"] == {"jobtitle": "CEO"}
 
+    # Same contact twice: the second scan would skip it as already looked at.
+    hs.clear_enrichment_check_cache()
     with_phone = hs.propose_field_enrichment(limit=5, include_phone=True)
     assert with_phone["proposals"][0]["proposed_fields"] == {
         "jobtitle": "CEO",
         "phone": "303-555-1234",
     }
+
+
+@patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
+@patch("app.integrations.hubspot_manager._signature_fields_for")
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_a_contact_already_answered_is_not_offered_again(mock_search, mock_sig, _cfg, db):
+    """The gap stays open until Kory applies, so a hit must be remembered too.
+
+    Recording only the empty ones looks right and is not: a server-side sweep
+    spun on the same 19 contacts for nine rounds, and "keep going" in Teams
+    would have stalled the same way.
+    """
+    contact = {
+        "id": "1", "email": "b@x.com", "name": "Bob",
+        "jobtitle": "", "company": "Real Co", "hubspot_owner_id": KORY,
+    }
+    mock_search.return_value = {"total": 1, "count": 1, "contacts": [contact]}
+    mock_sig.return_value = ({"jobtitle": "CEO"}, {})
+
+    first = hs.propose_field_enrichment(limit=5, use_website=False)
+    assert first["proposal_count"] == 1
+
+    # Same contact, same unfilled gap — HubSpot has not been written to yet.
+    second = hs.propose_field_enrichment(limit=5, use_website=False)
+    assert second["proposal_count"] == 0
+    assert second["skipped_recently_checked"] == 1
+
+
+@patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
+@patch("app.integrations.hubspot_manager._signature_fields_for")
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_clearing_the_cache_makes_them_available_again(mock_search, mock_sig, _cfg, db):
+    contact = {
+        "id": "1", "email": "b@x.com", "name": "Bob",
+        "jobtitle": "", "company": "Real Co", "hubspot_owner_id": KORY,
+    }
+    mock_search.return_value = {"total": 1, "count": 1, "contacts": [contact]}
+    mock_sig.return_value = ({"jobtitle": "CEO"}, {})
+
+    assert hs.propose_field_enrichment(limit=5, use_website=False)["proposal_count"] == 1
+    hs.clear_enrichment_check_cache()
+    assert hs.propose_field_enrichment(limit=5, use_website=False)["proposal_count"] == 1
 
 
 # --- apply, and the undo log ------------------------------------------------
