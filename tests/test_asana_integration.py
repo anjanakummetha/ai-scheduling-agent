@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from datetime import date, datetime, timedelta
 
 from app.integrations.asana_manager import MT, normalize_due_on
@@ -431,3 +433,53 @@ def test_a_refused_update_never_reaches_the_read_back(monkeypatch):
     out = am.complete_asana_task(task_gid="1", approved=True)
     assert out["ok"] is False
     assert "ASANA_GET_A_TASK" not in calls
+
+
+_WORKSPACE_USERS = [
+    {"gid": "anju", "name": "Anju Kummetha", "email": "anjanakummetha@gmail.com"},
+    {"gid": "kory", "name": "Kory Mitchell", "email": "kory.mitchell@iconicfounders.com"},
+    {"gid": "heidi", "name": "Heidi Heckler", "email": "heidi.heckler@iconicfounders.com"},
+    {"gid": "natalie", "name": "Natalie Asher", "email": "natalie.asher@iconicfounders.com"},
+    {"gid": "su_uni", "name": "Sujash Barman", "email": "sjbarman@ucdavis.edu"},
+    {"gid": "su_work", "name": "Sujash Barman", "email": "sujash.barman@iconicfounders.com"},
+]
+
+
+@pytest.fixture
+def workspace(monkeypatch):
+    from app.integrations import asana_manager as am
+
+    monkeypatch.setenv("ASANA_WORKSPACE_GID", "ws1")
+    monkeypatch.setattr(
+        am, "execute_asana_tool",
+        lambda slug, args=None: {"data": {"data": _WORKSPACE_USERS}},
+    )
+    return am
+
+
+@pytest.mark.parametrize(
+    "asked,expected",
+    [
+        ("Anju", "anju"),
+        ("Anjana", "anju"),                                    # her real name
+        ("Anjana Kummetha", "anju"),                           # Asana holds "Anju"
+        ("Anju — CEO Executive AI Tools (Summer 2026)", "anju"),  # project descriptor
+        ("Anju Kummetha (Anjana)", "anju"),
+        ("Kummetha", "anju"),
+        ("anjanakummetha@gmail.com", "anju"),
+        ("Heidi", "heidi"),
+        ("Natalie", "natalie"),
+        ("Sujash", "su_work"),                                 # work account preferred
+        ("sjbarman@ucdavis.edu", "su_uni"),                    # explicit address wins
+    ],
+)
+def test_people_resolve_however_kory_refers_to_them(workspace, asked, expected):
+    """Exact token matching was brittle: "Anjana" resolved to nobody because Asana
+    holds "Anju", and any descriptive suffix killed it outright. Both came back as
+    "no such user", which reads as the person not existing."""
+    assert workspace.resolve_asana_user_gid(asked)[0] == expected
+
+
+@pytest.mark.parametrize("nonsense", ["Zebedee", "xylophone", "asdfgh"])
+def test_a_stranger_still_matches_nobody(workspace, nonsense):
+    assert workspace.resolve_asana_user_gid(nonsense) == ("", "")
