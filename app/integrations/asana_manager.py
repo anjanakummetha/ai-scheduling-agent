@@ -681,6 +681,9 @@ def suggest_board_for_task(title: str, boards: list[str]) -> str:
     return scored[0][1]
 
 
+_UNASSIGNED = frozenset({"no one", "nobody", "unassigned", "none", "leave it", "no"})
+
+
 def _missing_task_details(
     *,
     section: str,
@@ -688,11 +691,18 @@ def _missing_task_details(
     project_gid: str,
     project_name: str,
     title: str = "",
+    assignee: str = "",
 ) -> dict[str, Any] | None:
-    """Ask for a board and a due date before creating, or None if both are settled."""
+    """Ask for board, due date and owner before creating, or None if all settled.
+
+    All three in one message. Kory asked to be prompted for anything he left out —
+    an owner in particular, because an unassigned task belongs to nobody and shows
+    up on no one's list, which is the same silent disappearance as an undated one.
+    """
     wants_board = not section.strip()
     wants_due = not due_on.strip()
-    if not (wants_board or wants_due):
+    wants_owner = not assignee.strip()
+    if not (wants_board or wants_due or wants_owner):
         return None
 
     boards = [row["name"] for row in list_project_sections(project_gid)]
@@ -715,11 +725,19 @@ def _missing_task_details(
             'And when is it due? An undated task never shows up in your overdue '
             'list — say "no due date" if that is deliberate.'
         )
+    if wants_owner:
+        lines.append("")
+        lines.append('And who owns it — you, or someone else? (say "unassigned" to leave it open)')
+
     return {
         "ok": False,
         "error_code": "task_details_required",
-        "error": "Ask Kory for the board and/or due date before creating the task.",
-        "needs": [k for k, v in (("board", wants_board), ("due_on", wants_due)) if v],
+        "error": "Ask Kory for the board, due date and owner before creating the task.",
+        "needs": [
+            k
+            for k, v in (("board", wants_board), ("due_on", wants_due), ("assignee", wants_owner))
+            if v
+        ],
         "boards": boards,
         "suggested_board": suggested,
         "kory_message": "\n".join(lines).strip(),
@@ -789,17 +807,21 @@ def create_asana_task_from_chat(
     # "no due date" is an answer, not a missing value — it settles the question
     # without setting a date.
     declined_due_date = due_on.strip().lower() in _NO_DUE_DATE
+    declined_owner = assignee.strip().lower() in _UNASSIGNED
     missing = _missing_task_details(
         section=section,
         due_on="answered" if declined_due_date else due_on,
         project_gid=project_gid,
         project_name=project_name,
         title=title,
+        assignee="answered" if declined_owner else assignee,
     )
     if missing:
         return missing
     if declined_due_date:
         due_on = ""
+    if declined_owner:
+        assignee = ""
 
     if section.strip().lower() in {"default", "general"} and not project_gid:
         section = "General"

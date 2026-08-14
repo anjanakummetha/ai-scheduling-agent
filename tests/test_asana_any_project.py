@@ -59,7 +59,7 @@ def test_resolve_project_refuses_ambiguity(monkeypatch):
 def test_create_targets_the_named_project(wired):
     out = am.create_asana_task_from_chat(
         title="T", project="Anju - CEO executive tools",
-        section="General", due_on="no due date", approved=True,
+        section="General", due_on="no due date", assignee="unassigned", approved=True,
     )
     assert out["ok"] is True, out
     assert out["project"] == "Anju - CEO executive tools"
@@ -102,7 +102,7 @@ def test_saying_default_still_uses_the_home_project(wired, monkeypatch):
     )
     out = am.create_asana_task_from_chat(
         title="T", project="default", section="General",
-        due_on="no due date", approved=True,
+        due_on="no due date", assignee="unassigned", approved=True,
     )
     assert out["ok"] is True
     create = next(a for s, a in wired if s == "ASANA_CREATE_A_TASK")
@@ -130,7 +130,7 @@ def test_explicit_section_resolves_in_target_project(wired, monkeypatch):
     monkeypatch.setattr(am, "resolve_section_gid", fake_resolve)
     am.create_asana_task_from_chat(
         title="T", section="Backlog", project="Anju - CEO executive tools",
-        due_on="no due date", approved=True,
+        due_on="no due date", assignee="unassigned", approved=True,
     )
     assert seen["project_gid"] == "p-anju"
     placed = next(a for s, a in wired if s == "ASANA_ADD_TASK_TO_SECTION")
@@ -196,7 +196,7 @@ def test_a_task_that_could_not_be_assigned_is_not_reported_as_assigned(wired, mo
         lambda **kw: {"ok": False, "error": "no such user"} if kw.get("assignee") else {"ok": True},
     )
     out = am.create_asana_task_from_chat(
-        title="Send the deck", project="IFG Tasks", assignee="Nobody",
+        title="Send the deck", project="IFG Tasks", assignee="Zebedee",
         section="General", due_on="no due date", approved=True,
     )
     assert out["ok"] is False
@@ -285,7 +285,7 @@ def test_create_asks_for_board_and_due_date_before_writing(wired, monkeypatch):
     out = am.create_asana_task_from_chat(title="T", project="Kory NON-IFG", approved=True)
     assert out["ok"] is False
     assert out["error_code"] == "task_details_required"
-    assert set(out["needs"]) == {"board", "due_on"}
+    assert set(out["needs"]) == {"board", "due_on", "assignee"}
     assert "General" in out["kory_message"]
     assert "overdue" in out["kory_message"], "say why the due date matters"
     assert not wired, "nothing written until he answers"
@@ -294,7 +294,7 @@ def test_create_asks_for_board_and_due_date_before_writing(wired, monkeypatch):
 def test_only_the_missing_detail_is_asked_for(wired, monkeypatch):
     _boards(monkeypatch)
     out = am.create_asana_task_from_chat(
-        title="T", project="Kory NON-IFG", section="General", approved=True
+        title="T", project="Kory NON-IFG", section="General", assignee="unassigned", approved=True
     )
     assert out["needs"] == ["due_on"]
 
@@ -303,7 +303,7 @@ def test_no_due_date_is_an_answer_not_a_gap(wired, monkeypatch):
     _boards(monkeypatch)
     out = am.create_asana_task_from_chat(
         title="T", project="Kory NON-IFG", section="General",
-        due_on="no due date", approved=True,
+        due_on="no due date", assignee="unassigned", approved=True,
     )
     assert out["ok"] is True
     assert "due_update" not in out, "declining a date must not set one"
@@ -367,7 +367,8 @@ def test_the_suggestion_reaches_the_question(wired, monkeypatch):
         lambda project_gid="": [{"gid": f"s{i}", "name": n} for i, n in enumerate(NON_IFG_BOARDS)],
     )
     out = am.create_asana_task_from_chat(
-        title="Renew my YPO membership", project="Kory NON-IFG", approved=True
+        title="Renew my YPO membership", project="Kory NON-IFG",
+        due_on="no due date", assignee="unassigned", approved=True,
     )
     assert out["suggested_board"] == "YPO"
     assert "YPO" in out["kory_message"]
@@ -445,3 +446,31 @@ def test_the_destination_membership_is_the_one_reported(monkeypatch):
     placed = am.describe_task_placement("42", prefer_project_name="Anju — CEO Executive AI Tools (Summer 2026)")
     assert placed["project"].startswith("Anju")
     assert placed["board"] == "📋 Backlog"
+
+
+def test_create_also_asks_who_owns_it(wired, monkeypatch):
+    """An unassigned task belongs to nobody and shows on no one's list — the same
+    silent disappearance as an undated one."""
+    _boards(monkeypatch)
+    out = am.create_asana_task_from_chat(title="T", project="Kory NON-IFG", approved=True)
+    assert "assignee" in out["needs"]
+    assert "owns it" in out["kory_message"]
+
+
+def test_unassigned_is_an_answer_not_a_gap(wired, monkeypatch):
+    _boards(monkeypatch)
+    out = am.create_asana_task_from_chat(
+        title="T", project="Kory NON-IFG", section="General",
+        due_on="no due date", assignee="unassigned", approved=True,
+    )
+    assert out["ok"] is True
+    assert "assignee_update" not in out, "declining an owner must not assign anyone"
+
+
+def test_all_three_questions_arrive_together(wired, monkeypatch):
+    """One round trip, not three — he is mid-day, not filling in a form."""
+    _boards(monkeypatch)
+    out = am.create_asana_task_from_chat(title="T", project="Kory NON-IFG", approved=True)
+    assert set(out["needs"]) == {"board", "due_on", "assignee"}
+    message = out["kory_message"]
+    assert "board" in message.lower() and "due" in message.lower() and "owns" in message.lower()
