@@ -380,9 +380,10 @@ def test_a_move_says_which_board_the_task_landed_on(wired, monkeypatch):
     monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
     monkeypatch.setattr(
         am, "describe_task_placement",
-        lambda gid: {"name": "Lexi test task 3",
-                     "project": "Anju — CEO Executive AI Tools (Summer 2026)",
-                     "board": "📋 Backlog"},
+        lambda gid, prefer_project_name="": {
+            "name": "Lexi test task 3",
+            "project": "Anju — CEO Executive AI Tools (Summer 2026)",
+            "board": "📋 Backlog"},
     )
     out = am.move_asana_task_to_section(
         task_gid="42", project="Anju - CEO executive tools", approved=True
@@ -397,9 +398,50 @@ def test_a_failed_move_claims_no_placement(wired, monkeypatch):
     monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
     monkeypatch.setattr(am, "_write_result", lambda *a, **k: {"ok": False, "error": "nope"})
     called = []
-    monkeypatch.setattr(am, "describe_task_placement", lambda gid: called.append(gid) or {})
+    monkeypatch.setattr(am, "describe_task_placement",
+                        lambda gid, prefer_project_name="": called.append(gid) or {})
     out = am.move_asana_task_to_section(
         task_gid="42", project="Anju - CEO executive tools", approved=True
     )
     assert out["ok"] is False
     assert "landed_board" not in out
+
+
+def test_placement_is_read_after_the_task_leaves_the_old_project(wired, monkeypatch):
+    """Mid-move the task sits on both projects and Asana lists the old one first,
+    so reporting before the unfile named the project it had just come from."""
+    order = []
+    monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
+    monkeypatch.setattr(
+        am, "unfile_task_from_other_projects",
+        lambda **kw: order.append("unfile") or {"ok": True},
+    )
+    monkeypatch.setattr(
+        am, "describe_task_placement",
+        lambda gid, prefer_project_name="": order.append("read")
+        or {"name": "T", "project": "Anju - CEO executive tools", "board": "📋 Backlog"},
+    )
+    out = am.move_asana_task_to_section(
+        task_gid="42", project="Anju - CEO executive tools",
+        unfile_others=True, approved=True,
+    )
+    assert order == ["unfile", "read"], order
+    assert out["landed_project"] == "Anju - CEO executive tools"
+
+
+def test_the_destination_membership_is_the_one_reported(monkeypatch):
+    """Belt and braces: even if both memberships are present, name the target."""
+    monkeypatch.setattr(
+        am, "execute_asana_tool",
+        lambda slug, args=None: {"data": {"data": {
+            "name": "Lexi test task 3",
+            "memberships": [
+                {"project": {"name": "Kory NON-IFG"}, "section": {"name": "General"}},
+                {"project": {"name": "Anju — CEO Executive AI Tools (Summer 2026)"},
+                 "section": {"name": "📋 Backlog"}},
+            ],
+        }}},
+    )
+    placed = am.describe_task_placement("42", prefer_project_name="Anju — CEO Executive AI Tools (Summer 2026)")
+    assert placed["project"].startswith("Anju")
+    assert placed["board"] == "📋 Backlog"
