@@ -941,12 +941,85 @@ def kory_review_drafts_enabled() -> bool:
     return os.getenv("LEXI_KORY_REVIEW_DRAFTS_ENABLED", "true").lower() in {"1", "true", "yes"}
 
 
+def verify_recipient_address(email: str) -> dict[str, Any]:
+    """Do we have evidence this address is real, and if not, who did they mean?
+
+    Lexi drafted a follow-up to `angelo@morganstanley.com` — an address she
+    invented because the CRM lookup returned nothing. The address is plausible
+    and wrong, which is the worst combination: nothing downstream can tell it
+    from a real one, and the failure only surfaces on a bounce.
+
+    Evidence, cheapest first: Kory has corresponded with it, or HubSpot holds it.
+    """
+    addr = (email or "").strip().lower()
+    if not addr or "@" not in addr:
+        return {"verified": False, "reason": "not_an_address", "suggestions": []}
+    if addr in kory_thread_addresses() or _is_kory_sender_email(addr):
+        return {"verified": True, "source": "kory"}
+
+    try:
+        for folder in ("sentitems", "inbox"):
+            result = execute_tool(
+                "OUTLOOK_LIST_MESSAGES",
+                {"user_id": "me", "folder": folder, "top": 50},
+                role="write",
+            )
+            for message in (_coerce_data(result.get("data")).get("value") or []):
+                people = [
+                    ((message.get("from") or {}).get("emailAddress") or {}).get("address", ""),
+                    *[
+                        (r.get("emailAddress") or {}).get("address", "")
+                        for key in ("toRecipients", "ccRecipients")
+                        for r in (message.get(key) or [])
+                    ],
+                ]
+                if any(addr == str(p or "").strip().lower() for p in people):
+                    return {"verified": True, "source": "prior_email"}
+    except Exception as exc:  # noqa: BLE001 — an unreachable mailbox is not proof of anything
+        logger.warning("Recipient check via mailbox failed (%s)", exc)
+        return {"verified": True, "source": "unchecked", "reason": "mailbox_unavailable"}
+
+    local_part = addr.split("@", 1)[0].replace(".", " ").replace("_", " ")
+    try:
+        from app.integrations.hubspot_manager import hubspot_configured, search_contacts
+
+        if hubspot_configured():
+            exact = search_contacts(
+                limit=1, filters=[{"propertyName": "email", "operator": "EQ", "value": addr}]
+            )
+            if exact.get("contacts"):
+                return {"verified": True, "source": "hubspot"}
+            near = search_contacts(limit=5, query=local_part)
+            return {
+                "verified": False,
+                "reason": "no_evidence",
+                "suggestions": [
+                    {
+                        "name": c.get("name"),
+                        "email": c.get("email"),
+                        "company": c.get("company"),
+                    }
+                    for c in (near.get("contacts") or [])
+                    if c.get("email")
+                ][:5],
+            }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Recipient check via HubSpot failed (%s)", exc)
+        return {"verified": True, "source": "unchecked", "reason": "hubspot_unavailable"}
+
+    # No CRM to check against. Absence from the last 50 messages is weak evidence
+    # — plenty of legitimate recipients are not in it — so refusing here would
+    # block ordinary drafts to make a point we cannot actually support.
+    return {"verified": True, "source": "unchecked", "reason": "hubspot_not_configured"}
+
+
 def create_kory_review_draft(
     *,
     to_email: str,
     subject: str,
     body: str,
     cc_emails: list[str] | None = None,
+    allow_unverified_recipient: bool = False,
 ) -> dict[str, Any]:
     """Park an email in Kory's Outlook Drafts for him to review and send himself.
 
@@ -982,6 +1055,36 @@ def create_kory_review_draft(
             "to": recipient,
             "subject": subject,
         }
+
+    # An invented address must not become a saved draft. Checked here rather than
+    # left to the model to remember: it drafted to a made-up address twice, once
+    # after saying so and once without mentioning it. After the dry-run return, so
+    # a dry run stays offline.
+    if not allow_unverified_recipient:
+        check = verify_recipient_address(recipient)
+        if not check.get("verified"):
+            suggestions = check.get("suggestions") or []
+            lines = [
+                f"I have no record of {recipient} — not in Kory's recent mail and not in HubSpot, "
+                "so I can't confirm it's the right address."
+            ]
+            if suggestions:
+                lines.append("\nDid you mean:")
+                lines += [
+                    f"• {s['name']} — {s['email']}" + (f" ({s['company']})" if s.get("company") else "")
+                    for s in suggestions
+                ]
+            lines.append(
+                "\nGive me the correct address, or pass allow_unverified_recipient=true "
+                "if it really is a new contact."
+            )
+            return {
+                "ok": False,
+                "error_code": "unverified_recipient",
+                "error": f"No evidence that {recipient} is a real address.",
+                "suggestions": suggestions,
+                "kory_message": "\n".join(lines),
+            }
 
     from app.scheduling.email_format import finalize_outbound_email_body
     from app.scheduling.kory_html_signature import (
