@@ -800,7 +800,58 @@ def resolve_asana_user_gid(name_or_email: str) -> tuple[str, str]:
         email = str(row.get("email") or "").lower()
         if needle == email or needle == name or needle in name.split():
             return str(row.get("gid") or ""), str(row.get("name") or "")
-    return "", ""
+
+    return _fuzzy_workspace_user(needle, rows if isinstance(rows, list) else [])
+
+
+# A person is a smaller target than a task title, so the bar sits higher.
+_USER_MATCH_MIN = 0.62
+_USER_MATCH_MARGIN = 0.08
+
+
+def _fuzzy_workspace_user(needle: str, rows: list[dict[str, Any]]) -> tuple[str, str]:
+    """Last resort when an exact token match found nobody.
+
+    Exact matching is brittle against how people are actually referred to:
+    Asana holds "Anju Kummetha", so "Anjana" — her real name — resolved to
+    nobody, and any descriptor ("Anju — CEO Executive AI Tools") killed it
+    outright. Both came back as "no such user in this workspace", which reads as
+    the person not existing.
+    """
+    from app.integrations.asana_task_match import score_task_name
+
+    # Drop anything after a dash or bracket: that is a description of the person,
+    # not their name. "Anju — CEO Executive AI Tools (Summer 2026)" is Anju.
+    core = re.split(r"[—–\-(\[]", needle, maxsplit=1)[0].strip() or needle
+    if not core:
+        return "", ""
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for row in rows:
+        name = str(row.get("name") or "")
+        local = str(row.get("email") or "").split("@", 1)[0].replace(".", " ")
+        best = max(score_task_name(core, name), score_task_name(core, local))
+        if best >= _USER_MATCH_MIN:
+            scored.append((best, row))
+    if not scored:
+        return "", ""
+
+    scored.sort(key=lambda pair: -pair[0])
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < _USER_MATCH_MARGIN:
+        # Too close to call. Prefer the work account (one person, two logins);
+        # otherwise decline rather than assign someone else's task to a guess.
+        top = [row for score, row in scored if scored[0][0] - score < _USER_MATCH_MARGIN]
+        company = [
+            row
+            for row in top
+            if str(row.get("email") or "").lower().endswith(_COMPANY_EMAIL_DOMAINS)
+        ]
+        if len(company) != 1:
+            return "", ""
+        return str(company[0].get("gid") or ""), str(company[0].get("name") or "")
+
+    winner = scored[0][1]
+    return str(winner.get("gid") or ""), str(winner.get("name") or "")
 
 
 def complete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: bool = False) -> dict[str, Any]:
