@@ -810,6 +810,33 @@ def create_asana_task_from_chat(
     assert_kory_approved_write(approved=approved, action="Asana create task")
 
 
+    # Checked before anything else is asked. It used to run after the project
+    # resolved, so a request that named no project stopped at "which project?" and
+    # the duplicate was never looked for — "schedule a consultation with Brooke"
+    # asked three questions about a task he already had open. The answer to this
+    # one makes the others moot.
+    if not allow_duplicate:
+        existing = find_similar_open_task(title)
+        if existing:
+            due = existing.get("due_on") or "no due date"
+            return {
+                "ok": False,
+                "error_code": "possible_duplicate",
+                "error": f"An open task already covers this: {existing.get('name')!r}.",
+                "existing_task": {
+                    "gid": existing.get("gid"),
+                    "name": existing.get("name"),
+                    "due_on": existing.get("due_on"),
+                    "project": existing.get("project"),
+                    "assignee": existing.get("assignee"),
+                },
+                "kory_message": (
+                    f"You already have an open task for this — \"{existing.get('name')}\" "
+                    f"in {existing.get('project')}, due {due}.\n\n"
+                    "Want me to re-date that one instead, or create a separate task anyway?"
+                ),
+            }
+
     # Kory keeps eight projects. "Create a task" without naming one used to file
     # silently into the default, so the task existed somewhere he wasn't looking
     # and Lexi reported it done. Ask instead — he can still say "default".
@@ -845,29 +872,6 @@ def create_asana_task_from_chat(
                     f"Available projects: {names}."
                 ),
             }
-# Say so before making a second copy of work he already has open.
-    if not allow_duplicate:
-        existing = find_similar_open_task(title)
-        if existing:
-            due = existing.get("due_on") or "no due date"
-            return {
-                "ok": False,
-                "error_code": "possible_duplicate",
-                "error": f"An open task already covers this: {existing.get('name')!r}.",
-                "existing_task": {
-                    "gid": existing.get("gid"),
-                    "name": existing.get("name"),
-                    "due_on": existing.get("due_on"),
-                    "project": existing.get("project"),
-                    "assignee": existing.get("assignee"),
-                },
-                "kory_message": (
-                    f"You already have an open task for this — \"{existing.get('name')}\" "
-                    f"in {existing.get('project')}, due {due}.\n\n"
-                    "Want me to re-date that one instead, or create a separate task anyway?"
-                ),
-            }
-
     # Ask for the board and the due date together before writing anything.
     #
     # Board: an unspecified section fell through to ASANA_SECTION_GID, which is

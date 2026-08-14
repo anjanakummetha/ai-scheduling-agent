@@ -577,3 +577,19 @@ def test_a_failed_duplicate_search_never_blocks_the_create(monkeypatch):
 
     monkeypatch.setattr(am, "search_asana_tasks", boom)
     assert am.find_similar_open_task("anything") is None
+
+
+def test_an_existing_task_is_flagged_before_any_question_is_asked(wired, monkeypatch):
+    """The check ran after the project resolved, so a request naming no project
+    stopped at "which project?" and never looked. "Schedule a consultation with
+    Brooke" asked three questions about a task he already had open."""
+    monkeypatch.setattr(
+        am, "find_similar_open_task",
+        lambda title, **kw: {"gid": "9", "name": "Schedule consultation with Brooke",
+                             "due_on": "2026-09-30", "project": "Kory NON-IFG"},
+    )
+    out = am.create_asana_task_from_chat(title="schedule a consultation with Brooke",
+                                         approved=True)
+    assert out["error_code"] == "possible_duplicate", out.get("error_code")
+    assert "Brooke" in out["kory_message"]
+    assert not wired
