@@ -1,9 +1,42 @@
-# Lexi — Session Handoff (updated 2026-08-14)
+# Lexi — Session Handoff (updated 2026-08-14, evening)
 
-**Resume phrase:** *"Read the open items, then start the HubSpot fixes."*
+**Resume phrase:** *"HubSpot cleanup is built and deployed — Kory tests it in Teams."*
 
-`main` at `1bf9050`. 49 commits since the last handoff. **878 tests green.**
-Laptop / GitHub / box in sync, tree clean, deployed and live.
+`main` at `5b18b07`. **913 tests green.** Laptop / GitHub / box in sync.
+
+---
+
+## HubSpot cleanup — built this session, ready for Teams
+
+Kory's book, measured live: **2,224 contacts across IFG, 1,022 his.** No job
+title 79 · no company 75 · **no phone 306** · never contacted 102 · DNC 62.
+**27 duplicate pairs across a complete 2,224-contact scan, 16 of them touching
+someone else's records.**
+
+**The Sales Navigator premise was wrong in a useful way.** Sales Nav is *not*
+leaving title and company blank — it fills them, and fills them well (92–93%
+populated). What it leaves is junk that looks like data: `Prefer No Connection
+to Company`, what LinkedIn writes when a member hides their employer, ~30
+contacts book-wide. Not blank, so no `NOT_HAS_PROPERTY` filter surfaced it and
+no blank-only guard offered to fix it. **Composio's LinkedIn toolkit cannot
+help** — 22 tools, all posting/ads/org-stats; `LINKEDIN_GET_PERSON` resolves
+only members who authorised your own app. Verified by listing it live.
+
+New: `lexi_hubspot_apply_batch` (the apply path never existed, so every proposal
+was a dead end and #28's guard could not run) and `lexi_hubspot_undo_batch` with
+a write log that records the prior value. `is_placeholder` now catches the junk.
+Signature mining reads **phone**.
+
+**Testing without touching HubSpot:** `scripts/hubspot_cleanup_rehearsal.py`
+runs the whole path against the live book with every write intercepted at
+`execute_hubspot_tool`. It caught what unit tests could not — a signature
+offering `(800) 962-0418` as its owner's phone. A toll-free switchboard on a
+contact record reads as a direct line; worse than the blank it replaced.
+
+**Yield is the honest limit.** Signature mining reached 6 fills from 40
+candidates in one run; the ~30 placeholder-company contacts have no readable
+signature at all, because they never emailed Kory. That group is the only
+genuine case for web search, and it is small.
 
 ---
 
@@ -37,16 +70,25 @@ against the destination, not the reply.**
 
 ## 1. OPEN ITEMS (priority order)
 
-### 1a. HubSpot — **next up, this is where to start**
-The ownership guard just landed (below). Everything else in HubSpot is
-unreviewed this session. Anjana's stated order was: lock Asana, then HubSpot.
-Asana is locked.
+### 1a. HubSpot — **built; waiting on Kory in Teams**
+See the block at the top. Reads were already good; the cleanup path is new and
+rehearsed against live data but has never run in Teams.
 
-Safe to test today — reads, nothing writes without approval: `hubspot_status`,
-`health_report`, `find_contacts`, `compare_books`, `recent_changes`,
-`deals_snapshot`, `prebrief_enrich`, `duplicate_merges` (proposals only).
+**The first apply in Teams writes to the real shared portal.** Enrichment is
+undoable (`lexi_hubspot_undo_batch`). A merge is not, by anything, ever — 16 of
+the 27 pairs are colleagues' records and the guard blocks those without an
+explicit ack.
 
-### 1b. Asana duplicate detection — **PARKED by Anjana 2026-08-14**
+Still open here: the ~30 placeholder-company contacts have no signature to mine,
+so nothing currently fills them. Decide on web search after Kory has seen what
+signature mining alone produces.
+
+### 1b. Asana duplicate detection — **still PARKED** (the HubSpot twin is fixed)
+The same defect in `stage_meeting_note` was fixed this evening: the read-only
+lookup now runs before the approval gate. Asana's `create_asana_task_from_chat`
+still has the original shape, unchanged, by Anjana's call.
+
+**PARKED by Anjana 2026-08-14**
 Not broken logic; unreachable code. `assert_kory_approved_write` is the first
 line of `create_asana_task_from_chat`, so with `confirm=false` it returns
 `confirmation_required` in 0.01s and `find_similar_open_task` never runs. Kory
@@ -94,7 +136,29 @@ subtasks, so a parent task reads as a single item.
 
 ---
 
-## 2. DONE THIS SESSION
+## 1.5 DONE THIS EVENING (HubSpot)
+
+- **`lexi_hubspot_apply_batch`** — the apply path. Enrichment applies the whole
+  batch; a merge names one pair and says it is permanent.
+- **`lexi_hubspot_undo_batch`** — restores each field's prior value, including
+  back to blank. Logged only after HubSpot accepts the write, so the log never
+  claims something that did not land. Not repeatable: a second undo would write
+  stale values over whatever came after.
+- **`is_placeholder` catches the LinkedIn junk.** Anchored to the whole field
+  after normalisation — "No Limits Consulting" and "Tbd Ventures LLC" are real
+  companies, and marking a real value as junk would make enrichment overwrite
+  good data.
+- **Phone from signatures**, preferring a labelled mobile or direct line,
+  skipping fax and toll-free.
+- **`meeting_note` looks the contact up before asking Kory to confirm** — the
+  1b defect, fixed here rather than parked.
+- **Unresolvable owner ids** no longer read as names; `owner_map` no longer
+  caches an empty result forever after one transient failure.
+- **Duplicate proposals lead with the person**, not two email addresses.
+
+---
+
+## 2. DONE EARLIER THIS SESSION
 
 **Calendar** — `lexi_create_calendar_event` (no `HOLD:` prefix) and
 `lexi_move_calendar_event`. The move uses the **flat** `start_datetime` /
@@ -157,7 +221,21 @@ one since it shipped; merge and enrichment never did, and
 
 ## 3. HARD-WON FACTS (do not relearn)
 
-**New this session**
+**New this session (evening)**
+
+- **A rehearsal against live data finds what unit tests cannot.** Intercept the
+  write at the lowest layer, run everything above it for real, and print the
+  payload. That is how the toll-free phone number surfaced — no fixture would
+  have contained it, because nobody would have thought to write one.
+- **Composio's LinkedIn toolkit has no people search.** 22 tools, all posting,
+  ads and org-page stats. `LINKEDIN_GET_PERSON` takes a person id that is
+  "unique to the context of your application only". No Sales Navigator API
+  exists. Don't go back to this.
+- **"Populated" is not "correct".** Every health metric here counted blank
+  fields, so a book that is 93% "complete" hid ~30 contacts whose company reads
+  `Prefer No Connection to Company`. Measure the junk, not just the gaps.
+
+**Carried forward**
 
 - **The tool description is control flow.** See §0. Wording like "X is REQUIRED
   before anything is written" makes the model gather X *before calling*, which
@@ -219,8 +297,9 @@ duplicate pairs, **16 involve someone else's records**:
 | Matt Maley | 2 |
 | Kory's own | 11 |
 
-**`execute_hubspot_batch` has no MCP tool**, so Lexi can propose merges but has
-no path to apply one. The guard is there for when that changes.
+`execute_hubspot_batch` now has an MCP tool (`lexi_hubspot_apply_batch`), so the
+guard is finally reachable. Merges still apply one pair at a time and refuse a
+cross-owner pair without `owner_ack`.
 
 ---
 
@@ -255,10 +334,12 @@ collapse. Open items are 1b and 1d above, both low-severity.
 **Outlook: signature, drafts and the briefing→draft workflow verified live.**
 Calendar create/move built and unit-tested; not yet exercised by Kory in Teams.
 
-**HubSpot: next.** Reads were verified 2026-08-05; write steps 2 and 4 passed
-live. The ownership guard is new and **has not been exercised in Teams** —
-worth a read-only `duplicate_merges` run first so Kory sees the owner labels on
-his own data before anything is approved.
+**HubSpot: built, rehearsed, not yet exercised in Teams.** Reads verified
+2026-08-05 and again 08-14. The cleanup path (apply / undo / placeholder / phone)
+ran end-to-end against the live book with writes intercepted. Suggested order in
+Teams: `duplicate_merges` first (read-only, shows the owner labels on his own
+data), then enrichment propose → apply → undo on a small batch, then merges one
+pair at a time.
 
 **Scheduling: mid-test**, paused by Anjana. Resume at Group C of
 `docs/SCHEDULING_LIVE_TEST_PLAN.md`. Still untested: meeting types
