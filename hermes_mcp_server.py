@@ -496,9 +496,12 @@ def lexi_create_asana_task(
 ) -> str:
     """Create an Asana task.
 
-    project is REQUIRED — Kory keeps several. If he did not say which, the tool
-    returns project_required with the list: ASK him and retry. Do not pick one,
-    and do not pass "default" unless he said so.
+    project, section and due_on are all REQUIRED before anything is written.
+    Kory keeps several projects and each has several boards, and an undated task
+    never reaches his overdue list. If any is missing the tool returns
+    project_required or task_details_required with the options: ASK him, then
+    retry with his answer. Do not choose for him, and do not pass "default" or
+    "General" unless he said so. "no due date" is a valid answer to the date.
 
     assignee: full name or email to own the task ("assign it to Heidi"). Resolved
     against the workspace. Leave blank to leave it unassigned.

@@ -624,6 +624,46 @@ def _list_tasks_across_projects(
     }
 
 
+_NO_DUE_DATE = frozenset({"none", "no", "no due date", "n/a", "na", "skip", "unset", "no date"})
+
+
+def _missing_task_details(
+    *,
+    section: str,
+    due_on: str,
+    project_gid: str,
+    project_name: str,
+) -> dict[str, Any] | None:
+    """Ask for a board and a due date before creating, or None if both are settled."""
+    wants_board = not section.strip()
+    wants_due = not due_on.strip()
+    if not (wants_board or wants_due):
+        return None
+
+    boards = [row["name"] for row in list_project_sections(project_gid)]
+    where = project_name or _project_name_for_gid(project_gid) or "that project"
+    lines: list[str] = []
+    if wants_board:
+        lines.append(f"Which board in {where}?")
+        lines += [f"• {name}" for name in boards[:14]]
+        if boards:
+            lines.append('(or say "General")')
+    if wants_due:
+        lines.append("")
+        lines.append(
+            'And when is it due? An undated task never shows up in your overdue '
+            'list — say "no due date" if that is deliberate.'
+        )
+    return {
+        "ok": False,
+        "error_code": "task_details_required",
+        "error": "Ask Kory for the board and/or due date before creating the task.",
+        "needs": [k for k, v in (("board", wants_board), ("due_on", wants_due)) if v],
+        "boards": boards,
+        "kory_message": "\n".join(lines).strip(),
+    }
+
+
 def create_asana_task_from_chat(
     *,
     title: str,
@@ -673,6 +713,34 @@ def create_asana_task_from_chat(
                     f"Available projects: {names}."
                 ),
             }
+    # Ask for the board and the due date together before writing anything.
+    #
+    # Board: an unspecified section fell through to ASANA_SECTION_GID, which is
+    # "Reservation Reminders" — Lexi's automated booking board. Correct for a
+    # reservation she files herself, wrong for anything Kory asks for in chat, and
+    # he had no reason to look there.
+    #
+    # Due date: an undated task never appears in the overdue list, which is how
+    # the morning briefing surfaces work. Filing it undated quietly drops it.
+    #
+    # One question, not two — and "General" and "no due date" are both accepted.
+    # "no due date" is an answer, not a missing value — it settles the question
+    # without setting a date.
+    declined_due_date = due_on.strip().lower() in _NO_DUE_DATE
+    missing = _missing_task_details(
+        section=section,
+        due_on="answered" if declined_due_date else due_on,
+        project_gid=project_gid,
+        project_name=project_name,
+    )
+    if missing:
+        return missing
+    if declined_due_date:
+        due_on = ""
+
+    if section.strip().lower() in {"default", "general"} and not project_gid:
+        section = "General"
+
     result = _create_asana_task(
         title=title,
         notes=notes or title,
