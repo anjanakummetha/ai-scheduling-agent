@@ -634,6 +634,7 @@ def save_email_to_drafts(
     subject: str,
     body: str,
     cc_emails: str = "",
+    allow_unverified_recipient: bool = False,
 ) -> dict[str, Any]:
     """Park an email in Kory's Outlook Drafts for him to review and send himself.
 
@@ -644,7 +645,11 @@ def save_email_to_drafts(
     cc = [a.strip() for a in (cc_emails or "").replace(";", ",").split(",") if a.strip()]
     try:
         result = create_kory_review_draft(
-            to_email=to_email, subject=subject, body=body, cc_emails=cc
+            to_email=to_email,
+            subject=subject,
+            body=body,
+            cc_emails=cc,
+            allow_unverified_recipient=allow_unverified_recipient,
         )
     except Exception as exc:
         return {

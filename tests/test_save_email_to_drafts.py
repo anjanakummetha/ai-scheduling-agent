@@ -250,3 +250,100 @@ def test_cc_list_is_parsed_and_deduped_against_the_recipient():
         )
 
     assert captured["cc_recipients"] == ["matt.maley@iconicfounders.com"]
+
+
+# ── recipient verification (live defect: drafted to an invented address) ─────
+
+
+def _verify_patches(verified, suggestions=None):
+    return patch.object(
+        outlook_email, "verify_recipient_address",
+        return_value={"verified": verified, "suggestions": suggestions or []},
+    )
+
+
+def test_an_invented_address_is_refused_with_candidates():
+    """The live failure: Lexi drafted to angelo@morganstanley.com, which she made
+    up. Plausible and wrong is the worst combination — nothing downstream can tell
+    it from a real address."""
+    suggestions = [{"name": "Angelo Amitsis", "email": "angelo.amitsis@morganstanleypwm.com",
+                    "company": "Morgan Stanley"}]
+    with (
+        patch.object(outlook_email, "settings") as settings,
+        patch.object(outlook_email, "execute_tool") as execute,
+        _verify_patches(False, suggestions),
+    ):
+        _live_settings(settings)
+        result = actions.save_email_to_drafts(
+            to_email="angelo@morganstanley.com", subject="S", body="B"
+        )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "unverified_recipient"
+    assert "angelo.amitsis@morganstanleypwm.com" in result["kory_message"]
+    execute.assert_not_called(), "nothing should be written for an unverified address"
+
+
+def test_a_known_address_saves_normally():
+    def fake_execute(slug, args, role=None):
+        if slug == "OUTLOOK_CREATE_DRAFT":
+            return {"data": {"id": "draft-1"}, "log_id": "l"}
+        return {"data": _draft(), "log_id": None}
+
+    with (
+        patch.object(outlook_email, "settings") as settings,
+        patch.object(outlook_email, "execute_tool", side_effect=fake_execute),
+        _verify_patches(True),
+    ):
+        _live_settings(settings)
+        result = actions.save_email_to_drafts(
+            to_email="anjanakummetha@gmail.com", subject="S", body="B"
+        )
+    assert result["ok"] is True and result["verified"] is True
+
+
+def test_kory_can_override_for_a_genuinely_new_contact():
+    def fake_execute(slug, args, role=None):
+        if slug == "OUTLOOK_CREATE_DRAFT":
+            return {"data": {"id": "draft-1"}, "log_id": "l"}
+        return {"data": _draft(), "log_id": None}
+
+    with (
+        patch.object(outlook_email, "settings") as settings,
+        patch.object(outlook_email, "execute_tool", side_effect=fake_execute),
+        _verify_patches(False),
+    ):
+        _live_settings(settings)
+        result = actions.save_email_to_drafts(
+            to_email="brand.new@example.com", subject="S", body="B",
+            allow_unverified_recipient=True,
+        )
+    assert result["ok"] is True
+
+
+def test_an_unreachable_check_does_not_block_the_draft():
+    """A mailbox or CRM outage is not evidence the address is wrong."""
+    def fake_execute(slug, args, role=None):
+        if slug == "OUTLOOK_CREATE_DRAFT":
+            return {"data": {"id": "draft-1"}, "log_id": "l"}
+        return {"data": _draft(), "log_id": None}
+
+    with (
+        patch.object(outlook_email, "settings") as settings,
+        patch.object(outlook_email, "execute_tool", side_effect=fake_execute),
+        patch.object(outlook_email, "verify_recipient_address",
+                     return_value={"verified": True, "source": "unchecked"}),
+    ):
+        _live_settings(settings)
+        result = actions.save_email_to_drafts(
+            to_email="someone@example.com", subject="S", body="B"
+        )
+    assert result["ok"] is True
+
+
+def test_korys_own_address_is_always_known():
+    with patch.object(outlook_email, "settings") as settings:
+        _live_settings(settings)
+        assert outlook_email.verify_recipient_address(
+            "kory.mitchell@iconicfounders.com"
+        )["verified"] is True

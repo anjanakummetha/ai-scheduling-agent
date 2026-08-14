@@ -1155,11 +1155,20 @@ def lexi_save_email_to_drafts(
     subject: str,
     body: str,
     cc_emails: str = "",
+    allow_unverified_recipient: str = "false",
 ) -> str:
     """Save an email to Kory's Outlook Drafts for him to review and send himself.
 
     Triggers: "put that in my drafts", "save this as a draft", "draft it and I'll
     send it later", "add it to my drafts so I can review it".
+
+    NEVER invent or guess to_email. Find the real address first — lexi_lookup_person
+    (pass the person exactly as Kory named them, e.g. "Angelo (Morgan Stanley)"),
+    lexi_search_inbox for a prior thread, or ask him. A draft to a plausible wrong
+    address is worse than no draft: it looks correct and fails only on a bounce.
+    The tool refuses an address with no record and offers candidates; resolve those
+    rather than overriding. allow_unverified_recipient='true' only when Kory has
+    given the address himself or confirmed it is a genuinely new contact.
 
     Nothing is sent — the draft sits in his Drafts folder with his signature
     already applied, and he sends it from Outlook when ready. No approval needed,
@@ -1175,6 +1184,8 @@ def lexi_save_email_to_drafts(
         subject=subject,
         body=body,
         cc_emails=cc_emails,
+        allow_unverified_recipient=allow_unverified_recipient.strip().lower()
+        in {"1", "true", "yes"},
     )
 
 
