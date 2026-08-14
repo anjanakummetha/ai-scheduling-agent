@@ -583,6 +583,51 @@ def _event_iso(value: Any) -> str | None:
     return parsed.isoformat(timespec="seconds") if parsed else None
 
 
+def todays_briefing_action(*, briefing_date: str = "") -> dict[str, Any]:
+    """The CEO briefing Kory was sent this morning, so he can act on it in chat.
+
+    Returns the briefing he actually received rather than a fresh one — by
+    mid-morning a regenerated briefing differs from the page he is reading, and
+    answering from the wrong copy is worse than saying it isn't available.
+    """
+    from app.storage.daily_briefing import get_briefing, latest_briefing
+
+    wanted = (briefing_date or "").strip()
+    record = get_briefing(wanted) if wanted else get_briefing()
+    stale = False
+    if record is None and not wanted:
+        record = latest_briefing()
+        stale = record is not None
+
+    if record is None:
+        return {
+            "ok": False,
+            "error_code": "no_briefing_stored",
+            "error": "No briefing has been stored yet.",
+            "kory_message": (
+                "I don't have your briefing yet — it's stored when it goes out at "
+                "4:45 AM MT. If you already have it in your inbox, paste the part "
+                "you want me to work from."
+            ),
+        }
+
+    return {
+        "ok": True,
+        "briefing_date": record["briefing_date"],
+        "subject": record["subject"],
+        "sent_at": record.get("sent_at"),
+        "is_todays": not stale,
+        "body": record["body_text"],
+        "kory_chat": (
+            "This is the briefing Kory was emailed"
+            + (f" on {record['briefing_date']} (not today's)" if stale else " this morning")
+            + ". Answer from it directly and quote its wording for names, numbers and "
+            "dates — never re-derive them. If he asks you to act on something in it, "
+            "resolve the item against Asana/calendar/HubSpot before changing anything."
+        ),
+    }
+
+
 def save_email_to_drafts(
     *,
     to_email: str,

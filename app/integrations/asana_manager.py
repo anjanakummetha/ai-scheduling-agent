@@ -493,9 +493,13 @@ def resolve_task_or_error(
     "task: Not a Long: <name>", which was then relayed to Kory as the feature
     being unsupported. Better to say which task is meant.
     """
+    from app.integrations.asana_task_match import pick_task
+
     raw = (task or "").strip()
     if _should_simulate_asana():
         return raw, None  # nothing live to look a name up against
+    if raw.isdigit():
+        return raw, None
     try:
         candidates = (
             (search_asana_tasks(query=raw, limit=6, mine_only=False).get("tasks") or [])
@@ -504,8 +508,10 @@ def resolve_task_or_error(
         )
     except Exception:
         candidates = []
-    exact = [c for c in candidates if str(c.get("name") or "").strip().casefold() == raw.casefold()]
-    match = exact[0] if exact else (candidates[0] if len(candidates) == 1 else None)
+    # Ranked pick, not "first hit wins". The old rule took candidates[0] only when
+    # there was exactly one, so anything Kory phrased loosely enough to match two
+    # tasks failed outright even when one was obviously the intended task.
+    match, candidates = pick_task(raw, candidates)
     if match:
         owner = str(match.get("assignee") or "").strip()
         if owner and "kory" not in owner.lower() and not owner_ack:
@@ -522,18 +528,19 @@ def resolve_task_or_error(
                 "task_gid": match.get("gid"),
             }
         return str(match.get("gid") or ""), None
-    if raw.isdigit():
-        return raw, None
     if not candidates:
         return "", {
             "ok": False,
             "error": f"No task found matching {raw!r}.",
             "candidates": [],
         }
+    # Close enough to be a coin flip. This path leads to "mark it complete", and
+    # completing the wrong task is not a silent error — name them and ask.
     return "", {
         "ok": False,
+        "error_code": "task_ambiguous",
         "error": (
-            f"{raw!r} matches {len(candidates)} tasks — which one? "
+            f"{raw!r} could be {len(candidates)} tasks — which one? "
             + "; ".join(str(c.get("name")) for c in candidates[:5])
         ),
         "candidates": [
@@ -873,12 +880,20 @@ def delete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: bool 
 def search_asana_tasks(
     *, query: str, limit: int = 15, mine_only: bool = False
 ) -> dict[str, Any]:
-    """Search tasks by name across configured / related projects (read-only)."""
-    needle = query.strip().lower()
-    if not needle:
+    """Search tasks by name across configured / related projects (read-only).
+
+    Ranked, not literal. Substring containment meant "the elevator task" matched
+    nothing — the trailing word "task" alone was enough to miss "Load Elevator
+    market-study landing page" — and a typo on either side (Asana itself spells
+    one contact "Krinksy") found nothing at all. Lexi reported both as the task
+    not existing.
+    """
+    from app.integrations.asana_task_match import rank_tasks
+
+    if not query.strip():
         return {"ok": False, "tasks": [], "error": "query is required"}
     projects = list_asana_project_options()
-    matches: list[dict[str, Any]] = []
+    pool: list[dict[str, Any]] = []
     for project in projects.get("projects", []):
         listed = list_asana_tasks(
             bucket="all",
@@ -888,10 +903,9 @@ def search_asana_tasks(
             mine_only=mine_only,
         )
         for task in listed.get("tasks") or []:
-            name = str(task.get("name") or "").lower()
-            if needle in name:
-                matches.append({**task, "project": project.get("name")})
-    return {"ok": True, "query": query, "tasks": matches[:limit]}
+            pool.append({**task, "project": project.get("name")})
+    ranked = rank_tasks(query, pool)
+    return {"ok": True, "query": query, "tasks": ranked[:limit], "scanned": len(pool)}
 
 
 def move_asana_task_to_section(

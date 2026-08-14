@@ -99,6 +99,23 @@ def main() -> int:
         html_body=True,
     )
     print(f"sent to {args.to} | message_id={message_id} | log_id={log_id}")
+
+    # Keep what he was sent so he can act on it in chat later ("change those two
+    # tasks from my briefing"). Stored after the send and never allowed to fail
+    # it — a briefing that went out but wasn't recorded still did its job.
+    try:
+        from app.storage.daily_briefing import html_to_text, prune_briefings, save_briefing
+
+        stored = save_briefing(
+            subject=subject,
+            body_text=str(draft.get("bodyText") or "").strip() or html_to_text(body_html),
+            body_html=body_html,
+            message_id=str(message_id or ""),
+        )
+        prune_briefings()
+        print(f"briefing stored for chat: {stored}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: briefing sent but not stored for chat ({type(exc).__name__}: {exc})")
     return 0
 
 
