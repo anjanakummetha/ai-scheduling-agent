@@ -491,9 +491,22 @@ def lexi_create_asana_task(
     due_on: str = "",
     section: str = "",
     project: str = "",
+    assignee: str = "",
     confirm: str = "false",
 ) -> str:
-    """Create an Asana task. Defaults to Kory's personal project; pass project='<name>' to file it on any project he can access (names from lexi_list_asana_projects — when he names a project, always pass it). Pass confirm='true' once Kory has asked for or agreed to this; if it returns confirmation_required, ask him and retry — never report it as unsupported."""
+    """Create an Asana task.
+
+    project is REQUIRED — Kory keeps several. If he did not say which, the tool
+    returns project_required with the list: ASK him and retry. Do not pick one,
+    and do not pass "default" unless he said so.
+
+    assignee: full name or email to own the task ("assign it to Heidi"). Resolved
+    against the workspace. Leave blank to leave it unassigned.
+
+    Pass confirm='true' once Kory has asked for or agreed to this; if it returns
+    confirmation_required, ask him and retry — never report it as unsupported.
+    Report the task created only when ok is true — if assigning failed, the task
+    exists but is unowned, and that is what to tell him."""
     approved = confirm.strip().lower() in {"1", "true", "yes"}
     return _wrap(
         "lexi_create_asana_task",
@@ -503,6 +516,7 @@ def lexi_create_asana_task(
         due_on=due_on,
         section=section,
         project=project,
+        assignee=assignee,
         confirm=approved,
     )
 

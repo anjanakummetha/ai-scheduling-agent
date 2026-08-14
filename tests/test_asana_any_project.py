@@ -73,8 +73,19 @@ def test_create_on_other_project_skips_home_default_section(wired):
     assert not any(s == "ASANA_ADD_TASK_TO_SECTION" for s, _ in wired)
 
 
-def test_create_without_project_keeps_old_behavior(wired):
+def test_create_without_a_project_asks_instead_of_choosing(wired):
+    """Kory keeps eight projects. Filing silently into the default put the task
+    somewhere he wasn't looking while Lexi reported it done."""
     out = am.create_asana_task_from_chat(title="T", approved=True)
+    assert out["ok"] is False
+    assert out["error_code"] == "project_required"
+    assert out["projects"], "the question has to name the options"
+    assert not any(s == "ASANA_CREATE_A_TASK" for s, _ in wired), "nothing written"
+
+
+def test_saying_default_still_uses_the_home_project(wired):
+    """The escape hatch: he can decline to choose, but he has to say so."""
+    out = am.create_asana_task_from_chat(title="T", project="default", approved=True)
     assert out["ok"] is True
     create = next(a for s, a in wired if s == "ASANA_CREATE_A_TASK")
     assert create["data"]["projects"] == ["p-home"]
@@ -137,3 +148,36 @@ def test_project_write_still_passes_the_approval_gate(wired, monkeypatch):
         am.create_asana_task_from_chat(title="T", project="IFG Tasks", approved=False)
     assert gate_calls == [(False, "Asana create task")]
     assert not wired, "gate must fire before any Asana call"
+
+
+def test_create_can_assign_in_one_step(wired, monkeypatch):
+    """"create a task for Heidi" was two round trips; now it is one request."""
+    seen = {}
+
+    def fake_update(**kw):
+        seen.update(kw)
+        return {"ok": True, "assignee": "Heidi Heckler"}
+
+    monkeypatch.setattr(am, "update_asana_task", fake_update)
+    out = am.create_asana_task_from_chat(
+        title="Send the deck", project="IFG Tasks", assignee="Heidi", approved=True
+    )
+    assert out["ok"] is True
+    assert seen["assignee"] == "Heidi", "the create must carry the assignment through"
+    # Kory is told who it actually landed on, not just what he typed — the two
+    # differ when a first name resolves to a full account.
+    assert out["assignee"] == "Heidi Heckler"
+
+
+def test_a_task_that_could_not_be_assigned_is_not_reported_as_assigned(wired, monkeypatch):
+    """The task exists but is unowned — saying it is Heidi's would be a lie."""
+    monkeypatch.setattr(
+        am, "update_asana_task",
+        lambda **kw: {"ok": False, "error": "no such user"} if kw.get("assignee") else {"ok": True},
+    )
+    out = am.create_asana_task_from_chat(
+        title="Send the deck", project="IFG Tasks", assignee="Nobody", approved=True
+    )
+    assert out["ok"] is False
+    assert "assigning it to" in out["error"]
+    assert "created" in out["error"], "must still say the task exists"

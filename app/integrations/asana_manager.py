@@ -631,13 +631,34 @@ def create_asana_task_from_chat(
     due_on: str = "",
     section: str = "",
     project: str = "",
+    assignee: str = "",
     approved: bool = False,
 ) -> dict[str, Any]:
     from app.safety.approval_gate import assert_kory_approved_write
 
     assert_kory_approved_write(approved=approved, action="Asana create task")
+
+    # Kory keeps eight projects. "Create a task" without naming one used to file
+    # silently into the default, so the task existed somewhere he wasn't looking
+    # and Lexi reported it done. Ask instead — he can still say "default".
+    if not project.strip():
+        options = [r["name"] for r in list_asana_project_options().get("projects", [])]
+        return {
+            "ok": False,
+            "error_code": "project_required",
+            "error": "No project named — ask Kory which one before creating the task.",
+            "projects": options,
+            "kory_message": (
+                "Which project should this go in?\n"
+                + "\n".join(f"• {name}" for name in options)
+                + "\n\nOr say \"default\" for your usual list."
+            ),
+        }
+
     project_gid = ""
     project_name = ""
+    if project.strip().lower() in {"default", "usual", "my list", "personal"}:
+        project = ""
     if project.strip():
         project_gid, project_name = resolve_project_gid(project)
         if not project_gid:
@@ -659,13 +680,28 @@ def create_asana_task_from_chat(
         project_gid=project_gid,
         project_name=project_name,
     )
-    if due_on.strip() and result.get("ok") and result.get("task_id"):
-        update = update_asana_task(
-            task_gid=str(result["task_id"]),
-            due_on=due_on.strip(),
-            approved=approved,
-        )
-        result["due_update"] = update
+    # Due date and assignee are set on the created task. Asana's create call does
+    # not take an assignee here, so it is a second write — but a create that was
+    # asked to assign and did not must not report success, or "create a task for
+    # Heidi" leaves an unowned task and says it is hers.
+    if result.get("ok") and result.get("task_id"):
+        if due_on.strip():
+            result["due_update"] = update_asana_task(
+                task_gid=str(result["task_id"]), due_on=due_on.strip(), approved=approved
+            )
+        if assignee.strip():
+            assigned = update_asana_task(
+                task_gid=str(result["task_id"]), assignee=assignee.strip(), approved=approved
+            )
+            result["assignee_update"] = assigned
+            if assigned.get("ok"):
+                result["assignee"] = assigned.get("assignee") or assignee.strip()
+            else:
+                result["ok"] = False
+                result["error"] = (
+                    f"Task created, but assigning it to {assignee.strip()!r} failed: "
+                    f"{assigned.get('error') or 'unknown error'}"
+                )
     return result
 
 
@@ -780,13 +816,53 @@ def complete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: boo
         "ASANA_UPDATE_A_TASK",
         {"task_gid": task_gid, "data": {"completed": True}},
     )
-    return _write_result(
+    written = _write_result(
         result,
         task_gid=task_gid,
         blocked_reason=(result.get("data") or {}).get("blocked_reason")
         if isinstance(result.get("data"), dict)
         else None,
     )
+    if not written.get("ok"):
+        return written
+
+    # "Marked it complete" has to mean the task is complete. The successful flag
+    # says Asana accepted the call, not that the state changed — so read it back
+    # and let the task itself settle it.
+    observed = _read_task_state(task_gid)
+    if observed is None:
+        written["verified"] = False
+        written["warning"] = (
+            "Asana accepted the change but the task could not be read back to confirm it."
+        )
+        return written
+    written["verified"] = bool(observed.get("completed"))
+    written["name"] = observed.get("name")
+    if not written["verified"]:
+        written["ok"] = False
+        written["error"] = (
+            f"Asana accepted the update but {observed.get('name') or task_gid!r} is still open."
+        )
+    return written
+
+
+def _read_task_state(task_gid: str) -> dict[str, Any] | None:
+    """Current name/completed/assignee for a task. None means unverified."""
+    try:
+        res = execute_asana_tool("ASANA_GET_A_TASK", {"task_gid": task_gid})
+    except Exception as exc:  # noqa: BLE001 — a failed read-back is not a failed write
+        logger.warning("Asana read-back failed for %s: %s", task_gid, exc)
+        return None
+    row = (res.get("data") or {}).get("data") or {}
+    if not isinstance(row, dict) or not row.get("gid"):
+        return None
+    assignee = row.get("assignee")
+    return {
+        "gid": str(row.get("gid")),
+        "name": row.get("name"),
+        "completed": bool(row.get("completed")),
+        "assignee": (assignee or {}).get("name") if isinstance(assignee, dict) else assignee,
+    }
 
 
 # Anything staler than this is treated as a wrong-year resolution, not a

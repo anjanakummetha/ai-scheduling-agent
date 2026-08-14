@@ -361,3 +361,73 @@ def test_a_person_with_two_accounts_resolves_to_the_work_one(monkeypatch):
         assert asana_manager.resolve_asana_user_gid("Heidi")[0] == "heidi"
         # An explicit address still wins over the preference.
         assert asana_manager.resolve_asana_user_gid("sjbarman@ucdavis.edu")[0] == "uni"
+
+
+def _asana_env(monkeypatch, responses):
+    """Wire execute_asana_tool with per-slug responses; returns the call log."""
+    from app.integrations import asana_manager as am
+
+    calls = []
+
+    def fake(slug, args=None):
+        calls.append(slug)
+        value = responses.get(slug, {"data": {}})
+        return value(args) if callable(value) else value
+
+    monkeypatch.setattr(am, "execute_asana_tool", fake)
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: False)
+    monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: (t, None))
+    return calls
+
+
+def test_complete_is_confirmed_against_the_task_itself(monkeypatch):
+    from app.integrations import asana_manager as am
+
+    calls = _asana_env(monkeypatch, {
+        "ASANA_UPDATE_A_TASK": {"data": {}, "successful": True},
+        "ASANA_GET_A_TASK": {"data": {"data": {"gid": "1", "name": "Elevator page",
+                                               "completed": True}}},
+    })
+    out = am.complete_asana_task(task_gid="1", approved=True)
+    assert out["ok"] is True and out["verified"] is True
+    assert "ASANA_GET_A_TASK" in calls, "must read the task back, not trust the reply"
+
+
+def test_a_task_still_open_is_not_reported_complete(monkeypatch):
+    """Asana accepting the call is not the same as the task changing."""
+    from app.integrations import asana_manager as am
+
+    _asana_env(monkeypatch, {
+        "ASANA_UPDATE_A_TASK": {"data": {}, "successful": True},
+        "ASANA_GET_A_TASK": {"data": {"data": {"gid": "1", "name": "Elevator page",
+                                               "completed": False}}},
+    })
+    out = am.complete_asana_task(task_gid="1", approved=True)
+    assert out["ok"] is False
+    assert "still open" in out["error"]
+
+
+def test_an_unreadable_task_is_flagged_rather_than_claimed(monkeypatch):
+    from app.integrations import asana_manager as am
+
+    def boom(args=None):
+        raise RuntimeError("Asana 500")
+
+    _asana_env(monkeypatch, {
+        "ASANA_UPDATE_A_TASK": {"data": {}, "successful": True},
+        "ASANA_GET_A_TASK": boom,
+    })
+    out = am.complete_asana_task(task_gid="1", approved=True)
+    assert out["verified"] is False
+    assert "could not be read back" in out["warning"]
+
+
+def test_a_refused_update_never_reaches_the_read_back(monkeypatch):
+    from app.integrations import asana_manager as am
+
+    calls = _asana_env(monkeypatch, {
+        "ASANA_UPDATE_A_TASK": {"data": {}, "successful": False},
+    })
+    out = am.complete_asana_task(task_gid="1", approved=True)
+    assert out["ok"] is False
+    assert "ASANA_GET_A_TASK" not in calls
