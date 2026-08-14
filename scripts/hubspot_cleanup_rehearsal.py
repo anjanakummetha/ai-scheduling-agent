@@ -57,6 +57,29 @@ def rule(title: str) -> None:
     print(f"\n{'=' * 78}\n{title}\n{'=' * 78}")
 
 
+def discard_rehearsal_rows(batch_ids: list[str]) -> None:
+    """Remove what this run staged and logged.
+
+    The rehearsal runs against the production database, so without this it
+    leaves undo-log rows describing writes that never happened and staged
+    batches nobody will ever apply. A cleanup tool that litters the thing it is
+    cleaning is not one to trust.
+    """
+    if not batch_ids:
+        return
+    from app.storage.lexi_db import get_lexi_connection
+
+    marks = ",".join("?" for _ in batch_ids)
+    with get_lexi_connection() as conn:
+        hs.ensure_applied_writes_table(conn)
+        removed = conn.execute(
+            f"DELETE FROM hubspot_applied_writes WHERE batch_id IN ({marks})", batch_ids
+        ).rowcount
+        conn.execute(f"DELETE FROM hubspot_batches WHERE batch_id IN ({marks})", batch_ids)
+        conn.commit()
+    print(f"  discarded {removed} undo-log row(s) and {len(batch_ids)} staged batch(es).")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=25)
@@ -76,6 +99,7 @@ def main() -> None:
     print("  NOTE: every write is intercepted regardless of the flag above.")
 
     rule("1. Candidate scan (real reads)")
+    staged: list[str] = []
     contacts, coverage = hs.find_enrichment_candidates(
         limit=args.limit, owner_id=hs.kory_owner_id(), include_phone=args.phone
     )
@@ -95,6 +119,7 @@ def main() -> None:
     proposed = hs.propose_field_enrichment(limit=args.limit, include_phone=args.phone)
     print(proposed.get("kory_message", ""))
     batch_id = proposed.get("batch_id")
+    staged.append(batch_id)
     print(f"\n  batch_id: {batch_id}")
     print(f"  proposals: {proposed.get('proposal_count')}   "
           f"no signature: {proposed.get('no_source_count')}   "
@@ -109,7 +134,9 @@ def main() -> None:
 
     if not proposed.get("proposal_count"):
         print("\n  Nothing proposed — skipping apply/undo, the guard section still runs.")
-        merge_guard_check(args)
+        merge_guard_check(args, staged)
+        rule("CLEANUP")
+        discard_rehearsal_rows(staged)
         return
 
     rule("3. Apply — the payloads that WOULD reach HubSpot")
@@ -141,16 +168,21 @@ def main() -> None:
     for slug, payload in intercepted[before:]:
         print(f"    {slug}  {json.dumps(payload, default=str)}")
 
-    merge_guard_check(args)
+    merge_guard_check(args, staged)
+
+    rule("CLEANUP")
+    discard_rehearsal_rows(staged)
 
     rule("RESULT")
     print(f"  {len(intercepted)} write(s) intercepted. HubSpot was not modified.")
     assert all(slug in WRITE_SLUGS for slug, _ in intercepted)
 
 
-def merge_guard_check(args: argparse.Namespace) -> None:
+def merge_guard_check(args: argparse.Namespace, staged: list[str] | None = None) -> None:
     rule("6. Ownership guard against real records")
     dupes = hs.propose_duplicate_merges(limit=args.dupe_scan)
+    if staged is not None and dupes.get("batch_id"):
+        staged.append(dupes["batch_id"])
     pairs = dupes.get("pairs") or []
     print(f"  {len(pairs)} pair(s) in a {args.dupe_scan}-contact scan; "
           f"coverage={json.dumps(dupes.get('coverage'), default=str)}")
