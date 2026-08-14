@@ -1272,6 +1272,7 @@ def create_asana_task_action(
     due_on: str = "",
     section: str = "",
     project: str = "",
+    assignee: str = "",
     confirm: bool = False,
 ) -> dict[str, Any]:
     from app.integrations.asana_manager import create_asana_task_from_chat
@@ -1282,6 +1283,7 @@ def create_asana_task_action(
         due_on=due_on,
         section=section,
         project=project,
+        assignee=assignee,
         approved=confirm,
     )
 
