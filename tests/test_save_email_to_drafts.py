@@ -5,10 +5,26 @@ lands in his Drafts folder, so every path here asserts on the read-back rather
 than on the create call's reply.
 """
 
+import pytest
 from unittest.mock import patch
 
 from app.assistant import actions
 from app.integrations import outlook_email
+
+
+@pytest.fixture(autouse=True)
+def _recipient_is_known():
+    """These tests are about creating the draft, not vetting the address.
+
+    The recipient guard is exercised explicitly further down; here it would
+    otherwise reach the network, and its answer varies with whether the runner
+    has HubSpot keys — green locally, red in CI.
+    """
+    with patch.object(
+        outlook_email, "verify_recipient_address",
+        return_value={"verified": True, "source": "test"},
+    ):
+        yield
 
 
 def _live_settings(mock):

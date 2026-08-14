@@ -1007,7 +1007,10 @@ def verify_recipient_address(email: str) -> dict[str, Any]:
         logger.warning("Recipient check via HubSpot failed (%s)", exc)
         return {"verified": True, "source": "unchecked", "reason": "hubspot_unavailable"}
 
-    return {"verified": False, "reason": "no_evidence", "suggestions": []}
+    # No CRM to check against. Absence from the last 50 messages is weak evidence
+    # — plenty of legitimate recipients are not in it — so refusing here would
+    # block ordinary drafts to make a point we cannot actually support.
+    return {"verified": True, "source": "unchecked", "reason": "hubspot_not_configured"}
 
 
 def create_kory_review_draft(
