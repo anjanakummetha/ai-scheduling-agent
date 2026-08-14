@@ -897,24 +897,6 @@ def complete_asana_task(*, task_gid: str, approved: bool = False, owner_ack: boo
     return written
 
 
-def _task_project_gids(task_gid: str) -> list[str]:
-    """Which projects a task is currently filed on. Empty when it can't be read."""
-    try:
-        res = execute_asana_tool(
-            "ASANA_GET_A_TASK", {"task_gid": task_gid, "opt_fields": ["projects", "name"]}
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not read projects for task %s: %s", task_gid, exc)
-        return []
-    row = (res.get("data") or {}).get("data") or {}
-    projects = row.get("projects") or []
-    return [
-        str(p.get("gid"))
-        for p in projects
-        if isinstance(p, dict) and p.get("gid")
-    ]
-
-
 def _read_task_state(task_gid: str) -> dict[str, Any] | None:
     """Current name/completed/assignee for a task. None means unverified."""
     try:
@@ -1087,6 +1069,48 @@ def search_asana_tasks(
     return {"ok": True, "query": query, "tasks": ranked[:limit], "scanned": len(pool)}
 
 
+def _project_name_for_gid(project_gid: str) -> str:
+    if not project_gid:
+        return ""
+    for row in list_asana_project_options().get("projects", []):
+        if str(row.get("gid")) == str(project_gid):
+            return str(row.get("name") or "")
+    return ""
+
+
+def _find_section_anywhere(
+    section_name: str,
+    *,
+    preferred_gid: str = "",
+    task_gid: str = "",
+) -> tuple[str, str]:
+    """Locate a board by name. Returns (section_gid, the project it was found on).
+
+    Searched narrowest-first so an explicit instruction still wins: the project
+    Kory named, then the one the task is filed on, then everything else. A board
+    named in chat is rarely qualified by project — he says "move it to This Week",
+    not "move it to This Week in Anju — CEO Executive AI Tools" — so a
+    single-project lookup turned an existing board into "it doesn't exist in
+    Asana".
+    """
+    candidates: list[str] = []
+    if preferred_gid:
+        candidates.append(preferred_gid)
+    for gid in _task_project_gids(task_gid):
+        if gid and gid not in candidates:
+            candidates.append(gid)
+    for row in list_asana_project_options().get("projects", []):
+        gid = str(row.get("gid") or "")
+        if gid and gid not in candidates:
+            candidates.append(gid)
+
+    for gid in candidates:
+        found = resolve_section_gid(section_name, gid)
+        if found:
+            return found, gid
+    return "", (preferred_gid or (candidates[0] if candidates else ""))
+
+
 def move_asana_task_to_section(
     *,
     task_gid: str,
@@ -1117,34 +1141,24 @@ def move_asana_task_to_section(
                     f"No Asana project matching {project!r}. Available projects: {names}."
                 ),
             }
-    # No project named, but a board was. Boards belong to projects, so look in the
-    # one the task is actually in — list_project_sections falls back to the *home*
-    # project, so "move it to This Week" searched Kory NON-IFG for a board that
-    # lives in the project holding the task, and answered that no such board
-    # exists. It does; it was being looked for in the wrong place.
-    if not project_gid and section_name.strip():
-        owning = _task_project_gids(task_gid)
-        if len(owning) == 1:
-            project_gid = owning[0]
-
     target = section_gid.strip()
     if not target and section_name.strip():
-        target = resolve_section_gid(section_name, project_gid)
+        # Boards belong to projects, so where you look decides whether one exists.
+        # Try, in order: the project Kory named, then the project the task is
+        # actually filed on, then every project — because "there's no This Week
+        # section in any of your projects" was said about a board that does exist,
+        # having only ever looked in the personal project.
+        target, project_gid = _find_section_anywhere(
+            section_name, preferred_gid=project_gid, task_gid=task_gid
+        )
         if not target:
             names = ", ".join(r["name"] for r in list_project_sections(project_gid)) or "none found"
-            where = ""
-            if project_gid:
-                where = next(
-                    (
-                        f" in {r['name']}"
-                        for r in list_asana_project_options().get("projects", [])
-                        if str(r.get("gid")) == project_gid
-                    ),
-                    "",
-                )
             return {
                 "ok": False,
-                "error": f"No board named '{section_name}'{where}. Available boards: {names}.",
+                "error": (
+                    f"No board named '{section_name}' on any project you can see. "
+                    f"Boards on {_project_name_for_gid(project_gid) or 'that project'}: {names}."
+                ),
             }
     # A project was named but no section. Previously `target` fell through to the
     # global ASANA_SECTION_GID default — a section in the *original* project — so
