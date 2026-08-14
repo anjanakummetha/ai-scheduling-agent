@@ -484,6 +484,34 @@ def resolve_project_gid(project: str) -> tuple[str, str]:
     return "", ""
 
 
+def _gid_with_owner_check(
+    task_gid: str, *, owner_ack: bool = False
+) -> tuple[str, dict[str, Any] | None]:
+    """Let a gid through only once its owner is known to be Kory, or acknowledged.
+
+    A read-back failure lets it through: an Asana outage is not grounds to block
+    Kory from his own tasks, and every write past here reports what it observed.
+    """
+    if owner_ack:
+        return task_gid, None
+    observed = _read_task_state(task_gid)
+    if observed is None:
+        return task_gid, None
+    owner = str(observed.get("assignee") or "").strip()
+    if owner and "kory" not in owner.lower():
+        return "", {
+            "ok": False,
+            "error_code": "owner_confirmation_required",
+            "error": (
+                f"{observed.get('name') or task_gid!r} is assigned to {owner}. "
+                "Confirm you want to change someone else's task."
+            ),
+            "assignee": owner,
+            "task_gid": task_gid,
+        }
+    return task_gid, None
+
+
 def resolve_task_or_error(
     task: str, *, owner_ack: bool = False
 ) -> tuple[str, dict[str, Any] | None]:
@@ -499,7 +527,12 @@ def resolve_task_or_error(
     if _should_simulate_asana():
         return raw, None  # nothing live to look a name up against
     if raw.isdigit():
-        return raw, None
+        # The owner guard used to live only on the name path, and Lexi does not
+        # use it: she searches first, then acts on the gid. So "mark the Steve
+        # Chanen pre-interview as done" closed Heidi's task on a shared board and
+        # reported success — the guard protected the one route nobody takes.
+        # Ownership is a property of the task, so ask the task.
+        return _gid_with_owner_check(raw, owner_ack=owner_ack)
     try:
         candidates = (
             (search_asana_tasks(query=raw, limit=6, mine_only=False).get("tasks") or [])
