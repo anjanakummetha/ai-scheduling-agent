@@ -372,3 +372,34 @@ def test_the_suggestion_reaches_the_question(wired, monkeypatch):
     assert out["suggested_board"] == "YPO"
     assert "YPO" in out["kory_message"]
     assert not wired, "still writes nothing until he confirms"
+
+
+def test_a_move_says_which_board_the_task_landed_on(wired, monkeypatch):
+    """Moving to a project without naming a board lets Asana choose — it picked
+    "📋 Backlog" — and nothing said so, so Kory was told it moved but not where."""
+    monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
+    monkeypatch.setattr(
+        am, "describe_task_placement",
+        lambda gid: {"name": "Lexi test task 3",
+                     "project": "Anju — CEO Executive AI Tools (Summer 2026)",
+                     "board": "📋 Backlog"},
+    )
+    out = am.move_asana_task_to_section(
+        task_gid="42", project="Anju - CEO executive tools", approved=True
+    )
+    assert out["ok"] is True
+    assert out["landed_board"] == "📋 Backlog"
+    assert "📋 Backlog" in out["kory_message"]
+    assert "Anju" in out["kory_message"]
+
+
+def test_a_failed_move_claims_no_placement(wired, monkeypatch):
+    monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
+    monkeypatch.setattr(am, "_write_result", lambda *a, **k: {"ok": False, "error": "nope"})
+    called = []
+    monkeypatch.setattr(am, "describe_task_placement", lambda gid: called.append(gid) or {})
+    out = am.move_asana_task_to_section(
+        task_gid="42", project="Anju - CEO executive tools", approved=True
+    )
+    assert out["ok"] is False
+    assert "landed_board" not in out
