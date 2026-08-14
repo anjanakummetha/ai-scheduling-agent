@@ -1310,11 +1310,16 @@ def move_asana_task_to_section(
             {"task_gid": task_gid, "project": project_gid},
         )
         out = _write_result(added, task_gid=task_gid, project_gid=project_gid)
-        out = _with_placement(out, task_gid)
         if out.get("ok") and unfile_others:
             out.update(unfile_task_from_other_projects(
                 task_gid=task_gid, keep_project_gid=project_gid
             ))
+        # Read placement only once the task has left the old project — mid-move it
+        # is on both, and Asana lists the one it is leaving first, so reporting
+        # here previously named the project the task had just come from.
+        out = _with_placement(
+            out, task_gid, prefer_project_name=_project_name_for_gid(project_gid)
+        )
         return out
 
     if not target:
@@ -1334,15 +1339,15 @@ def move_asana_task_to_section(
         {"task_gid": task_gid, "section_gid": target},
     )
     out = _write_result(result, task_gid=task_gid, section_gid=target)
-    out = _with_placement(out, task_gid)
     if out.get("ok") and unfile_others and project_gid:
         out.update(unfile_task_from_other_projects(
             task_gid=task_gid, keep_project_gid=project_gid
         ))
+    out = _with_placement(out, task_gid, prefer_project_name=_project_name_for_gid(project_gid))
     return out
 
 
-def describe_task_placement(task_gid: str) -> dict[str, str]:
+def describe_task_placement(task_gid: str, *, prefer_project_name: str = "") -> dict[str, str]:
     """Where a task actually sits now: project and board, read from Asana.
 
     Moving a task to a project without naming a board lets Asana choose — it
@@ -1360,25 +1365,37 @@ def describe_task_placement(task_gid: str) -> dict[str, str]:
         logger.warning("Could not read placement for task %s: %s", task_gid, exc)
         return {}
     row = (res.get("data") or {}).get("data") or {}
-    for membership in row.get("memberships") or []:
-        if not isinstance(membership, dict):
-            continue
-        project = (membership.get("project") or {}).get("name")
-        section = (membership.get("section") or {}).get("name")
-        if project:
-            return {
-                "name": str(row.get("name") or ""),
-                "project": str(project),
-                "board": str(section or ""),
-            }
+    memberships = [m for m in (row.get("memberships") or []) if isinstance(m, dict)]
+
+    def described(membership: dict[str, Any]) -> dict[str, str]:
+        return {
+            "name": str(row.get("name") or ""),
+            "project": str((membership.get("project") or {}).get("name") or ""),
+            "board": str((membership.get("section") or {}).get("name") or ""),
+        }
+
+    # A task is multi-homed mid-move, so "the first membership" is whichever
+    # Asana lists first — which was the project it is leaving. Prefer the one
+    # asked about; that is the answer to "where did it go".
+    if prefer_project_name:
+        wanted = prefer_project_name.strip().casefold()
+        for membership in memberships:
+            name = str((membership.get("project") or {}).get("name") or "").casefold()
+            if name and (wanted in name or name in wanted):
+                return described(membership)
+    for membership in memberships:
+        if (membership.get("project") or {}).get("name"):
+            return described(membership)
     return {"name": str(row.get("name") or "")}
 
 
-def _with_placement(result: dict[str, Any], task_gid: str) -> dict[str, Any]:
+def _with_placement(
+    result: dict[str, Any], task_gid: str, *, prefer_project_name: str = ""
+) -> dict[str, Any]:
     """Attach where the task ended up, so the reply can name it."""
     if not result.get("ok"):
         return result
-    placement = describe_task_placement(task_gid)
+    placement = describe_task_placement(task_gid, prefer_project_name=prefer_project_name)
     if placement.get("project"):
         result["landed_project"] = placement["project"]
         result["landed_board"] = placement.get("board") or "(no board)"
