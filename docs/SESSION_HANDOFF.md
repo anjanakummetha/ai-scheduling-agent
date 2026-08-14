@@ -102,6 +102,30 @@ out the insurance renewal"` → nothing, correctly.
 **If resumed:** run the duplicate search *before* the approval gate. It is a
 read-only search — nothing about it needs Kory's approval to run.
 
+### 1b-2. Hold-release cards fire one per slot — **seen live 2026-08-14, 11:54**
+Anjana received three consecutive Teams cards, all reading *"Lexi — hold released
+(no reply) / Check in / From Iconic Founders Group"*, differing only in the slot:
+`2026-08-24T10:00-06:00`, `2026-08-26T11:00-06:00`, `2026-08-28T09:00-06:00`.
+Each said "Held 3 days with no response — calendar hold removed. Ask me to
+re-offer times for Check in."
+
+Three things wrong, in rough order of severity:
+
+1. **One request, three cards.** Those are the three slots *offered for a single
+   meeting*. They expired together and should be one card — "Check in: 3 held
+   slots released, no reply. Want me to re-offer?" Fanning out per slot means a
+   five-slot offer would produce five identical cards.
+2. **This is an FYI, and FYIs belong in the brief.** House rule: Teams is for
+   decisions Kory has to make. Nothing was asked of him here — the holds were
+   already removed. It reads as three notifications about work that is finished.
+3. **"From Iconic Founders Group" is a company, not a person.** The requester
+   looks to have resolved to the organisation. If someone at IFG asked for the
+   check-in, Kory cannot tell who from this card. Worth confirming against the
+   originating thread before assuming it is cosmetic.
+
+Not investigated yet — recorded from a screenshot, not the log. Start at
+`agent.log` around 11:54 and at whatever emits `hold released (no reply)`.
+
 ### 1c. Latency — deferred, deliberately
 Measured, ranked, not implemented. See `lexi-latency-findings` memory. Median
 16.2s, mean 28.5s, worst 252s.
