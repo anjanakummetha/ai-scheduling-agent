@@ -183,23 +183,44 @@ def test_a_task_that_could_not_be_assigned_is_not_reported_as_assigned(wired, mo
     assert "created" in out["error"], "must still say the task exists"
 
 
+def _only_anju_has_this_week(monkeypatch):
+    def fake_sections(project_gid=""):
+        return [{"gid": "sec-week", "name": "📌 This Week"}] if project_gid == "p-anju" else [
+            {"gid": "sec-gen", "name": "General"}
+        ]
+
+    monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
+    monkeypatch.setattr(am, "list_project_sections", fake_sections)
+
+
 def test_a_board_is_looked_for_in_the_project_holding_the_task(wired, monkeypatch):
     """"move it to This Week" answered "no such board" — sections were resolved
     against the home project, not the project the task actually lives in."""
-    looked_in = {}
-
-    def fake_sections(project_gid=""):
-        looked_in["gid"] = project_gid
-        return [{"gid": "sec-week", "name": "📌 This Week"}] if project_gid == "p-anju" else []
-
-    monkeypatch.setattr(am, "resolve_task_or_error", lambda t, owner_ack=False: ("42", None))
+    _only_anju_has_this_week(monkeypatch)
     monkeypatch.setattr(am, "_task_project_gids", lambda gid: ["p-anju"])
-    monkeypatch.setattr(am, "list_project_sections", fake_sections)
-
     out = am.move_asana_task_to_section(task_gid="42", section_name="This Week", approved=True)
-    assert looked_in["gid"] == "p-anju", "must search the task's own project"
     assert out["ok"] is True
     assert out["section_gid"] == "sec-week"
+
+
+def test_a_wrongly_named_project_does_not_hide_the_board(wired, monkeypatch):
+    """Lexi guessed the personal project, so the board "did not exist in Asana".
+    A wrong guess must not be the last word — widen the search."""
+    _only_anju_has_this_week(monkeypatch)
+    monkeypatch.setattr(am, "_task_project_gids", lambda gid: ["p-anju"])
+    out = am.move_asana_task_to_section(
+        task_gid="42", section_name="This Week", project="Kory NON-IFG", approved=True
+    )
+    assert out["ok"] is True
+    assert out["section_gid"] == "sec-week"
+
+
+def test_a_board_nobody_has_is_still_reported_missing(wired, monkeypatch):
+    _only_anju_has_this_week(monkeypatch)
+    monkeypatch.setattr(am, "_task_project_gids", lambda gid: ["p-anju"])
+    out = am.move_asana_task_to_section(task_gid="42", section_name="Atlantis", approved=True)
+    assert out["ok"] is False
+    assert "Atlantis" in out["error"]
 
 
 def test_an_emoji_prefixed_board_still_matches_what_kory_types(monkeypatch):
