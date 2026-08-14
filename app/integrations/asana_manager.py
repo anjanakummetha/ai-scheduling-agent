@@ -627,12 +627,34 @@ def _list_tasks_across_projects(
 _NO_DUE_DATE = frozenset({"none", "no", "no due date", "n/a", "na", "skip", "unset", "no date"})
 
 
+def suggest_board_for_task(title: str, boards: list[str]) -> str:
+    """The board a task title obviously belongs on, or "" when it is not obvious.
+
+    "Renew my YPO membership" belongs on the YPO board, and asking Kory to pick it
+    off a list of fourteen is asking him to do work he already did by naming it.
+    Deliberately conservative: only a strong, unambiguous match suggests anything,
+    because a wrong suggestion he accepts by reflex is worse than no suggestion.
+    """
+    from app.integrations.asana_task_match import score_task_name
+
+    scored = sorted(
+        ((score_task_name(name, title), name) for name in boards if name),
+        reverse=True,
+    )
+    if not scored or scored[0][0] < 0.5:
+        return ""
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < 0.15:
+        return ""  # two boards fit equally well — let him choose
+    return scored[0][1]
+
+
 def _missing_task_details(
     *,
     section: str,
     due_on: str,
     project_gid: str,
     project_name: str,
+    title: str = "",
 ) -> dict[str, Any] | None:
     """Ask for a board and a due date before creating, or None if both are settled."""
     wants_board = not section.strip()
@@ -642,12 +664,18 @@ def _missing_task_details(
 
     boards = [row["name"] for row in list_project_sections(project_gid)]
     where = project_name or _project_name_for_gid(project_gid) or "that project"
+    suggested = suggest_board_for_task(title, boards) if wants_board else ""
     lines: list[str] = []
     if wants_board:
-        lines.append(f"Which board in {where}?")
-        lines += [f"• {name}" for name in boards[:14]]
-        if boards:
-            lines.append('(or say "General")')
+        if suggested:
+            lines.append(f'"{title}" looks like it belongs on **{suggested}** in {where} — right?')
+            lines.append("")
+            lines.append("Other boards: " + ", ".join(n for n in boards if n != suggested)[:400])
+        else:
+            lines.append(f"Which board in {where}?")
+            lines += [f"• {name}" for name in boards[:14]]
+            if boards:
+                lines.append('(or say "General")')
     if wants_due:
         lines.append("")
         lines.append(
@@ -660,6 +688,7 @@ def _missing_task_details(
         "error": "Ask Kory for the board and/or due date before creating the task.",
         "needs": [k for k, v in (("board", wants_board), ("due_on", wants_due)) if v],
         "boards": boards,
+        "suggested_board": suggested,
         "kory_message": "\n".join(lines).strip(),
     }
 
@@ -732,6 +761,7 @@ def create_asana_task_from_chat(
         due_on="answered" if declined_due_date else due_on,
         project_gid=project_gid,
         project_name=project_name,
+        title=title,
     )
     if missing:
         return missing
