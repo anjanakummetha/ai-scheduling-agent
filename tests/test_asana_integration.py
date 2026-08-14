@@ -279,7 +279,7 @@ def test_unresolvable_task_name_explains_itself(monkeypatch):
     ]})
     gid, err = am.resolve_task_or_error("book")
     assert gid == ""
-    assert "matches 2 tasks" in err["error"], err
+    assert "could be 2 tasks" in err["error"], err
     assert len(err["candidates"]) == 2
 
 

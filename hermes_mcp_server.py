@@ -1133,6 +1133,23 @@ def lexi_draft_outbound_email(
 
 
 @_tool
+def lexi_todays_briefing(briefing_date: str = "") -> str:
+    """The CEO briefing Kory was emailed this morning — MANDATORY whenever he
+    refers to it.
+
+    Triggers: "my briefing", "this morning's briefing", "the tasks from my
+    briefing", "what did the briefing say about X", "that thing in my brief",
+    and any request that assumes you know what he read at 4:45 AM.
+
+    Call this BEFORE answering or acting. Do not guess what was in it, and do not
+    rebuild it from the calendar or inbox — quote the stored briefing's own
+    wording for names, numbers and dates. briefing_date (YYYY-MM-DD) fetches an
+    earlier day; leave blank for today.
+    """
+    return _wrap("lexi_todays_briefing", lexi.todays_briefing_action, briefing_date=briefing_date.strip())
+
+
+@_tool
 def lexi_save_email_to_drafts(
     to_email: str,
     subject: str,
