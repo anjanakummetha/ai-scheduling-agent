@@ -7,6 +7,7 @@ copy and she had no idea what he meant.
 
 from app.assistant import actions
 from app.storage.daily_briefing import (
+    _today as _kory_today,
     get_briefing,
     html_to_text,
     latest_briefing,
@@ -62,11 +63,17 @@ def test_action_returns_todays_briefing_verbatim():
 
 
 def test_falls_back_to_the_most_recent_briefing_and_says_so():
-    """A Monday question about Friday's briefing should still land — labelled."""
+    """A Monday question about Friday's briefing should still land — labelled.
+
+    "Yesterday" is computed on Kory's clock, not the runner's: CI is UTC, and just
+    after midnight there the previous UTC day is still today in Denver — which made
+    this pass locally and fail in CI.
+    """
     from datetime import date, timedelta
 
     _clear()
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    kory_today = date.fromisoformat(_kory_today())
+    yesterday = (kory_today - timedelta(days=1)).isoformat()
     save_briefing(subject="Friday", body_text="friday content", briefing_date=yesterday)
     result = actions.todays_briefing_action()
     assert result["ok"] is True
