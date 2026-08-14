@@ -213,6 +213,26 @@ def test_a_title_that_is_not_the_company_is_refused(title, domain):
     assert cl._company_name_from_title(title, domain) == ""
 
 
+def test_a_serialised_escape_sequence_is_never_a_company_name():
+    r"""Caught in the live sweep. The fetcher's payload was matched with a regex
+    over json.dumps output, which escapes non-ASCII — so an em-dash in the site
+    title arrived as the literal characters —, the separator never matched,
+    and "Firstbiz — Growth is a system" was staged as somebody's employer.
+    """
+    mangled = "Firstbiz " + chr(92) + "u2014 Growth is a system"
+    assert cl._company_name_from_title(mangled, "firstbiz.org") == ""
+    # The same title, read rather than serialised, splits correctly.
+    assert cl._company_name_from_title("Firstbiz — Growth is a system", "firstbiz.org") == "Firstbiz"
+
+
+def test_the_title_is_read_from_the_payload_not_its_serialisation():
+    payload = {"results": [{"id": "https://firstbiz.org", "title": "Firstbiz — Growth is a system"}]}
+    with patch("app.integrations.composio_search.search_enabled", return_value=True):
+        with patch("app.integrations.composio_search.fetch_url_content", return_value={"data": payload}):
+            out = cl.company_from_website("a@firstbiz.org")
+    assert out["value"] == "Firstbiz"
+
+
 def test_a_failed_crawl_yields_nothing_rather_than_something():
     with patch("app.integrations.composio_search.search_enabled", return_value=True):
         with patch("app.integrations.composio_search.fetch_url_content",

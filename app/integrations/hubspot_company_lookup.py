@@ -223,6 +223,11 @@ def _company_name_from_title(title: str, domain: str) -> str:
     raw = re.sub(r"\s+", " ", str(title or "")).strip()
     if not raw:
         return ""
+    # A literal escape sequence means something upstream serialised the text
+    # instead of reading it. Whatever this is, it is not a company name — and
+    # this is the belt to the extraction fix's braces.
+    if re.search(r"\\[uUxN]", raw):
+        return ""
     # First segment before a separator, which is conventionally the name.
     candidate = re.split(r"\s*[|–—•·>»:]\s*|\s+-\s+", raw, maxsplit=1)[0].strip(" .,-")
     if not candidate or not (2 < len(candidate) <= 60):
@@ -282,8 +287,30 @@ def company_from_website(email: Any) -> dict[str, Any] | None:
             return None
         result = fetch_url_content([f"https://{domain}"], max_characters=3000)
         payload = result.get("data")
-        blob = json.dumps(payload) if not isinstance(payload, str) else payload
-        for pattern in (
+
+        # Read the field, don't grep the serialisation. json.dumps escapes
+        # non-ASCII, so an em-dash in a site title arrived as the six literal
+        # characters of its escape sequence. The separator never matched, the
+        # tagline was never split off, and "<Name> <escape> Growth is a system"
+        # was one approval away from being written as somebody's employer.
+        titles: list[str] = []
+        if isinstance(payload, dict):
+            for row in payload.get("results") or []:
+                if not isinstance(row, dict):
+                    continue
+                for key in ("title", "siteName", "site_name", "og:site_name"):
+                    value = row.get(key)
+                    if isinstance(value, str) and value.strip():
+                        titles.append(value)
+        for title in titles:
+            name = _company_name_from_title(unescape(title), domain)
+            if name:
+                break
+
+        # Fall back to scanning the payload, with escaping turned off so the
+        # text matched is the text that was served.
+        blob = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+        for pattern in () if name else (
             r'"(?:og:site_name|site_name|siteName)"\s*[:=]\s*"([^"]{2,80})"',
             r"<title[^>]*>([^<]{2,120})</title>",
             r'"title"\s*:\s*"([^"]{2,120})"',
