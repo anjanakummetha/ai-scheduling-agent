@@ -58,7 +58,8 @@ def test_resolve_project_refuses_ambiguity(monkeypatch):
 
 def test_create_targets_the_named_project(wired):
     out = am.create_asana_task_from_chat(
-        title="T", project="Anju - CEO executive tools", approved=True
+        title="T", project="Anju - CEO executive tools",
+        section="General", due_on="no due date", approved=True,
     )
     assert out["ok"] is True, out
     assert out["project"] == "Anju - CEO executive tools"
@@ -69,7 +70,10 @@ def test_create_targets_the_named_project(wired):
 def test_create_on_other_project_skips_home_default_section(wired):
     """The default section gid belongs to the personal project — applying it to
     a task on another project would silently drag the task back home."""
-    am.create_asana_task_from_chat(title="T", project="IFG Tasks", approved=True)
+    am.create_asana_task_from_chat(
+        title="T", project="IFG Tasks", section="General",
+        due_on="no due date", approved=True,
+    )
     assert not any(s == "ASANA_ADD_TASK_TO_SECTION" for s, _ in wired)
 
 
@@ -83,14 +87,28 @@ def test_create_without_a_project_asks_instead_of_choosing(wired):
     assert not any(s == "ASANA_CREATE_A_TASK" for s, _ in wired), "nothing written"
 
 
-def test_saying_default_still_uses_the_home_project(wired):
-    """The escape hatch: he can decline to choose, but he has to say so."""
-    out = am.create_asana_task_from_chat(title="T", project="default", approved=True)
+def test_saying_default_still_uses_the_home_project(wired, monkeypatch):
+    """The escape hatch: he can decline to choose, but he has to say so.
+
+    General, not Reservation Reminders — that board is Lexi's automated booking
+    surface, and a task Kory asked for landing there is a task he never sees.
+    """
+    monkeypatch.setattr(
+        am, "list_project_sections",
+        lambda project_gid="": [
+            {"gid": "sec-general", "name": "General"},
+            {"gid": "sec-home-default", "name": "Reservation Reminders"},
+        ],
+    )
+    out = am.create_asana_task_from_chat(
+        title="T", project="default", section="General",
+        due_on="no due date", approved=True,
+    )
     assert out["ok"] is True
     create = next(a for s, a in wired if s == "ASANA_CREATE_A_TASK")
     assert create["data"]["projects"] == ["p-home"]
     placed = next(a for s, a in wired if s == "ASANA_ADD_TASK_TO_SECTION")
-    assert placed["section_gid"] == "sec-home-default"
+    assert placed["section_gid"] == "sec-general"
     assert out["project"] == am.ASANA_PARENT_PROJECT_NAME
 
 
@@ -111,7 +129,8 @@ def test_explicit_section_resolves_in_target_project(wired, monkeypatch):
 
     monkeypatch.setattr(am, "resolve_section_gid", fake_resolve)
     am.create_asana_task_from_chat(
-        title="T", section="Backlog", project="Anju - CEO executive tools", approved=True
+        title="T", section="Backlog", project="Anju - CEO executive tools",
+        due_on="no due date", approved=True,
     )
     assert seen["project_gid"] == "p-anju"
     placed = next(a for s, a in wired if s == "ASANA_ADD_TASK_TO_SECTION")
@@ -160,7 +179,8 @@ def test_create_can_assign_in_one_step(wired, monkeypatch):
 
     monkeypatch.setattr(am, "update_asana_task", fake_update)
     out = am.create_asana_task_from_chat(
-        title="Send the deck", project="IFG Tasks", assignee="Heidi", approved=True
+        title="Send the deck", project="IFG Tasks", assignee="Heidi",
+        section="General", due_on="no due date", approved=True,
     )
     assert out["ok"] is True
     assert seen["assignee"] == "Heidi", "the create must carry the assignment through"
@@ -176,7 +196,8 @@ def test_a_task_that_could_not_be_assigned_is_not_reported_as_assigned(wired, mo
         lambda **kw: {"ok": False, "error": "no such user"} if kw.get("assignee") else {"ok": True},
     )
     out = am.create_asana_task_from_chat(
-        title="Send the deck", project="IFG Tasks", assignee="Nobody", approved=True
+        title="Send the deck", project="IFG Tasks", assignee="Nobody",
+        section="General", due_on="no due date", approved=True,
     )
     assert out["ok"] is False
     assert "assigning it to" in out["error"]
@@ -248,3 +269,52 @@ def test_an_unknown_board_names_the_project_it_looked_in(wired, monkeypatch):
     assert out["ok"] is False
     assert "This Week" in out["error"], "say what boards exist"
     assert "Anju" in out["error"], "and which project was searched"
+
+
+def _boards(monkeypatch, names=("General", "Personal", "YPO", "Reservation Reminders")):
+    monkeypatch.setattr(
+        am, "list_project_sections",
+        lambda project_gid="": [{"gid": f"s{i}", "name": n} for i, n in enumerate(names)],
+    )
+
+
+def test_create_asks_for_board_and_due_date_before_writing(wired, monkeypatch):
+    """An unspecified board fell through to Reservation Reminders — Lexi's
+    automated booking board — and an undated task never reaches the overdue list."""
+    _boards(monkeypatch)
+    out = am.create_asana_task_from_chat(title="T", project="Kory NON-IFG", approved=True)
+    assert out["ok"] is False
+    assert out["error_code"] == "task_details_required"
+    assert set(out["needs"]) == {"board", "due_on"}
+    assert "General" in out["kory_message"]
+    assert "overdue" in out["kory_message"], "say why the due date matters"
+    assert not wired, "nothing written until he answers"
+
+
+def test_only_the_missing_detail_is_asked_for(wired, monkeypatch):
+    _boards(monkeypatch)
+    out = am.create_asana_task_from_chat(
+        title="T", project="Kory NON-IFG", section="General", approved=True
+    )
+    assert out["needs"] == ["due_on"]
+
+
+def test_no_due_date_is_an_answer_not_a_gap(wired, monkeypatch):
+    _boards(monkeypatch)
+    out = am.create_asana_task_from_chat(
+        title="T", project="Kory NON-IFG", section="General",
+        due_on="no due date", approved=True,
+    )
+    assert out["ok"] is True
+    assert "due_update" not in out, "declining a date must not set one"
+
+
+def test_a_reservation_reminder_still_files_itself(monkeypatch):
+    """The automated booking path owns that board and must not start asking."""
+    created = {}
+    monkeypatch.setattr(am, "_should_simulate_asana", lambda: True)
+    monkeypatch.setattr(am, "_create_asana_task", lambda **kw: created.update(kw) or {"ok": True})
+    am.create_venue_reservation_task(
+        meeting_subject="Dinner", time_slot="Thu 7pm", participants="x@y.com", approved=True
+    )
+    assert created["title"].startswith(am.VENUE_TASK_PREFIX)
