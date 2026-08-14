@@ -318,3 +318,57 @@ def test_a_reservation_reminder_still_files_itself(monkeypatch):
         meeting_subject="Dinner", time_slot="Thu 7pm", participants="x@y.com", approved=True
     )
     assert created["title"].startswith(am.VENUE_TASK_PREFIX)
+
+
+NON_IFG_BOARDS = [
+    "General", "Personal", "YPO", "Maclain Holdings", "Money Stuff", "Shows to Watch",
+    "Rollups | Non-IFG", "Heidi/Kory", "Personal Travel", "NG Board", "Canopy",
+    "Family", "Books to Read", "Reservation Reminders",
+]
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("Renew my YPO membership", "YPO"),
+        ("Prep for the NG Board meeting", "NG Board"),
+        ("Review the Maclain Holdings docs", "Maclain Holdings"),
+        ("Buy the new Sanderson book", "Books to Read"),
+        ("Sync with Heidi about the forum", "Heidi/Kory"),
+        ("Book flights to Chicago for the Canopy board meeting", "Canopy"),
+    ],
+)
+def test_an_obvious_board_is_proposed_rather_than_asked(title, expected):
+    """"Renew my YPO membership" belongs on YPO. Making Kory pick it off a list of
+    fourteen asks him to redo work he did by naming it."""
+    assert am.suggest_board_for_task(title, NON_IFG_BOARDS) == expected
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Call the insurance broker before the renewal",
+        "Send Bruce the CFO intro",
+        "Follow up on the thing from Tuesday",
+    ],
+)
+def test_a_title_that_names_no_board_asks_openly(title):
+    """A wrong suggestion accepted by reflex is worse than no suggestion."""
+    assert am.suggest_board_for_task(title, NON_IFG_BOARDS) == ""
+
+
+def test_two_equally_good_boards_produce_no_suggestion():
+    assert am.suggest_board_for_task("Personal travel plans", ["Personal", "Personal Travel"]) == ""
+
+
+def test_the_suggestion_reaches_the_question(wired, monkeypatch):
+    monkeypatch.setattr(
+        am, "list_project_sections",
+        lambda project_gid="": [{"gid": f"s{i}", "name": n} for i, n in enumerate(NON_IFG_BOARDS)],
+    )
+    out = am.create_asana_task_from_chat(
+        title="Renew my YPO membership", project="Kory NON-IFG", approved=True
+    )
+    assert out["suggested_board"] == "YPO"
+    assert "YPO" in out["kory_message"]
+    assert not wired, "still writes nothing until he confirms"
