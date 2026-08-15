@@ -131,8 +131,31 @@ for job title and company.
    backfill** across all accounts. With ~1,961 matched accounts, building a
    Relationship Map per account is not a viable path.
 
-**So the realistic shape of the work is a manual pass, one contact at a time,
-over a filtered list** — not a job we can kick off and walk away from. See §6.
+4. **It is opportunity-scoped, and that is the biggest limit of all.** Measured
+   in Kory's own Sales Navigator:
+
+   | List | Count |
+   |---|---:|
+   | My CRM Accounts | 748 |
+   | **My CRM Leads and Contacts** | **73** |
+   | Contacts Who Have Left Open Opportunities | 43 |
+   | Changed jobs in past 90 days | 2 |
+
+   The account side mirrors HubSpot exactly — 748 accounts owned, 748 synced.
+   The contact side does not: **73 of his 1,023 contacts.** LinkedIn's own
+   description says why — *"Includes key CRM Leads and Contacts associated with
+   your Accounts and/or Opportunities."*
+
+   **Sales Navigator watches contacts attached to live deals.** Kory's 177
+   blank-field contacts are overwhelmingly in the long tail that is *not*
+   attached to an open opportunity — which is why they were neglected in the
+   first place. They can still be found one at a time by search, but they do not
+   appear in any ready-made list.
+
+**So Sales Navigator is very good at a problem we do not have — keeping deal
+contacts current — and largely absent from the one we do.** The realistic shape
+of the work is a manual pass, one contact at a time, over a list we build
+ourselves. See §6.
 
 **Two prerequisites that are easy to miss:**
 
@@ -188,6 +211,45 @@ That is risky in *this* database specifically:
 Unlike Lexi's writes, a Sales Navigator update carries **no evidence trail and
 no undo**. Recommend turning it on: fewer matches, but every match is the right
 human. It can be loosened later if coverage disappoints.
+
+### This is no longer hypothetical — here is a live one
+
+Opened the **Update CRM** badge on the first flagged contact in Kory's list,
+**Thomas Heckler**. What Sales Navigator reported about the CRM record:
+
+| Field | CRM value |
+|---|---|
+| Title | *N/A* |
+| Account | *None* |
+| Location | Parker |
+| Contact owner | **Heidi Heckler** |
+| Most recent opportunity | ICCI |
+
+And what LinkedIn proposed to write, from the lead it matched him to:
+**"Open Source Software Engineer"** at **"The Phoenix Firestorm Project, Inc"**,
+**Gold Coast, Queensland, Australia**.
+
+Three separate things are wrong with that, and each one is worth its own line in
+the email:
+
+1. **The person is almost certainly not the same human.** The CRM has him in
+   Parker (Colorado) attached to an ICCI opportunity — industrial commissioning,
+   Greater Houston. LinkedIn has an open-source software engineer in Australia.
+   Same name, nothing else in common. **This is exactly the failure mode the
+   email-match setting prevents, occurring on a real record.**
+2. **The record is not Kory's.** The contact owner is Heidi. It appears in his
+   list because he owns the *opportunity*, not the contact. Sales Navigator has
+   no ownership guard — a **Confirm updates** click from Kory would write to
+   Heidi's contact.
+3. **It would have looked correct afterwards.** Both fields are currently empty,
+   so nothing would be visibly overwritten. A blank field would become a
+   confident, wrong, unattributed value with no undo.
+
+**This also settles the open question about blank fields.** Title is *N/A* and
+Account is *None*, and the badge fired anyway. Data Validation does flag missing
+values, not only stale ones — the help documentation is right and the enablement
+guide's shorter summary was incomplete. It also confirms the field set by
+demonstration: **Title, Account, Location. No phone.**
 
 ---
 
