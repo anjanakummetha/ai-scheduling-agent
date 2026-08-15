@@ -237,7 +237,13 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
             "ok": True,
             "proposal_id": proposal_id,
             "status": PENDING_APPROVAL,
-            "message": "Found times — approval card is ready.",
+            "message": (
+                "Found times — approval card is ready. Nothing sent, no holds "
+                "placed yet (holds land after approval). If Kory wants to keep "
+                "specific earlier times the engine dropped, edit the draft via "
+                "lexi_update_proposal_draft — it validates every time against "
+                "the live calendar and re-stages the slots."
+            ),
             "kory_message": "I found times — review the card when you can.",
         }
 
@@ -626,13 +632,21 @@ def begin_reoffer_schedule(proposal_id: int) -> dict[str, Any]:
 
 
 def update_proposal_draft(proposal_id: int, drafted_reply: str) -> dict[str, Any]:
-    """Apply Kory's edits to a draft before send."""
+    """Apply Kory's edits to a draft before send.
+
+    For scheduling proposals this is a VALIDATING write (live 2026-08-11
+    defect, proposal 9187): every time the edited draft offers is checked
+    against the live calendar and Kory's rules, and proposed_slots is re-staged
+    to match the draft — so the send path places holds for exactly the times
+    the email offers, and a booked time can never be hand-written into an
+    offer. A conflicting edit is refused with the clash named; nothing is
+    written."""
     body = (drafted_reply or "").strip()
     if not body:
         return {"ok": False, "error": "drafted_reply cannot be empty."}
     with get_lexi_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM proposals WHERE id = ?",
+            "SELECT status, proposed_slots, intent_classification FROM proposals WHERE id = ?",
             (proposal_id,),
         ).fetchone()
         if not row:
@@ -642,6 +656,59 @@ def update_proposal_draft(proposal_id: int, drafted_reply: str) -> dict[str, Any
                 "ok": False,
                 "error": f"Proposal {proposal_id} is not pending approval (status={row['status']}).",
             }
+        try:
+            existing_slots = json.loads(row["proposed_slots"] or "[]")
+        except (TypeError, ValueError):
+            existing_slots = []
+
+    if existing_slots:
+        from app.scheduling.draft_slot_sync import verify_draft_slots
+
+        bundle = _fetch_proposal_bundle(proposal_id) or {}
+        check = verify_draft_slots(
+            draft_body=body,
+            intent=str(row["intent_classification"] or bundle.get("intent_classification") or ""),
+            subject=str(bundle.get("subject") or ""),
+            thread_body=str(bundle.get("raw_body") or ""),
+            existing_slots=existing_slots,
+        )
+        if not check.ok:
+            return {
+                "ok": False,
+                "proposal_id": proposal_id,
+                "error": "Draft NOT updated — the edited draft offers times that "
+                "fail validation. Fix the times and try again.",
+                "conflicts": check.conflicts,
+                "staged_slots_unchanged": existing_slots,
+            }
+        with get_lexi_connection() as conn:
+            conn.execute(
+                """
+                UPDATE proposals
+                SET drafted_reply = ?, proposed_slots = ?, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (body, json.dumps(check.slots), proposal_id),
+            )
+            _audit(
+                conn,
+                proposal_id,
+                "draft_slots_synced",
+                f"Draft edited; {len(check.slots)} offered time(s) validated against "
+                "the live calendar and re-staged as proposed_slots.",
+            )
+            conn.commit()
+        return {
+            "ok": True,
+            "proposal_id": proposal_id,
+            "drafted_reply": body,
+            "staged_slots": check.slots,
+            "warnings": check.warnings,
+            "note": "All offered times verified free on Kory's calendar. Holds "
+            "will be placed for exactly these times when the offer is approved "
+            "and sent — no holds exist yet.",
+        }
+
     update_drafted_reply(proposal_id, body)
     return {"ok": True, "proposal_id": proposal_id, "drafted_reply": body}
 

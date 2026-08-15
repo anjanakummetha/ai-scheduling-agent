@@ -299,7 +299,16 @@ def lexi_decline_inbound_reply(proposal_id: str, reason: str = "") -> str:
 
 @_tool
 def lexi_update_proposal_draft(proposal_id: str, drafted_reply: str) -> str:
-    """Apply Kory's edits to a staged draft before send."""
+    """Apply Kory's edits to a staged draft before send — VALIDATING.
+
+    For scheduling drafts, every meeting time in the edited text is checked
+    against Kory's LIVE calendar and rules, and the proposal's slots are
+    re-staged to match the draft (so approval places holds for exactly the
+    offered times). A time that is busy or rule-breaking is REFUSED with the
+    clash named — fix the time and call again. This is the ONLY safe way to
+    change offered times by hand; never present times to Kory that this tool
+    (or the scheduling engine) has not validated. If it refuses, tell Kory
+    which time clashed and with what — do not work around it."""
     try:
         pid = int(proposal_id)
     except ValueError:

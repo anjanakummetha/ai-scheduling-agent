@@ -196,6 +196,13 @@ def initiate_outbound_scheduling(
                 _set_proposal_status(conn, proposal_id, PENDING_APPROVAL)
                 result["status"] = PENDING_APPROVAL
                 result["ok"] = True
+                result["holds_placed"] = False
+                result["state_note"] = (
+                    "Draft staged for Kory's approval. Nothing has been sent "
+                    "and NO calendar holds exist yet — holds are placed only "
+                    "after the approved offer email sends. Never tell Kory "
+                    "otherwise."
+                )
             else:
                 dispatch = _dispatch_outbound_execution(
                     conn,

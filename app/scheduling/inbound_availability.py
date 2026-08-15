@@ -82,11 +82,38 @@ def strip_quoted_reply(body: str) -> str:
     return text[:cut].strip()
 
 
+# "1:00–1:30 PM" / "2:00-2:30pm" — the meridiem is written once, on the range
+# end, so the am/pm-required time regex skipped the start and read the END as
+# the proposed time (surfaced 2026-08-15: an offer draft's "1:00–1:30 PM MT"
+# parsed as 1:30). Rewrite the start with its inherited meridiem so the normal
+# take-the-range-start behavior sees it. A range crossing noon ("11:00–1:30 PM")
+# flips the start to the other half.
+_SHARED_MERIDIEM_RANGE_RE = re.compile(
+    r"(?<![/\d.])\b(\d{1,2})(?::(\d{2}))?\s*[–—\-]\s*"
+    r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)",
+    re.I,
+)
+
+
+def _normalize_shared_meridiem_ranges(text: str) -> str:
+    def _fix(match: re.Match[str]) -> str:
+        h1, m1, h2, m2, meridiem = match.groups()
+        mer = "pm" if "p" in meridiem.lower() else "am"
+        start_mer = mer
+        if int(h1) != 12 and int(h1) > int(h2):
+            start_mer = "am" if mer == "pm" else "pm"
+        return (
+            f"{h1}:{m1 or '00'} {start_mer} – {h2}:{m2 or '00'} {mer}"
+        )
+
+    return _SHARED_MERIDIEM_RANGE_RE.sub(_fix, text)
+
+
 def extract_inbound_time_candidates(body: str, *, reference: datetime | None = None) -> list[dict[str, str]]:
     """Heuristic parse of prospect-proposed times from email body."""
     now = (reference or datetime.now(tz=MT)).astimezone(MT)
     # Parse only the sender's new text — quoted history leaks stray dates/times.
-    text = strip_quoted_reply(body)
+    text = _normalize_shared_meridiem_ranges(strip_quoted_reply(body))
     prefer_next_week = bool(re.search(r"\bnext\s+week\b", text, re.I))
     tod_hour = _default_hour_from_body(text)
     # A date named with no clock time (e.g. "August 25th") only becomes a candidate

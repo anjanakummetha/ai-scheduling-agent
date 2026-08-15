@@ -768,6 +768,26 @@ def _run_approval(
     if result.ok:
         suffix = " (dry run — nothing sent to Outlook)" if settings.lexi_dry_run else ""
         note = _result_warnings(result)
+        # State exactly what landed. holds_placed_times is populated only on
+        # the offer-send path: a list means those holds (and only those) exist;
+        # an empty list means the email went out but NO holds are on the
+        # calendar — the reply must say so, never imply otherwise (live
+        # 2026-08-11 false-positive).
+        hold_note = ""
+        holds_placed_times = getattr(result, "holds_placed_times", None)
+        if holds_placed_times is not None and result.email_sent:
+            if holds_placed_times:
+                hold_note = " Holds now on Kory's calendar: " + "; ".join(
+                    holds_placed_times
+                ) + "."
+            else:
+                hold_note = (
+                    " ⚠️ The email was sent but NO calendar holds were placed — "
+                    "tell Kory exactly that."
+                )
+        detail = f"{suffix}{hold_note}"
+        if note:
+            detail = f"{detail} ⚠️ {note}"
         return {
             "ok": True,
             "handled": True,
@@ -776,7 +796,7 @@ def _run_approval(
                 subject=bundle.get("subject") if bundle else None,
                 sender=bundle.get("sender") if bundle else None,
                 success=True,
-                detail=(f"{suffix} ⚠️ {note}".strip() if note else suffix),
+                detail=detail.strip(),
             ),
             "proposal_id": proposal_id,
             "execution": result.to_dict(),

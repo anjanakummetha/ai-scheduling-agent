@@ -78,6 +78,10 @@ class ExecutionResult:
     email_sent: bool = False
     holds_released: int = 0
     holds_confirmed: int = 0
+    # Human-readable times of the holds actually placed — the reply Kory sees
+    # must claim exactly these, never inferred ones (live 2026-08-11: "all
+    # three holds confirmed" was said about times that had no holds).
+    holds_placed_times: list[str] | None = None
     errors: list[str] | None = None
     warnings: list[str] | None = None
 
@@ -576,6 +580,15 @@ def execute_lexi_approval(
                     from app.scheduling.hold_reminder import is_hold_reminder_proposal
 
                     hold_reminder = is_hold_reminder_proposal(proposal)
+                    if not hold_reminder:
+                        # Final slot gate (live 2026-08-11, proposal 9187): the
+                        # draft's offered times must be the staged slots, and
+                        # every staged slot must still be free right now. A
+                        # hand-edited draft that diverged, or a slot booked
+                        # since staging, refuses HERE — before the email exists.
+                        gate_error = _pre_send_slot_gate(proposal)
+                        if gate_error:
+                            raise ValueError(gate_error)
                     email_ok, email_error = _send_drafted_reply(proposal, result)
                     result.email_sent = email_ok
                     if email_error:
@@ -637,6 +650,9 @@ def execute_lexi_approval(
                                     f"Email sent — calendar holds need attention: {hold_error}"
                                 ]
                             result.holds_confirmed = hold_count
+                            result.holds_placed_times = _hold_times_on_calendar(
+                                proposal_id
+                            )
                             try:
                                 _dispatch_asana_reservation_reminder_if_needed(
                                     conn,
@@ -833,6 +849,87 @@ def execute_lexi_approval(
             result.errors = (result.errors or []) + [f"{type(exc).__name__}: {exc}"]
             result.ok = False
             return result
+
+
+def _hold_times_on_calendar(proposal_id: int) -> list[str]:
+    """Human-readable times of this proposal's live holds, straight from the
+    holds table — the only thing the confirmation reply may claim."""
+    from app.scheduling.busy_intervals import local_dt, parse_iso_datetime
+
+    times: list[str] = []
+    try:
+        with get_lexi_connection() as conn:
+            rows = conn.execute(
+                "SELECT slot_start FROM holds WHERE proposal_id = ? "
+                "AND COALESCE(expires_at, '') != 'released' ORDER BY slot_start",
+                (proposal_id,),
+            ).fetchall()
+        for row in rows:
+            start = parse_iso_datetime(str(row["slot_start"] or ""))
+            if start:
+                times.append(local_dt(start).strftime("%A, %B %-d at %-I:%M %p MT"))
+    except Exception:  # noqa: BLE001 — reporting detail must never break the send
+        logger.exception("Could not read hold times for proposal %s", proposal_id)
+    return times
+
+
+def _pre_send_slot_gate(proposal: dict[str, Any]) -> str | None:
+    """Refuse an offer send whose times are unproven. Two checks:
+
+    1. The draft's offered times must all be staged slots (holds are placed
+       for the slots, so a divergent draft means holds that don't match the
+       email — the 2026-08-11 defect).
+    2. Every staged slot must still be free on the live calendar at this
+       moment — the calendar is authoritative at send time, not at staging.
+    Returns an error string to refuse with, or None to proceed."""
+    slots = proposal.get("proposed_slots") or []
+    if not slots:
+        return None
+
+    from app.scheduling.draft_slot_sync import (
+        conflicting_event_subject,
+        draft_matches_slots,
+    )
+
+    ok, mismatch = draft_matches_slots(
+        draft_body=str(proposal.get("drafted_reply") or ""),
+        proposed_slots=slots,
+    )
+    if not ok:
+        return mismatch
+
+    from app.scheduling.busy_intervals import local_dt, parse_iso_datetime, slot_conflicts_busy
+    from app.scheduling.calendar_context import load_scheduling_calendar_context
+
+    context = load_scheduling_calendar_context(
+        subject=str(proposal.get("subject") or ""),
+        body=str(proposal.get("raw_body") or ""),
+    )
+    if (context or {}).get("status") != "available":
+        return (
+            "Could not read Kory's calendar to re-verify the offered times — "
+            "refusing to send unverified times. Nothing was sent; try again "
+            "in a minute."
+        )
+    busy = list(context.get("busy_events") or [])
+    clashes: list[str] = []
+    for slot in slots:
+        if slot_conflicts_busy(slot, busy):
+            start = parse_iso_datetime(str(slot.get("start") or ""))
+            label = (
+                local_dt(start).strftime("%A, %B %-d at %-I:%M %p MT")
+                if start
+                else str(slot.get("start"))
+            )
+            clash = conflicting_event_subject(slot, busy)
+            clashes.append(f"{label}" + (f' (overlaps "{clash}")' if clash else ""))
+    if clashes:
+        return (
+            "NOT SENT — these offered times are no longer free on Kory's "
+            f"calendar: {'; '.join(clashes)}. Run lexi_retry_scheduling to get "
+            "fresh times, then approve again."
+        )
+    return None
 
 
 def _place_holds_isolated(
