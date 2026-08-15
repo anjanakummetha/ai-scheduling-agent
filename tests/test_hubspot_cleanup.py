@@ -261,14 +261,13 @@ def test_a_corroborated_profile_fills_what_the_inbox_could_not(mock_search, _sig
     import app.integrations.hubspot_person_lookup as pl
 
     resolved = {
-        "fields": {"jobtitle": "Founder and President", "hs_linkedin_url": "https://linkedin.com/in/x"},
+        "fields": {"jobtitle": "Founder and President"},
         "evidence": {
             "jobtitle": {
                 "source": "linkedin_profile_corroborated",
                 "detail": "their profile lists Leftbank Holdings, which is the employer already on the record (https://linkedin.com/in/x).",
                 "confidence": "corroborated",
             },
-            "hs_linkedin_url": {"source": "linkedin_profile_corroborated", "detail": "x"},
         },
     }
     with patch.object(pl, "resolve_person", return_value=resolved) as lookup:
@@ -278,9 +277,36 @@ def test_a_corroborated_profile_fills_what_the_inbox_could_not(mock_search, _sig
     assert lookup.call_args.kwargs["known_company"] == "Leftbank Holdings"
     row = out["proposals"][0]
     assert row["proposed_fields"]["jobtitle"] == "Founder and President"
-    assert row["proposed_fields"]["hs_linkedin_url"] == "https://linkedin.com/in/x"
     assert "Leftbank Holdings" in row["evidence"]["jobtitle"]["detail"]
-    assert out["sources"]["linkedin_profile_corroborated"] == 2
+    # The URL is on the evidence, where it is useful, and not on the write.
+    assert "linkedin.com/in/x" in row["evidence"]["jobtitle"]["detail"]
+    assert out["sources"]["linkedin_profile_corroborated"] == 1
+
+
+@patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
+@patch("app.integrations.hubspot_manager._signature_fields_for", return_value=({}, {}))
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_a_field_that_is_not_proven_writable_is_never_proposed(mock_search, _sig, _cfg, db):
+    """Belt to the braces in hubspot_person_lookup.
+
+    `hs_linkedin_url` accepts an update, returns success and stores nothing —
+    verified live. If any tier ever hands one back, it must not reach a write,
+    because a proposal that cannot land is worse than no proposal: it reports a
+    fill Kory never got and logs an undo for a change that does not exist.
+    """
+    mock_search.return_value = {"total": 1, "count": 1, "contacts": [_person_contact()]}
+    import app.integrations.hubspot_person_lookup as pl
+
+    rogue = {
+        "fields": {"jobtitle": "Founder", "hs_linkedin_url": "https://linkedin.com/in/x"},
+        "evidence": {
+            "jobtitle": {"source": "linkedin_profile_corroborated", "detail": "d"},
+            "hs_linkedin_url": {"source": "linkedin_profile_corroborated", "detail": "d"},
+        },
+    }
+    with patch.object(pl, "resolve_person", return_value=rogue):
+        out = hs.propose_field_enrichment(limit=5, use_website=False)
+    assert out["proposals"][0]["proposed_fields"] == {"jobtitle": "Founder"}
 
 
 @patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)

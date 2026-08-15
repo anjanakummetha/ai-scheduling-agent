@@ -318,15 +318,22 @@ def test_a_corroborated_person_is_proposed_with_evidence():
     assert "Leftbank Holdings" in ev["detail"]
 
 
-def test_the_linkedin_url_rides_along_only_when_missing():
+def test_the_linkedin_url_is_never_proposed_as_a_fill():
+    """It looked like a free win and it is not.
+
+    `hs_linkedin_url` advertises readOnlyValue=false, accepts the update,
+    returns success — and stores nothing. Verified against the live portal by
+    writing one and reading it back. Proposing it would report a fill that never
+    landed and log an undo for a change that does not exist, which is precisely
+    the failure this codebase's "verify against the destination" rule exists to
+    prevent. The URL still travels on the evidence, where it cannot lie.
+    """
     contact = _contact("Chris Lefkovitz", "chris@leftbankholdings.com")
     entity = _entity("Christopher Lefkovitz", [("Founder and President", "Leftbank Holdings", None)])
     out = _resolve(contact, entity, known_company="Leftbank Holdings")
-    assert out["fields"]["hs_linkedin_url"] == "https://linkedin.com/in/someone"
-
-    contact["hs_linkedin_url"] = "https://linkedin.com/in/already-known"
-    out = _resolve(contact, entity, known_company="Leftbank Holdings")
     assert "hs_linkedin_url" not in out["fields"]
+    assert out["fields"] == {"jobtitle": "Founder and President"}
+    assert "linkedin.com/in/" in out["evidence"]["jobtitle"]["detail"]
 
 
 def test_company_is_filled_only_when_it_was_the_domain_that_corroborated():

@@ -1392,9 +1392,11 @@ def propose_field_enrichment(
                 )
             elif person:
                 for key, value in (person.get("fields") or {}).items():
-                    # The LinkedIn URL rides along on a proven match; every other
-                    # field still has to be an actual gap.
-                    if key in fields or (key != "hs_linkedin_url" and key not in unresolved):
+                    # Only ever an actual gap, and only ever a field proven
+                    # writable. `hs_linkedin_url` used to ride along here on a
+                    # proven match; it accepts the write, reports success and
+                    # stores nothing, so it is not offered at all now.
+                    if key in fields or key not in unresolved or key not in SETTABLE_FIELDS:
                         continue
                     fields[key] = value
                     evidence[key] = (person.get("evidence") or {}).get(key) or {}
@@ -2952,7 +2954,13 @@ def revert_hubspot_batch(
     }
 
 
-SETTABLE_FIELDS = ("company", "jobtitle", "phone", "hs_linkedin_url")
+# Fields proven writable by writing one and reading it back from the live
+# portal. Do not extend this list from HubSpot's property metadata alone:
+# `hs_linkedin_url` advertises readOnlyValue=false, accepts an update, returns
+# success — and stores nothing. Anything added here without a live write-and-read
+# round trip can report a fill that never landed and log an undo for a change
+# that does not exist.
+SETTABLE_FIELDS = ("company", "jobtitle", "phone")
 
 
 def set_contact_field(

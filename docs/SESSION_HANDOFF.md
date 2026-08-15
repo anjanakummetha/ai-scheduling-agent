@@ -441,12 +441,30 @@ collapse. Open items are 1b and 1d above, both low-severity.
 **Outlook: signature, drafts and the briefing→draft workflow verified live.**
 Calendar create/move built and unit-tested; not yet exercised by Kory in Teams.
 
-**HubSpot: built, rehearsed, not yet exercised in Teams.** Reads verified
-2026-08-05 and again 08-14. The cleanup path (apply / undo / placeholder / phone)
-ran end-to-end against the live book with writes intercepted. Suggested order in
-Teams: `duplicate_merges` first (read-only, shows the owner labels on his own
-data), then enrichment propose → apply → undo on a small batch, then merges one
-pair at a time.
+**HubSpot: built, rehearsed, apply and undo both proven live, not yet exercised
+in Teams.** Reads verified 2026-08-05 and again 08-14. The cleanup path ran
+end-to-end against the live book with writes intercepted, and the **undo round
+trip has now run against the real portal** — batch `hs-44f5a7df43d0` reverted to
+blank, verified by an independent read, refused a second revert, re-applied,
+verified again, net change zero.
+
+**Suggested order in Teams**, easiest to hardest:
+
+| Say | Exercises |
+|---|---|
+| *"Which of my contacts are missing information?"* | health report — read-only, no risk |
+| *"Find duplicate contacts"* | duplicate scan + the owner labels on his own data |
+| *"Fill in what's missing on my contacts"* | the four enrichment tiers, evidence lines, the findings that are not fills |
+| *"Apply those"* | the write path, the ownership guard, the undo log |
+| *"Undo that"* | the restore, including the re-check that leaves edited fields alone |
+| *"Jeremy Boka's company is Sustainable Sites"* | `set_field` — answering the scan's own question |
+| merges | **last**, one pair at a time, and permanent |
+
+Watch for two things specifically. The evidence line under each fill should name
+where the value came from — a profile URL and the employer it was matched on, or
+the message a signature was read from. And a batch that reports contacts
+remaining should make progress when he says *keep going*; a round that repeats
+the same names is the spinning bug returning.
 
 **Scheduling: mid-test**, paused by Anjana. Resume at Group C of
 `docs/SCHEDULING_LIVE_TEST_PLAN.md`. Still untested: meeting types

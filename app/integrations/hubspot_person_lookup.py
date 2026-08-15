@@ -661,15 +661,12 @@ def resolve_person(
         if not known_company and role["company"]:
             fields["company"] = role["company"]
             evidence["company"] = dict(evidence["jobtitle"])
-        # Free improvement: the URL we just proved belongs to this person. It
-        # also feeds Sales Navigator's own matching, which is a pleasant irony.
-        if not str(contact.get("hs_linkedin_url") or "").strip():
-            fields["hs_linkedin_url"] = url
-            evidence["hs_linkedin_url"] = {
-                "source": "linkedin_profile_corroborated",
-                "detail": f"Profile confirmed by their role at {role['company']}.",
-                "confidence": "corroborated",
-                "profile_url": url,
-            }
+        # The URL is *not* proposed as a fill, however tempting.
+        # `hs_linkedin_url` accepts an update, returns success, and stores
+        # nothing — verified against the live portal, and its own property
+        # metadata says readOnlyValue=false, so the metadata is a claim rather
+        # than a fact. Proposing it would report a fill that never landed and
+        # write a row into the undo log for a change that does not exist. It
+        # still travels on the evidence, where it is useful and cannot lie.
         return {"fields": fields, "evidence": evidence, "profile_url": url}
     return None

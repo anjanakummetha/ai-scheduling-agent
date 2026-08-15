@@ -40,24 +40,48 @@ deactivated user (owner id 159291600)**.
 
 ## 2. What each tool can actually do
 
-### Lexi — ceiling of ~9%, and it is a hard ceiling
+### Lexi — she can read LinkedIn after all
 
-A full sweep of the book produced **43 contacts / 46 field values**:
+**The premise here was wrong too, and in our favour.** An earlier version of this
+document said Lexi had no way to look anyone up, and her own tool description
+told her the same. Both were mistaken. Composio's Search toolkit is backed by
+**Exa**, which returns a *structured person record* — name, location, full work
+history with titles, companies and dates — for a LinkedIn profile URL. No
+scraping, no auth wall, no terms problem, and it was already wired up.
 
-| Field | Gaps | Lexi fills | Source |
-|---|---:|---:|---|
-| Company | 97 | 26 | HubSpot's own company associations (21), company websites (5) |
-| Job title | 80 | 4 | Email signatures |
-| Phone | 307 | 16 | Email signatures |
+**Finding a profile is easy. Proving it is the right person is the whole
+problem.** A candidate was found for **8 of 8** contacts probed, and **6 were
+the wrong human or not a human at all** — including the other Chris Gavora, a
+tech recruiter in Brazil, and two shared mailboxes that resolved to real
+executives.
 
-Her only inputs are HubSpot itself and Kory's inbox. Most of these people have
-never emailed him, so there is no signature to read. **This is structural, not
-a tuning problem — re-running finds nothing new.**
+So the tier is built around an inversion: **it never asks what someone's job
+title is.** It asks whether a candidate profile shows a role at the employer
+*already on the record*. A stranger who shares the name does not also share the
+employer, so the answer is checkable rather than merely plausible. Where nothing
+can corroborate, it refuses and says so.
 
-Four of the 46 were rejected as junk: `firstbiz.org`, `clutchanchor.com`,
-`freshpowertidip.org` and `eastlandlinelink.com` all serve an identical
-"Growth is a system" template and one has no contact name. **Defensible set: 39
-fills**, staged as batch `hs-8c09e003f9b8`, not yet applied.
+Where the gaps actually are, measured across the contacts she can work on:
+
+| Field | Gaps | Reachable | A wall | Why the wall |
+|---|---:|---:|---:|---|
+| Company | 80 | 47 | 32 | Personal mailbox, no employer on file, no LinkedIn URL |
+| Job title | 66 | 36 | 24 | Same |
+| **Phone** | **285** | **7** | **278** | **Nothing available carries phone** — not HubSpot, not LinkedIn |
+
+**Phone is the single largest gap in the book and no tool IFG owns can fill it.**
+HubSpot does not offer it as an enrichable property, LinkedIn does not publish
+it, and the only automated source is a signature in Kory's own inbox. That is
+not a problem waiting for the right integration; it is a wall, and the honest
+question is whether he needs phone numbers for 1,000 contacts or for the hundred
+he actually deals with.
+
+Three outcomes are reported as findings rather than fills, because treating them
+as gaps would make the data worse: records that are **not people** (a job title
+on `accounting@` makes a distribution list look like a human), people who **have
+left** the employer on file, and people who **hold several roles at once** —
+Jeremy Boka is a VP, a brewery co-owner and a city councillor, and picking one
+would be inventing which relationship Kory has with him.
 
 ### HubSpot Data Enrichment — enabled, and it found nothing
 
@@ -300,36 +324,35 @@ plan.
 
 ## 6. Recommended sequence
 
-1. **Prove the route on twenty contacts before planning the work.** Check
-   user-auth, open twenty of the 177 gap contacts in Sales Navigator, and count
-   how many show an **Update CRM** badge. If it is most of them, this works and
-   the size of the job is known. If it is few, the plan changes and almost no
-   effort has been spent. This costs under an hour and removes the only real
-   uncertainty left.
+The order has inverted since the first draft of this document, because the two
+things it assumed turned out to be false: Sales Navigator cannot do a book-wide
+backfill, and Lexi *can* read LinkedIn.
 
-2. **Then the manual pass — and it should be a worklist, not a hunt.** There is
-   no book-wide bulk update, so someone clicks through roughly 177 contacts.
-   That is tedious but bounded, and it does not have to be Kory: it needs a
-   Sales Navigator seat with write permission, not judgement about the
-   relationships. **Lexi can generate the exact worklist** — the specific
-   contacts missing title or company, with their LinkedIn URLs (741 of Kory's
-   contacts already carry one) — so whoever does the pass works a list instead
-   of searching. Doing it from the **Embedded Experience inside HubSpot** keeps
-   it in one window.
+1. **Start with Lexi, because it needs nobody's permission and costs nothing.**
+   She proposes, Kory approves in Teams, and every applied value carries the
+   evidence it came from and can be undone. Nothing else on this list has that
+   property — a Sales Navigator write has no attribution and no undo. This is
+   also the only route that touches the ~30 placeholder contacts, because
+   `Prefer No Connection to Company` is not blank and every other tool skips it.
 
-3. **Then re-run Lexi's scan.** She only fills blanks and re-checks at apply
-   time, so she naturally mops up whatever LinkedIn leaves — including the ~30
-   placeholder contacts, which *neither* HubSpot enrichment nor Sales Navigator
-   will reliably touch, because those fields are not empty.
+2. **Fix the unsafe setting before anyone uses Sales Navigator for data.**
+   "Require email address when updating contacts" is off, and §3 shows what that
+   produced on a real record. This is a five-minute change by Kelley and it
+   should happen whether or not anything else here does.
+
+3. **Then use Sales Navigator for what it is actually good at.** Not backfill —
+   the 43 contacts on the *"Contacts Who Have Left Open Opportunities"* list.
+   Those are records that are confidently wrong rather than merely empty, the
+   list already exists, and keeping deal contacts current is exactly what the
+   product is built for. Lexi does not compete with this and cannot replace it.
 
 4. **Phone stays open, and there is no route to close it.** HubSpot enrichment
    does not offer phone as a property; Sales Navigator validates only title,
-   account and location. Lexi's 16 signature-derived numbers are the only
-   automated coverage that exists. This is worth stating plainly to Kory rather
-   than leaving as an open action, because the honest answer is that 307 missing
-   phone numbers will not be filled by any tool IFG currently owns — the choice
-   is manual effort, a different vendor, or accepting the gap for contacts he
-   does not actively work.
+   account and location. Signature mining is the only automated coverage that
+   exists. This is worth stating plainly to Kory rather than leaving as an open
+   action, because the honest answer is that ~285 missing phone numbers will not
+   be filled by any tool IFG currently owns — the choice is manual effort, a
+   different vendor, or accepting the gap for contacts he does not actively work.
 
 **Test in the sandbox first if there is any doubt about the field mapping.**
 LinkedIn supports connecting Sales Navigator to a HubSpot sandbox precisely so
