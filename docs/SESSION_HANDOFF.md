@@ -1,8 +1,26 @@
 # Lexi — Session Handoff (updated 2026-08-15, overnight)
 
-**Resume phrase:** *"HubSpot cleanup is built and deployed — Kory tests it in Teams."*
+**Resume phrase:** *"HubSpot is finished and deployed. Next session is
+scheduling changes."*
 
-`main` at `26ac3fc`. **1,041 tests green.** Laptop / GitHub / box in sync.
+`main` at `c1ad002`+. **1,041 tests green.** Laptop / GitHub / box in sync — the
+box runs `c1ad002`; anything after it is documentation only and needs no deploy.
+
+**Where this left off (2026-08-15, overnight):** the HubSpot work is done, tested
+against the live portal, and deployed. It has **never been driven from Teams** —
+that is Anjana's next test, and §6 lists what to type. Two things are waiting on
+other people and neither blocks anything:
+
+1. **The email to Kory and Heidi** — drafted and ready in
+   `docs/EMAIL_TO_KORY_AND_HEIDI.md`. Not sent. It needs Kelley Johnson on it
+   (she is the Sales Navigator admin, not Kory), and it leads with one unsafe
+   setting rather than with statistics. Everything it claims is measured; the
+   evidence is in `HUBSPOT_DATA_CLEANUP_FINDINGS.md`.
+2. **Sales Navigator and HubSpot settings** — Anjana cannot change these without
+   Kory and Heidi's sign-off. Deliberate, not blocked work.
+
+**Next up: scheduling.** Nothing in this session touched it. Start from
+`SCHEDULING_LIVE_TEST_PLAN.md`.
 
 ---
 
@@ -98,7 +116,27 @@ against the destination, not the reply.**
 
 ## 1. OPEN ITEMS (priority order)
 
-### 1a. HubSpot — **built; waiting on Kory in Teams**
+### 1-NEXT. Scheduling — **the next session's work**
+Untouched by the HubSpot session. Resume from `SCHEDULING_LIVE_TEST_PLAN.md`;
+the last recorded state there is RUN 15 (2026-08-08): 86 tools verified, four
+fixes, interactive cards **parked** in text-only mode (`TEAMS_TEXT_ONLY=true`),
+any-project Asana shipped. Nothing about scheduling changed since.
+
+### 1-EMAIL. The email to Kory, Heidi and Kelley — **drafted, not sent**
+`docs/EMAIL_TO_KORY_AND_HEIDI.md` is a ready draft, not notes. It carries the
+six decisions, the numbers, and the one worked example that makes the safety
+argument (Thomas Heckler — Heidi's own contact, matched to an Australian software
+engineer). Blocked on Anjana sending it, not on any technical work.
+
+Three things that document already warns about, repeated because they are easy
+to get wrong: **Kelley Johnson is the Sales Navigator admin, not Kory**, so an
+email without her cannot action decisions 1 and 3; **do not say Sales Navigator
+is broken** — it is scoped to deal contacts and one setting is unsafe, which is
+a different and defensible claim; and **quote 28%, not 40%**, for Lexi's share of
+the title and company gaps. The 40% was an estimate this session replaced with a
+measurement.
+
+### 1a. HubSpot — **finished; waiting on Kory in Teams**
 See the block at the top. Reads were already good; the cleanup path is new,
 rehearsed against live data, and apply and undo have both now run against the
 real portal — but none of it has run *in Teams*.
