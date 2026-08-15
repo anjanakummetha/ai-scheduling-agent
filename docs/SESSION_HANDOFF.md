@@ -74,6 +74,25 @@ What was broken on Aug 11 → what changed:
     to a real event. Side find: the Bruce Krinsky task appears twice in
     OVERDUE because it exists twice in Asana (the parked dup-detection item).
 
+13. **Stale-code sweep (same day, `a12049b`).** The pre-gateway era is gone:
+    `agent_instructions.txt` (which still told the model to call
+    `lexi_escalate_to_heidi` — a tool that never existed post-removal — on the
+    exact no-slots path), the prefill file, the in-repo Bot Framework server +
+    card dispatch (nothing ran them), May-era `prompts.py`, the
+    ngrok/sandbox/phase-B scripts and `scripts/uat/`. `lexi_handle_teams_card_submit`
+    is now UNREGISTERED while cards are parked (same gate pattern as campaigns
+    — verified live: 93 tools, no card tool). lexi@ mail routing trimmed to the
+    three sanctioned commands (HubSpot-over-email intent removed). Teams help
+    text describes the text-only surface. `SOUL.md` now lives in `deploy/SOUL.md`
+    (reviewed like code) and gained a scheduling-honesty section: times are tool
+    output, never composition. Box `.env` orphan `LEXI_ASANA_AUTO_CREATE` removed.
+    Known remaining stubs, deliberate: `_campaign_tool`-parked outreach (their
+    Teams-text entry fails safe with the paused error), the flag-off 24h nudge,
+    and the unconfigured family calendar reader (privacy ruling). One functional
+    gap surfaced: aged waiting-on-Kory items currently have NO reminder surface
+    (24h nudge flag-off AND the briefing section that replaced it was deleted
+    with the agent-side briefing) — a ruling for Kory, not a bug.
+
 **Left deliberately:** the 26 stale `awaiting_reply_prompt` proposals from
 Aug 3 (bulk close needs Kory's sign-off, unchanged ruling); E-9/E-10 hold
 cosmetics (mashed "Anjanakummetha" title, busy-not-tentative); retry
