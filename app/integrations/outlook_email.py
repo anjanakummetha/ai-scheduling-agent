@@ -516,6 +516,12 @@ def send_draft(draft_message_id: str, *, send_channel: SendChannel = "kory") -> 
         },
         role=role,  # type: ignore[arg-type]
     )
+    # Composio can answer 200 with successful=false and no error — the send did
+    # not happen. Surface it as a raise so the caller commits offer_sent only on
+    # a real send (audit 2026-08-15, B8), instead of reporting sent + placing
+    # holds while the prospect got nothing.
+    if result.get("successful") is False:
+        raise RuntimeError(f"Outlook refused to send draft {draft_message_id}.")
     return result.get("log_id")
 
 
@@ -1323,6 +1329,11 @@ def send_outbound_email(
     for tool_slug in OUTBOUND_SEND_TOOL_CANDIDATES:
         try:
             result = execute_tool(tool_slug, arguments, role=write_role)
+            if result.get("successful") is False:
+                # 200 with successful=false = the vendor refused the send
+                # (audit 2026-08-15, B8). Treat as a failed attempt.
+                last_error = RuntimeError(f"Outlook refused {tool_slug} (successful=false).")
+                continue
             data = _coerce_data(result.get("data"))
             message_id = _extract_id(data)
             status_code = data.get("status_code") if isinstance(data, dict) else None

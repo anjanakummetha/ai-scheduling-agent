@@ -65,7 +65,13 @@ SCHEDULING_ALLOW_SLUGS = frozenset(
         "OUTLOOK_SEND_EMAIL",
         "OUTLOOK_SEND_DRAFT",
         "OUTLOOK_REPLY_EMAIL",
-        "OUTLOOK_FORWARD_MESSAGE",
+        # OUTLOOK_FORWARD_MESSAGE removed (audit 2026-08-15, A4): it is a pure
+        # mail-exfiltration primitive — forward any message from Kory's mailbox
+        # to any address — gated only by a model-supplied confirm boolean, and
+        # it has no legitimate use in the scheduling flow (the only in-repo
+        # forwarder, forward_message_from_lexi_mailbox, has zero callers). The
+        # broader "route every send through a server-side, non-model token" is
+        # tracked in PRE_HANDOVER_AUDIT.md as remaining A3/A4 work.
         "OUTLOOK_ADD_EVENT_ATTACHMENT",
         "OUTLOOK_ADD_MAIL_ATTACHMENT",
         "OUTLOOK_DISMISS_EVENT_REMINDER",

@@ -582,6 +582,7 @@ def _run_daemon_cycle(cycle_number: int, interval_seconds: int = 30) -> int:
 
     processed += _recover_pending_triage()
     _run_hold_lifecycle()
+    _run_stuck_proposal_sweep()
     _run_kory_briefings()
     _run_protection_audit_weekly()
     if cycle_number % _db_maintenance_interval() == 0:
@@ -639,6 +640,22 @@ def _run_hold_lifecycle() -> None:
             step_name="hold_lifecycle",
             reference_id="daemon",
             message="Hold lifecycle cycle failed.",
+            exc=exc,
+        )
+
+
+def _run_stuck_proposal_sweep() -> None:
+    try:
+        from app.jobs.stuck_proposals import sweep_stuck_proposals
+
+        nudged = sweep_stuck_proposals()
+        if nudged:
+            logger.info("Stuck-proposal sweep nudged %d proposal(s).", len(nudged))
+    except Exception as exc:
+        _log_orchestrator_error(
+            step_name="stuck_proposal_sweep",
+            reference_id="daemon",
+            message="Stuck-proposal sweep failed.",
             exc=exc,
         )
 

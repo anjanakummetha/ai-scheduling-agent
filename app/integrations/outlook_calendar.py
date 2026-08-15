@@ -114,8 +114,10 @@ def create_calendar_event(calendar_action: dict[str, Any]) -> tuple[str | None, 
         payload["onlineMeetingProvider"] = "teamsForBusiness"
 
     result = execute_write_tool("OUTLOOK_CREATE_ME_EVENT", payload)
-    data = _coerce_data(result["data"])
     _invalidate_scheduling_cache()
+    if result.get("successful") is False:
+        raise RuntimeError("Outlook refused to create the calendar event.")
+    data = _coerce_data(result["data"])
     return data.get("id"), result.get("log_id")
 
 
@@ -338,6 +340,40 @@ def has_write_calendar_conflict(
     return bool(conflicts), conflicts, log_id
 
 
+def _conflict_source_events(
+    window_start: str, window_end: str
+) -> tuple[list[dict[str, Any]], str | None]:
+    """The named conflict calendars (Master + work) plus family busy events —
+    the same picture the offer used. Lazy imports avoid a circular import
+    (named_calendars imports is_blocking_event from this module)."""
+    from app.integrations.named_calendars import (
+        conflict_calendar_names,
+        fetch_events_chunked,
+    )
+
+    reads_master = any("master calendar" in n.lower() for n in conflict_calendar_names())
+    events: list[dict[str, Any]] = []
+    log_id: str | None = None
+    if reads_master:
+        named, meta = fetch_events_chunked(window_start, window_end)
+        events.extend(named)
+        log_id = meta.get("log_id") if isinstance(meta, dict) else None
+    else:
+        # No Master configured — fall back to the mailbox default read.
+        primary, log_id = get_calendar_events(window_start, window_end)
+        events.extend(primary)
+    try:
+        from app.integrations.family_google_calendar import get_family_busy_events
+
+        for ev in get_family_busy_events(window_start, window_end):
+            ev = dict(ev)
+            ev["calendar_name"] = ev.get("calendar_name") or "Family Google"
+            events.append(ev)
+    except Exception:  # family read is best-effort; never blocks a booking check
+        pass
+    return events, log_id
+
+
 def has_conflict(
     calendar_action: dict[str, Any],
     *,
@@ -351,7 +387,16 @@ def has_conflict(
         return True, [], None
     window_start = start_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     window_end = (end_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).isoformat()
-    events, log_id = get_calendar_events(window_start, window_end)
+    # Read the SAME calendars the offer was validated against — Kory Master (ALL)
+    # + family — freshly, not just the mailbox default. The confirm-time guard
+    # was reading only the default calendar, so a conflict added after the offer
+    # on Master or the family calendar (e.g. a "Do Not Move" block) was invisible
+    # at booking (audit 2026-08-15, B5). Fail closed if the read errors.
+    try:
+        events, log_id = _conflict_source_events(window_start, window_end)
+    except Exception:  # noqa: BLE001 — "I could not look" is not "it's free"
+        logger.exception("Confirm-time conflict read failed; failing closed.")
+        return True, [], None
     ignored = set(ignore_event_ids or [])
 
     conflicts = [
@@ -369,17 +414,56 @@ def is_scheduling_hold(event: dict[str, Any]) -> bool:
     return bool(HOLD_SUBJECT_RE.match(subject))
 
 
+# All-day/multi-day entries that mean Kory is genuinely UNAVAILABLE (not just a
+# location marker). These block; a bare "Kory in Chicago" does not — he can
+# still take virtual calls from there (audit 2026-08-15, B4). Erring toward
+# blocking is the safe direction: over-block routes to Kory, under-block
+# double-books him.
+_ALL_DAY_BLOCKING_PATTERNS = (
+    r"\bout of office\b",
+    r"\booo\b",
+    r"\bo\.o\.o\b",
+    r"\bpto\b",
+    r"\bvacation\b",
+    r"\bon leave\b",
+    r"\btime off\b",
+    r"\bday off\b",
+    r"\bholiday\b",
+    r"\bboard meeting\b",
+    r"\boffsite\b",
+    r"\bretreat\b",
+    r"\bconference\b",
+    r"\bsummit\b",
+    r"\bflight\b",
+    r"\btravel\b",
+    r"\bout of town\b",
+    r"\bsafari\b",
+)
+
+
+def _all_day_blocks(event: dict[str, Any]) -> bool:
+    """True when an all-day/multi-day entry means Kory is unavailable."""
+    if str(event.get("showAs") or "").lower() == "oof":
+        return True
+    subject = str(event.get("subject") or "").lower()
+    return any(re.search(p, subject) for p in _ALL_DAY_BLOCKING_PATTERNS)
+
+
 def is_blocking_event(event: dict[str, Any]) -> bool:
     """Busy events that block scheduling — includes Lexi HOLD: blocks on Master/work calendars.
 
-    All-day entries never block a timed meeting. They say *where Kory is*, not
-    that he is unavailable: an all-day "Kory in Chicago" made every hour of that
-    Thursday unbookable, and the confirm-time guard fails closed with no override,
-    so he could not place a 1:00pm event at all. The old exemption list
-    (good friday / palm sunday / tax day / "stay at ") was this same problem being
-    patched one event name at a time; handling all-day as a class retires it.
+    A single-day all-day entry usually says *where Kory is*, not that he is
+    unavailable — an all-day "Kory in Chicago" once made every hour of that
+    Thursday unbookable. So a bare location-marker all-day stays non-blocking.
+    But genuine unavailability expressed as all-day/multi-day — OOO/PTO,
+    vacation, a two-day board offsite, travel, Outlook's `oof` status — MUST
+    block, or Lexi offers a time Kory is out of state (audit 2026-08-15, B4).
     """
-    return _is_busy(event) and not _is_all_day(event)
+    if not _is_busy(event):
+        return False
+    if _is_all_day(event):
+        return _all_day_blocks(event)
+    return True
 
 
 def _is_all_day(event: dict[str, Any]) -> bool:

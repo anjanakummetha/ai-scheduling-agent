@@ -568,6 +568,35 @@ def execute_lexi_approval(
                         f"Proposal {proposal_id} is not ready for invite dispatch (status={status})."
                     )
 
+            # Atomic claim (audit 2026-08-15, D3). The status gate above read a
+            # snapshot taken before this transaction held the write lock, so two
+            # concurrent approvals (a card tap + a typed approve, or a tool-
+            # timeout retry) could both pass it and both send. This conditional
+            # UPDATE is the FIRST write, so it serializes on the write lock and,
+            # once a concurrent approval commits, matches zero rows — the loser
+            # aborts before sending. Only guards the send phases; reject is
+            # allowed on several statuses and is idempotent.
+            if normalized_decision in {"approved", "modified"} and phase in {
+                "send_offer",
+                "send_invite",
+            }:
+                claimed = conn.execute(
+                    "UPDATE proposals SET updated_at = datetime('now') "
+                    "WHERE id = ? AND status = ?",
+                    (proposal_id, status),
+                ).rowcount
+                if claimed == 0:
+                    conn.execute("RELEASE SAVEPOINT lexi_execution")
+                    conn.commit()
+                    result.status = str(
+                        (_fetch_proposal_bundle(conn, proposal_id) or {}).get("status") or status
+                    )
+                    result.ok = True
+                    result.warnings = (result.warnings or []) + [
+                        "Already handled by a concurrent approval — no duplicate send."
+                    ]
+                    return result
+
             _insert_approval(
                 conn,
                 proposal_id=proposal_id,
@@ -882,6 +911,81 @@ def _hold_times_on_calendar(proposal_id: int) -> list[str]:
     return times
 
 
+def _slot_reserved_by_other(proposal_id: int, slots: list[dict[str, str]]) -> str | None:
+    """True (error string) when another active proposal owns an overlapping slot.
+
+    Authoritative and race-free relative to the calendar: an offer that
+    committed offer_sent (before its holds land) is visible here, and a live
+    hold on another proposal is too. Only OTHER proposals count."""
+    from app.scheduling.busy_intervals import (
+        intervals_overlap,
+        local_dt,
+        parse_iso_datetime,
+    )
+
+    want: list[tuple[Any, Any, dict[str, str]]] = []
+    for s in slots:
+        a = parse_iso_datetime(str(s.get("start") or ""))
+        b = parse_iso_datetime(str(s.get("end") or ""))
+        if a and b:
+            want.append((a, b, s))
+    if not want:
+        return None
+
+    try:
+        with get_lexi_connection() as conn:
+            other_slots = conn.execute(
+                """
+                SELECT id, proposed_slots FROM proposals
+                WHERE id != ? AND status IN (?, ?, ?)
+                """,
+                (proposal_id, STATUS_OFFER_SENT, STATUS_PENDING_INVITE, STATUS_EXECUTED),
+            ).fetchall()
+            live_holds = conn.execute(
+                """
+                SELECT proposal_id, slot_start, slot_end FROM holds
+                WHERE proposal_id != ? AND COALESCE(expires_at, '') != 'released'
+                """,
+                (proposal_id,),
+            ).fetchall()
+    except Exception:  # noqa: BLE001 — a read failure must not block a real send
+        logger.exception("Cross-proposal reservation check failed for %s", proposal_id)
+        return None
+
+    def _clash(a1: Any, b1: Any) -> bool:
+        for a2, b2, _ in want:
+            if intervals_overlap(a1, b1, a2, b2):
+                return True
+        return False
+
+    for row in other_slots:
+        try:
+            parsed = json.loads(row["proposed_slots"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        for s in parsed:
+            a = parse_iso_datetime(str(s.get("start") or ""))
+            b = parse_iso_datetime(str(s.get("end") or ""))
+            if a and b and _clash(a, b):
+                when = local_dt(a).strftime("%A, %B %-d at %-I:%M %p MT")
+                return (
+                    f"NOT SENT — {when} is already offered on another active "
+                    f"thread (proposal {row['id']}). Run lexi_retry_scheduling "
+                    "for fresh times, or send the other one first."
+                )
+    for row in live_holds:
+        a = parse_iso_datetime(str(row["slot_start"] or ""))
+        b = parse_iso_datetime(str(row["slot_end"] or ""))
+        if a and b and _clash(a, b):
+            when = local_dt(a).strftime("%A, %B %-d at %-I:%M %p MT")
+            return (
+                f"NOT SENT — {when} is already held for another meeting "
+                f"(proposal {row['proposal_id']}). Run lexi_retry_scheduling "
+                "for fresh times."
+            )
+    return None
+
+
 def _pre_send_slot_gate(proposal: dict[str, Any]) -> str | None:
     """Refuse an offer send whose times are unproven. Two checks:
 
@@ -890,10 +994,19 @@ def _pre_send_slot_gate(proposal: dict[str, Any]) -> str | None:
        email — the 2026-08-11 defect).
     2. Every staged slot must still be free on the live calendar at this
        moment — the calendar is authoritative at send time, not at staging.
+    3. No OTHER active proposal already owns an overlapping slot — the
+       cross-proposal reservation (audit 2026-08-15, B7): two threads staged in
+       one cycle could both offer the same free slot; the calendar check misses
+       it because neither has placed holds yet. This DB check sees a concurrent
+       approval that already committed offer_sent/pending_invite.
     Returns an error string to refuse with, or None to proceed."""
     slots = proposal.get("proposed_slots") or []
     if not slots:
         return None
+
+    reserved = _slot_reserved_by_other(int(proposal.get("proposal_id") or 0), slots)
+    if reserved:
+        return reserved
 
     from app.scheduling.draft_slot_sync import (
         conflicting_event_subject,

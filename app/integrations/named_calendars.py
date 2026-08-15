@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -311,12 +311,17 @@ def fetch_events_chunked(
     chunk_days: int = 14,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Read named conflict calendars in chunks (Graph top=250 safety)."""
+    # Keep the window timezone-AWARE. Stripping tzinfo left a naive value that
+    # still held UTC numbers, which get_calendar_events_for_resolved then
+    # re-interpreted as Denver (via _convert_iso_timezone's naive->Denver
+    # assumption), shifting the whole busy window +6-7h — so the conflict
+    # calendars were blind to the next several hours (audit 2026-08-15, B3).
     start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
     end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
-    if start_dt.tzinfo:
-        start_dt = start_dt.replace(tzinfo=None)
-    if end_dt.tzinfo:
-        end_dt = end_dt.replace(tzinfo=None)
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
 
     resolved_cals: list[dict[str, Any]] = []
     for name in conflict_calendar_names():

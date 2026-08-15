@@ -432,7 +432,51 @@ are not backed up. Off-box backup is opt-in and defaults off.
    soft-failure, and the cancel/reschedule call sites treat "no exception" as
    success (removing the latent return-value inversion).
 
-### Tier 2 — verified, need a test window + your decision (NOT yet applied)
+### Tier 2 — APPLIED 2026-08-15 (deployed; LIVE-UNTESTED — Anjana will test)
+Code + unit tests landed (suite 1,117 green). **Not yet exercised end-to-end
+against the live system** — that's the next session.
+- ✅ **B3** — `fetch_events_chunked` keeps the window timezone-aware; the +6h
+  conflict-calendar blindness is gone (re-verified: shift now 0.0h).
+- ✅ **B4** — all-day/multi-day unavailability (OOO/PTO, vacation, board
+  offsite, travel, `oof` status) now blocks; bare location markers ("Kory in
+  Chicago") stay non-blocking. Erring toward blocking.
+- ✅ **B5** — the confirm-time re-check (`has_conflict`) now reads the named
+  conflict calendars (Master + family), freshly, not just the mailbox default;
+  fails closed if the read errors.
+- ✅ **B8** — `send_draft`, `send_outbound_email`, `create_calendar_event` now
+  raise on Composio `successful:false` instead of reporting sent.
+- ✅ **C1** — `app/jobs/stuck_proposals.py`: an aged-non-terminal-proposal
+  sweeper wired into the cycle. Deduped (one nudge per proposal per 3 days),
+  gated (`LEXI_STUCK_PROPOSAL_SWEEP`, 48h threshold), Teams-push-gated.
+- ✅ **D3** — atomic approval claim: a conditional `UPDATE … WHERE
+  status=<read value>` is the first write; a concurrent approval that already
+  advanced the proposal matches zero rows and aborts before sending.
+- ✅ **B7** — cross-proposal reservation: `_slot_reserved_by_other` refuses a
+  send whose slot overlaps another active proposal's offered/held slot.
+- ✅ **D1 (WAL)** — `journal_mode=WAL` + `synchronous=NORMAL` in the connection
+  factory: readers and the API no longer block on an approval write. **The
+  further step — fully externalizing the send from the write transaction — was
+  deliberately NOT done** (see residual below): WAL removes the reader-blocking
+  that caused the observed incidents, and restructuring the send/commit/holds
+  atomicity blind on a live path risks a double-send. Do it as a dedicated
+  refactor with a load test if writer contention ever resurfaces.
+- ✅ **A4 (partial)** — `OUTLOOK_FORWARD_MESSAGE` removed from the model-callable
+  slug allowlist (pure exfil primitive, no legitimate caller).
+
+### Tier 2 — RESIDUAL (deliberately deferred, needs design + window)
+- **A3 / A4 full — server-side send authorization.** A static recipient
+  allowlist **cannot** be blanket-enabled in production: Lexi legitimately
+  emails new prospects, so it would block real sends. The correct fix is a
+  server-side (non-model) authorization token required before ANY
+  send/forward/delete slug reaches Composio, routing every send path
+  (`lexi_send_outbound_email`, `lexi_execute_outlook_action`, `approve_decision`)
+  through one gate. That's a careful refactor across several model-callable
+  tools — needs a design pass + test, not a hot patch. Until then the real
+  protection is the write-enable flags + the approval requirement (keep them
+  conservative).
+- **D1 send-externalization** — as above, optional further optimization.
+
+### Tier 2 — (superseded list, retained for reference)
 - **A1 enablement (finish the webhook lockdown).** Generate a random
   `LEXI_WEBHOOK_SECRET`, set it in the box `.env`, **re-register the Composio
   Outlook trigger** so it POSTs to `…/webhooks/composio?k=<secret>` (and update
