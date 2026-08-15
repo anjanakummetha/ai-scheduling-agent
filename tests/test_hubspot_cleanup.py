@@ -369,6 +369,112 @@ def test_a_placeholder_company_is_not_passed_off_as_a_known_employer(mock_search
     assert lookup.call_args.kwargs["known_company"] == ""
 
 
+# --- setting a field because Kory said so ------------------------------------
+
+
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_kory_can_answer_the_question_the_scan_asked(_blocked, db):
+    """The scan can now say "three current roles — which one?". Without this it
+    was an offer Lexi could not honour."""
+    live = {"id": "9", "name": "Jeremy Boka", "hubspot_owner_id": KORY, "company": ""}
+    sent: list[dict] = []
+    with patch.object(hs, "contacts_by_ids", return_value=[live]):
+        with patch.object(hs, "execute_hubspot_tool", side_effect=lambda s, a: sent.append(a) or {"successful": True}):
+            out = hs.set_contact_field(
+                contact="9", field="company", value="Sustainable Sites", approved=True
+            )
+    assert out["ok"] and out["changed"]
+    assert sent[0]["properties"] == {"company": "Sustainable Sites"}
+    assert out["undo_batch_id"].startswith("hs-set-")
+
+    from app.storage.lexi_db import get_lexi_connection
+
+    with get_lexi_connection() as conn:
+        row = conn.execute(
+            "SELECT old_value, new_value, source FROM hubspot_applied_writes WHERE batch_id = ?",
+            (out["batch_id"],),
+        ).fetchone()
+    assert row["new_value"] == "Sustainable Sites"
+    # Provenance is Kory himself, which beats every automated tier here.
+    assert "told me" in row["source"].lower()
+
+
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_an_explicit_instruction_may_overwrite_and_says_what_it_replaced(_blocked, db):
+    live = {"id": "9", "name": "Jeremy Boka", "hubspot_owner_id": KORY, "company": "Wrong Co"}
+    with patch.object(hs, "contacts_by_ids", return_value=[live]):
+        with patch.object(hs, "execute_hubspot_tool", return_value={"successful": True}):
+            out = hs.set_contact_field(
+                contact="9", field="company", value="Sustainable Sites", approved=True
+            )
+    assert out["old_value"] == "Wrong Co"
+    assert "was 'Wrong Co'" in out["kory_message"]
+
+
+def test_setting_a_field_still_needs_kory(db):
+    """The gate has to run before the write, not after it has been decided."""
+    live = {"id": "9", "name": "X", "hubspot_owner_id": KORY, "company": ""}
+    with patch.object(hs, "contacts_by_ids", return_value=[live]):
+        with patch.object(hs, "assert_kory_approved_write", side_effect=PermissionError("no")) as gate:
+            with patch.object(hs, "execute_hubspot_tool") as write:
+                with pytest.raises(PermissionError):
+                    hs.set_contact_field(
+                        contact="9", field="company", value="Acme", approved=False
+                    )
+    gate.assert_called_once()
+    write.assert_not_called()
+
+
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_setting_a_field_respects_the_ownership_guard(_blocked, db):
+    live = {"id": "9", "name": "X", "hubspot_owner_id": HEIDI, "company": ""}
+    with patch.object(hs, "contacts_by_ids", return_value=[live]):
+        with patch.object(hs, "execute_hubspot_tool") as write:
+            out = hs.set_contact_field(
+                contact="9", field="company", value="Acme", approved=True
+            )
+    assert out["error_code"] == "owner_confirmation_required"
+    write.assert_not_called()
+
+
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_an_ambiguous_name_is_a_question_not_a_pick(_blocked, db):
+    """There are two Chris Gavoras. Picking one here would undo the whole point
+    of the guards upstream."""
+    both = [
+        {"id": "1", "name": "Chris Gavora", "email": "chris@threeshadows.co", "hubspot_owner_id": KORY},
+        {"id": "2", "name": "Chris Gavora", "email": "cgavora@bockmanninc.com", "hubspot_owner_id": KORY},
+    ]
+    with patch.object(hs, "search_contacts", return_value={"contacts": both, "count": 2}):
+        with patch.object(hs, "execute_hubspot_tool") as write:
+            out = hs.set_contact_field(
+                contact="Chris Gavora", field="jobtitle", value="CFO", approved=True
+            )
+    assert out["error_code"] == "ambiguous_contact"
+    assert len(out["matches"]) == 2
+    write.assert_not_called()
+
+
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_only_known_fields_can_be_set(_blocked, db):
+    with patch.object(hs, "execute_hubspot_tool") as write:
+        out = hs.set_contact_field(
+            contact="9", field="lifecyclestage", value="customer", approved=True
+        )
+    assert out["error_code"] == "field_not_settable"
+    write.assert_not_called()
+
+
+@patch("app.integrations.hubspot_manager.hubspot_writes_blocked", return_value=False)
+def test_setting_a_value_that_is_already_there_writes_nothing(_blocked, db):
+    live = {"id": "9", "name": "X", "hubspot_owner_id": KORY, "company": "Acme"}
+    with patch.object(hs, "contacts_by_ids", return_value=[live]):
+        with patch.object(hs, "execute_hubspot_tool") as write:
+            out = hs.set_contact_field(contact="9", field="company", value="Acme", approved=True)
+    assert out["changed"] is False
+    write.assert_not_called()
+
+
 # --- apply, and the undo log ------------------------------------------------
 
 

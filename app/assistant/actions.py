@@ -1414,6 +1414,21 @@ def hubspot_apply_batch_action(
     )
 
 
+def hubspot_set_field_action(
+    *,
+    contact: str,
+    field: str,
+    value: str,
+    confirm: bool = False,
+    owner_ack: bool = False,
+) -> dict[str, Any]:
+    from app.integrations.hubspot_manager import set_contact_field
+
+    return set_contact_field(
+        contact=contact, field=field, value=value, approved=confirm, owner_ack=owner_ack
+    )
+
+
 def hubspot_undo_batch_action(
     *, batch_id: str, confirm: bool = False, force: bool = False
 ) -> dict[str, Any]:

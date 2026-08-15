@@ -33,10 +33,38 @@ runs the whole path against the live book with every write intercepted at
 offering `(800) 962-0418` as its owner's phone. A toll-free switchboard on a
 contact record reads as a direct line; worse than the blank it replaced.
 
-**Yield is the honest limit.** Signature mining reached 6 fills from 40
-candidates in one run; the ~30 placeholder-company contacts have no readable
-signature at all, because they never emailed Kory. That group is the only
-genuine case for web search, and it is small.
+### The profile tier — `app/integrations/hubspot_person_lookup.py`
+
+Lexi *can* read LinkedIn, and the tier that does it is built. This was the
+session's biggest surprise: Composio's Search `FETCH_URL_CONTENT` is backed by
+Exa, which returns a **structured person record** — name, location, work history
+with titles, companies and dates — for a LinkedIn profile URL. No scraping, no
+auth wall, and it was already wired up. The old tool description told the model
+Lexi had no LinkedIn access; that text was wrong and is now rewritten.
+
+**It is only safe because of an inversion.** It never asks what someone's job
+title is. It asks whether a candidate profile shows a role at the employer
+already on the record. A stranger who shares the name does not also share the
+employer, so the answer is checkable. Employer corroboration and title
+extraction are the *same* step: find the role that proves the identity, and its
+title is the fill.
+
+Two ways in. A stored `hs_linkedin_url` (741 of Kory's contacts have one) is the
+first candidate and costs one fetch; otherwise a web search finds candidates and
+costs three calls. **The stored URL is not taken on trust** — Phil Holland's
+resolves to *Brian Holland*, the same bad-match class as Sales Navigator's
+Thomas Heckler. The name check is the only thing between that and a wrong title.
+
+Where there is no employer on file at all and the URL came from the record, it
+falls back to a single unambiguous current role, labelled
+`linkedin_profile_on_record` with confidence `on_record` and evidence that says
+plainly it was **not** independently corroborated. Several concurrent roles is a
+question for Kory, not a pick — Jeremy Boka is a VP, a brewery co-owner and a
+city councillor.
+
+Three outcomes that are findings rather than fills, each reported separately:
+records that are **not people** (a job title on `accounting@` makes it look
+human), people who **may have moved**, and people who **hold several roles**.
 
 ---
 
@@ -182,6 +210,39 @@ subtasks, so a parent task reads as a single item.
 
 ---
 
+## 1.6 DONE OVERNIGHT (the profile tier, and four defects it exposed)
+
+- **`hubspot_person_lookup.py`** — the corroborated LinkedIn tier described at
+  the top, plus `lexi_hubspot_undo_batch(force=…)`.
+- **Undo now re-checks before restoring.** Apply always did; undo did not. A
+  batch can sit applied for weeks, so restoring blind discards a hand-correction
+  and calls it an undo. Fields that no longer hold what we wrote are left alone
+  and named; `force=true` overrides. Reading the current state is a *safety*
+  step, so if HubSpot cannot be read the undo stops rather than restoring blind.
+- **The undo round trip is finally proven against the real portal.** Batch
+  `hs-44f5a7df43d0` (Rob Walters → Vessel Advisors, George Song → Strand Equity)
+  reverted to blank, verified by an independent read, refused a second revert,
+  re-applied, verified again. Net change zero. That was the last unproven claim
+  in the safety story.
+
+**Four defects the live rehearsal found that unit tests could not:**
+
+1. **`WM` is Waste Management.** `is_placeholder` treated every two-character
+   company value as junk — a comment in the file asserted exactly that — so a
+   correct value was being offered for overwrite. Two letters is a real company
+   often enough (WM, GE, 3M, EY, BP); punctuation at that length still is not.
+2. **Credentials parsed as names.** "CRIS James Hite" and "Jason Buesing PE" are
+   James Hite and Jason Buesing. Both were refused as strangers.
+3. **Domain suffixes.** `mccombshq.com` is McCombs Enterprises; `imacorp.com` is
+   IMA Financial Group. Containment still needs four characters, but exact
+   equality now needs three — "ima" *is* the company's whole identity.
+4. **Phase 1 ate the whole batch budget** on company-website fetches: twenty
+   candidates, seventy seconds, three contacts reaching the inbox. It now gets
+   55%, and contacts carrying a LinkedIn URL sort first — one fetch instead of
+   three, and they are the placeholder records nothing else can reach.
+
+---
+
 ## 2. DONE EARLIER THIS SESSION
 
 **Calendar** — `lexi_create_calendar_event` (no `HOLD:` prefix) and
@@ -245,16 +306,38 @@ one since it shipped; merge and enrichment never did, and
 
 ## 3. HARD-WON FACTS (do not relearn)
 
-**New this session (evening)**
+**New overnight**
 
+- **Composio Search's `FETCH_URL_CONTENT` is backed by Exa, and Exa returns a
+  structured *person entity*** — name, location, full work history with titles,
+  companies and dates — when handed a LinkedIn profile URL. No auth wall, no
+  scraping, already wired up. Lexi could read LinkedIn the whole time; the tool
+  description asserting otherwise was the only thing stopping her. Use the
+  entity, never the answer-style endpoint: an answer endpoint will compose a
+  plausible job title out of nothing, an entity has fields that are present or
+  absent.
+- **Finding a profile is easy; proving it is the right human is the entire
+  problem.** A candidate was found for 8 of 8 contacts probed, and 6 were the
+  wrong person or not a person. Kory's book is unusually hostile to name
+  matching: two Chris Gavoras, 27 duplicate pairs, shared mailboxes filed as
+  people, credentials in the name field, and at least one misspelled surname.
+- **HubSpot's own `hs_linkedin_url` can be wrong.** Phil Holland's resolves to
+  Brian Holland. Sales Navigator's matching put an Australian software engineer
+  on Thomas Heckler's record. Treat a stored URL as a *candidate*, never as
+  identity.
 - **A rehearsal against live data finds what unit tests cannot.** Intercept the
   write at the lowest layer, run everything above it for real, and print the
-  payload. That is how the toll-free phone number surfaced — no fixture would
-  have contained it, because nobody would have thought to write one.
+  payload. That is how the toll-free phone number surfaced, and later how `WM`,
+  the credential names and the domain-suffix misses surfaced — no fixture would
+  have contained any of them, because nobody would think to write one.
+- **A test can encode the bug.** `is_placeholder("WM", field="company")` was
+  *asserted true*, with a comment explaining why a two-letter company name could
+  not be real. Kory has a contact at Waste Management. When live data contradicts
+  a test, check which one is describing reality.
 - **Composio's LinkedIn toolkit has no people search.** 22 tools, all posting,
   ads and org-page stats. `LINKEDIN_GET_PERSON` takes a person id that is
   "unique to the context of your application only". No Sales Navigator API
-  exists. Don't go back to this.
+  exists. Don't go back to this — the Exa route above is the one that works.
 - **"Populated" is not "correct".** Every health metric here counted blank
   fields, so a book that is 93% "complete" hid ~30 contacts whose company reads
   `Prefer No Connection to Company`. Measure the junk, not just the gaps.

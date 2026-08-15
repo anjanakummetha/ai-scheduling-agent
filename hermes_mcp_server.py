@@ -826,6 +826,49 @@ def lexi_hubspot_apply_batch(
 
 
 @_tool
+def lexi_hubspot_set_field(
+    contact: str,
+    field: str,
+    value: str,
+    confirm: str = "false",
+    owner_ack: str = "false",
+) -> str:
+    """Set one field on one HubSpot contact because Kory told you the answer.
+
+    Use when he supplies the value himself — "Jeremy Boka's company is Sustainable
+    Sites", "his title is Managing Partner", "her number is 303-555-0134". Every
+    other HubSpot tool refuses to write anything it cannot source; here the source
+    is Kory, which is better provenance than any of them.
+
+    In particular this is how you answer the enrichment scan's own questions.
+    When it reports someone holding several current roles, or a value it could
+    not establish, and Kory then tells you which — this is the tool that acts on
+    it. Do not report back that you have no way to set it.
+
+    contact: a contact id, an email, or a name. If the name is ambiguous the tool
+    returns ambiguous_contact with the matches — ask him which, don't guess.
+    field: company, jobtitle, phone, or hs_linkedin_url.
+
+    Unlike the enrichment path this WILL overwrite an existing value, because an
+    explicit instruction usually means the current value is the thing being
+    corrected. The result names what it replaced and carries an undo batch id.
+
+    Pass confirm='true' once he has asked for it. If the record belongs to another
+    IFG owner this returns owner_confirmation_required naming them; re-call with
+    owner_ack='true' only after he confirms he means to change their record.
+    """
+    return _wrap(
+        "lexi_hubspot_set_field",
+        lexi.hubspot_set_field_action,
+        contact=contact.strip(),
+        field=field.strip(),
+        value=value.strip(),
+        confirm=confirm.strip().lower() in {"1", "true", "yes"},
+        owner_ack=owner_ack.strip().lower() in {"1", "true", "yes"},
+    )
+
+
+@_tool
 def lexi_hubspot_undo_batch(
     batch_id: str, confirm: str = "false", force: str = "false"
 ) -> str:

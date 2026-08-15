@@ -2942,6 +2942,131 @@ def revert_hubspot_batch(
     }
 
 
+SETTABLE_FIELDS = ("company", "jobtitle", "phone", "hs_linkedin_url")
+
+
+def set_contact_field(
+    *,
+    contact: str,
+    field: str,
+    value: str,
+    approved: bool = False,
+    owner_ack: bool = False,
+) -> dict[str, Any]:
+    """Write one field on one contact because Kory said so.
+
+    Everything else here refuses to write anything it cannot source. This is the
+    exception, and the source *is* Kory — which is a better provenance than any
+    of the automated tiers, so it is recorded as such rather than dressed up.
+
+    It exists because the enrichment path can now ask questions it could not
+    answer. When someone holds three current roles, "tell me which and I'll set
+    it" is the right response and was, until this, an empty offer.
+
+    Unlike enrichment this may overwrite a populated field — an explicit
+    instruction means the existing value is the thing being corrected. The prior
+    value is logged, so it is still one `undo` away.
+    """
+    key = str(field or "").strip().lower()
+    if key not in SETTABLE_FIELDS:
+        return {
+            "ok": False,
+            "error_code": "field_not_settable",
+            "kory_message": (
+                f"I can set {', '.join(SETTABLE_FIELDS)} — not `{field}`."
+            ),
+        }
+    new_value = str(value or "").strip()
+    if not new_value:
+        return {
+            "ok": False,
+            "error_code": "no_value",
+            "kory_message": "I need a value to put in that field.",
+        }
+
+    needle = str(contact or "").strip()
+    if not needle:
+        return {"ok": False, "error_code": "no_contact", "kory_message": "Which contact?"}
+    matches = contacts_by_ids([needle]) if needle.isdigit() else []
+    if not matches:
+        found = search_contacts(limit=5, query=needle)
+        matches = found.get("contacts") or []
+    if not matches:
+        return {
+            "ok": False,
+            "error_code": "not_found",
+            "kory_message": f"I couldn't find a contact matching **{needle}**.",
+        }
+    if len(matches) > 1:
+        names = ", ".join(f"{c.get('name')} <{c.get('email')}>" for c in matches[:5])
+        return {
+            "ok": False,
+            "error_code": "ambiguous_contact",
+            "matches": matches[:5],
+            "kory_message": f"**{needle}** matches more than one contact — {names}. Which one?",
+        }
+
+    live = matches[0]
+    assert_kory_approved_write(
+        approved=approved,
+        action=f"Set {key} = '{new_value}' on {live.get('name') or needle} in HubSpot",
+    )
+    blocked = assert_contact_writable(live, owner_ack=owner_ack)
+    if blocked:
+        return blocked
+
+    contact_id = str(live.get("id") or "")
+    was = str(live.get(key) or "")
+    if was.strip() == new_value:
+        return {
+            "ok": True,
+            "changed": False,
+            "kory_message": f"**{live.get('name')}** already has {key} set to {new_value}.",
+        }
+
+    if hubspot_writes_blocked():
+        return {
+            "ok": True,
+            "dry_run": True,
+            "kory_message": (
+                f"Would set **{key}** = {new_value} on **{live.get('name')}**"
+                + (f" (replacing '{was}')" if was else "")
+                + ". Nothing written — live HubSpot writes are blocked."
+            ),
+        }
+
+    batch_id = f"hs-set-{uuid.uuid4().hex[:12]}"
+    _raise_if_refused(
+        execute_hubspot_tool(
+            HUBSPOT_UPDATE_CONTACT, {"contactId": contact_id, "properties": {key: new_value}}
+        ),
+        f"Set {key} on contact {contact_id}",
+    )
+    _record_applied_write(
+        batch_id=batch_id,
+        contact_id=contact_id,
+        field=key,
+        old_value=was,
+        new_value=new_value,
+        source="You told me to set this.",
+    )
+    return {
+        "ok": True,
+        "changed": True,
+        "batch_id": batch_id,
+        "undo_batch_id": batch_id,
+        "contact_id": contact_id,
+        "field": key,
+        "old_value": was,
+        "new_value": new_value,
+        "kory_message": (
+            f"Set **{key}** to {new_value} on **{live.get('name')}**"
+            + (f" — it was '{was}'." if was else " — it was blank.")
+            + f" Undo with batch `{batch_id}`."
+        ),
+    }
+
+
 def _apply_field_fill(
     row: dict[str, Any], *, owner_ack: bool = False, batch_id: str = ""
 ) -> str:
