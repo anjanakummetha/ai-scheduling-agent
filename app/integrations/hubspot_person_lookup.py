@@ -73,14 +73,20 @@ _ROLE_MAILBOXES = frozenset(
 )
 
 # Words that make a *name* a mailbox or a group rather than a person. Matched as
-# whole words against the name, so "Teamster" and "Grouper" are safe.
+# whole words, so "Teamster" and "Grouper" are safe.
+#
+# Deliberately only words that are never a surname. An earlier draft included
+# group, capital, partners, holdings, board, fund, trust and desk — every one of
+# those is somebody's actual last name, and blocking Sarah Board from enrichment
+# because "board" looks organisational is a worse failure than missing a
+# mailbox. Both real cases here are caught by the strong words anyway: "Dunes
+# Point Capital Team" by *team*, "Exuma Funds General Mailbox" by *mailbox*.
 _NON_PERSON_WORDS = frozenset(
     {
-        "team", "mailbox", "inbox", "group", "dept", "department", "office",
-        "general", "accounting", "billing", "payroll", "admin", "info",
-        "support", "sales", "hr", "careers", "reception", "desk", "committee",
-        "board", "llc", "inc", "corp", "ltd", "company", "partners", "holdings",
-        "capital", "associates", "fund", "funds", "trust", "staff", "everyone",
+        "team", "mailbox", "inbox", "dept", "department", "accounting",
+        "billing", "payroll", "reception", "committee", "llc", "inc", "corp",
+        "ltd", "everyone", "noreply", "no-reply", "donotreply", "enquiries",
+        "inquiries", "helpdesk", "postmaster", "webmaster",
     }
 )
 

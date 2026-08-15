@@ -77,9 +77,27 @@ def test_a_real_person_is_not_blocked(name, email):
     assert pl.non_person_reason(name, email) == ""
 
 
-def test_a_company_word_in_a_surname_does_not_block_a_person():
-    """"Partners" as a name word is a group; as part of nothing, it is fine."""
-    assert pl.non_person_reason("Karen Groupman", "karen@acme.com") == ""
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Karen Groupman",   # substring of a blocked word, not the word
+        "Sarah Board",      # all of these are real surnames
+        "Peter Capital",
+        "Jane Partners",
+        "Tom Fund",
+        "Alice Trust",
+        "Bill Holdings",
+        "Kim Office",
+        "Jim Staff",
+        "Ann Desk",
+        "Dana Group",
+    ],
+)
+def test_an_organisational_word_that_is_also_a_surname_does_not_block_a_person(name):
+    """Blocking Sarah Board from enrichment because "board" reads corporate is a
+    worse failure than missing a mailbox — and both real mailbox cases are
+    caught by the strong words regardless."""
+    assert pl.non_person_reason(name, "someone@acme.com") == ""
 
 
 # --- is it the same human ---------------------------------------------------
