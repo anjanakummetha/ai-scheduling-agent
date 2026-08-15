@@ -326,6 +326,33 @@ def _preferred_coffee_times() -> set[str]:
     return {str(value).strip() for value in raw if str(value).strip()}
 
 
+# Meetings Kory needs decompression time after (Kory's rule 2026-08-11, saved
+# in kory_memory as more_braver_buffer): nothing may START inside the buffer
+# window following the event's end.
+_POST_MEETING_BUFFER_RULES: tuple[tuple[re.Pattern[str], int], ...] = (
+    (re.compile(r"\bmore\s+braver\b", re.IGNORECASE), 30),
+)
+
+
+def _post_meeting_buffer_violation(
+    slot_start: datetime, busy_events: list[dict[str, Any]]
+) -> str | None:
+    for event in busy_events:
+        subject = str(event.get("subject") or "")
+        for pattern, buffer_minutes in _POST_MEETING_BUFFER_RULES:
+            if not pattern.search(subject):
+                continue
+            event_end = parse_event_datetime(event.get("end"))
+            if not event_end:
+                continue
+            if event_end <= slot_start < event_end + timedelta(minutes=buffer_minutes):
+                return (
+                    f"starts within {buffer_minutes} min of \"{subject.strip()}\" ending — "
+                    f"Kory needs a {buffer_minutes}-minute buffer after it."
+                )
+    return None
+
+
 def validate_proposal_slots(
     slots: list[dict[str, str]],
     *,
@@ -380,6 +407,12 @@ def validate_proposal_slots(
         if busy and slot_conflicts_busy(slot, busy):
             result.valid = False
             result.violations.append(f"{prefix}: overlaps Kory's calendar.")
+
+        result.rules_checked.append("post_meeting_buffer")
+        buffer_hit = _post_meeting_buffer_violation(start, busy)
+        if buffer_hit:
+            result.valid = False
+            result.violations.append(f"{prefix}: {buffer_hit}")
 
         _check_timed_hard_blocks(start_local, end_local, weekday, prefix, result)
 

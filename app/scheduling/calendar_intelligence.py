@@ -126,6 +126,43 @@ _KM_PERSONAL_HINT_PATTERNS = (
     r"\bkm\s+(personal|training|drop|pick|gym|workout|trainer|dentist|doctor)\b",
 )
 
+# Family-calendar events synced onto Master. Kory's rule (2026-08-11, saved in
+# kory_memory as family_calendar_blocks): a family event only blocks him when
+# the title carries a "K" or "Kory" marker — he always adds one when he is
+# actually attending ("Back to School Night ( B & K)", "B plus K with liz").
+# Only titles with an explicit family signal qualify for the free-when-unmarked
+# rule; anything ambiguous stays blocking ("Denver heart 1030" has no K and
+# must still block — a false-busy costs a slot, a false-free double-books him).
+_FAMILY_EVENT_PATTERNS = (
+    r"^b\s*[@&+]",
+    r"^b\s+plus\b",
+    r"\bbridget\b",
+    r"\bmaclain\b",
+    r"\bnanny\b",
+    r"\bbabysit",
+    r"\bback to school\b",
+    r"\bschool night\b",
+    r"\bparent[\s-]?teacher\b",
+    r"\bfamily\b",
+    r"\bkids?\b",
+    r"\bplaydate\b",
+)
+
+_FAMILY_K_MARKER_RE = re.compile(r"(?<![\w&])(k|kory)(?![\w])", re.IGNORECASE)
+
+
+def _is_family_style_subject(norm_subject: str) -> bool:
+    return _subject_matches(_FAMILY_EVENT_PATTERNS, norm_subject)
+
+
+def _family_attendance_marker(subject: str) -> bool:
+    """True when the title marks Kory as attending: a standalone K, or Kory."""
+    raw = (subject or "").strip()
+    # "( B & K)" — allow the marker right after '&' too; the lookbehind above
+    # blocks '&K' run together, so test both the raw and a spaced variant.
+    spaced = re.sub(r"[&+/]", " ", raw)
+    return bool(_FAMILY_K_MARKER_RE.search(raw) or _FAMILY_K_MARKER_RE.search(spaced))
+
 # Kid / family activity on Master that does NOT mean Kory is busy.
 _KID_ONLY_NON_BLOCKING_PATTERNS = (
     r"\bmaclain\b.*\b(camp|lesson|riding)\b",
@@ -182,6 +219,7 @@ class EventBlockingClass(str, Enum):
     FAMILY_DO_NOT_MOVE = "family_do_not_move"
     DUPLICATE_COPY = "duplicate_copy"
     KID_ONLY_NON_BLOCKING = "kid_only_non_blocking"
+    FAMILY_NON_ATTENDING = "family_non_attending"
     INFORMATIONAL = "informational"
     UNKNOWN_BLOCKING = "unknown_blocking"
 
@@ -409,6 +447,25 @@ def classify_event(event: dict[str, Any]) -> ClassifiedEvent:
                 calendar_name=cal_name,
                 norm_subject=norm_subject,
             )
+
+    if (
+        _is_master_calendar(cal_name) or str(event.get("source") or "") == "family_calendar"
+    ) and _is_family_style_subject(norm_subject):
+        if _family_attendance_marker(subject):
+            return _classified(
+                event,
+                blocking_class=EventBlockingClass.PERSONAL_KORY_BLOCKING,
+                blocks_kory=True,
+                calendar_name=cal_name,
+                norm_subject=norm_subject,
+            )
+        return _classified(
+            event,
+            blocking_class=EventBlockingClass.FAMILY_NON_ATTENDING,
+            blocks_kory=False,
+            calendar_name=cal_name,
+            norm_subject=norm_subject,
+        )
 
     if _is_master_calendar(cal_name):
         return _classified(
