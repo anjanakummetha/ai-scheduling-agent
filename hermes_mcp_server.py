@@ -738,11 +738,19 @@ def lexi_hubspot_enrich_contacts(limit: str = "12", include_phone: str = "false"
 
     Call this first — the tool does the scanning and reports what it found.
 
-    Two sources, both factual: HubSpot's own company records (an existing
-    company link, or a company record matching the contact's email domain), and
-    the contact's own email signature in Kory's inbox. Nothing is guessed or
-    inferred; every proposed value comes with the evidence behind it, which you
-    should pass on to Kory rather than summarising away.
+    Four sources, in descending order of directness: HubSpot's own company
+    records (an existing company link, or a company record matching the contact's
+    email domain); the other contacts at that domain, when they all agree; the
+    contact's own email signature in Kory's inbox; and their LinkedIn profile,
+    but ONLY when the profile shows a role at the employer already on the record.
+    Every proposed value carries the evidence behind it — pass that on to Kory
+    rather than summarising it away.
+
+    The LinkedIn tier never asks what someone's job title is. It asks whether a
+    candidate profile shows a role at the employer already on file, because a
+    stranger who shares the name does not also share the employer. When it cannot
+    corroborate, it refuses. Kory's book contains two Chris Gavoras, so this
+    matters more here than it would elsewhere.
 
     Fills a field only when it is blank OR holds a placeholder such as
     'Prefer No Connection to Company'. A real value is never overwritten, and
@@ -754,14 +762,20 @@ def lexi_hubspot_enrich_contacts(limit: str = "12", include_phone: str = "false"
     going — a second call continues rather than repeating, because contacts that
     yielded nothing are remembered.
 
-    **You have no other source for the rest.** For contacts this cannot resolve,
-    report that plainly. Do NOT suggest checking LinkedIn or searching the web —
-    you have no access to either, and offering them sends Kory after a capability
-    that does not exist. Naming the ones on a company domain as worth a manual
-    look is fine.
+    Two results are findings, not fills, and should be reported as such:
+    `not_people` (shared mailboxes like accounting@ — these must never be given a
+    job title) and `may_have_moved` (the profile shows they have left that
+    employer, so the record is stale rather than incomplete).
+
+    For contacts nothing could be established for, say so plainly. Do NOT offer
+    to search the web yourself or promise a deeper look — the corroborated
+    lookup above is already the deepest available, and anything beyond it would
+    be a guess about a real person in a shared CRM. Naming the ones on a company
+    domain as worth a manual look is fine.
 
     Pass include_phone='true' to also propose phone numbers. Phone comes only
-    from signatures, never from any other source.
+    from signatures — no other source available to Lexi carries it, and neither
+    HubSpot's enrichment nor LinkedIn will fill it.
 
     Nothing is written here. This returns a batch_id; applying it is a separate,
     confirmed call to lexi_hubspot_apply_batch, and every applied value can be
@@ -812,18 +826,26 @@ def lexi_hubspot_apply_batch(
 
 
 @_tool
-def lexi_hubspot_undo_batch(batch_id: str, confirm: str = "false") -> str:
+def lexi_hubspot_undo_batch(
+    batch_id: str, confirm: str = "false", force: str = "false"
+) -> str:
     """Put back every field a staged enrichment batch wrote — the undo for apply_batch.
 
     Restores each contact's previous value, including back to blank. Works only for
     enrichment; a merge cannot be undone by this or anything else, in Lexi or in
     HubSpot. Pass confirm='true' once Kory has asked for or agreed to it.
+
+    Fields that no longer hold what the batch wrote are LEFT ALONE and returned in
+    `skipped_changed_since` — someone has edited them since, and an undo that
+    discards a correction is not an undo. Report those to Kory by name. Only pass
+    force='true' if he then says to roll them back regardless.
     """
     return _wrap(
         "lexi_hubspot_undo_batch",
         lexi.hubspot_undo_batch_action,
         batch_id=batch_id.strip(),
         confirm=confirm.strip().lower() in {"1", "true", "yes"},
+        force=force.strip().lower() in {"1", "true", "yes"},
     )
 
 

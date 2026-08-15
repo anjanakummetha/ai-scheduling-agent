@@ -1414,10 +1414,12 @@ def hubspot_apply_batch_action(
     )
 
 
-def hubspot_undo_batch_action(*, batch_id: str, confirm: bool = False) -> dict[str, Any]:
+def hubspot_undo_batch_action(
+    *, batch_id: str, confirm: bool = False, force: bool = False
+) -> dict[str, Any]:
     from app.integrations.hubspot_manager import revert_hubspot_batch
 
-    return revert_hubspot_batch(batch_id=batch_id, approved=confirm)
+    return revert_hubspot_batch(batch_id=batch_id, approved=confirm, force=force)
 
 
 def hubspot_health_report_action(*, all_owners: bool = False) -> dict[str, Any]:

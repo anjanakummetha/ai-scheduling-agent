@@ -1164,6 +1164,7 @@ def propose_field_enrichment(
     owner_id: str | None = None,
     include_phone: bool = False,
     use_website: bool = True,
+    use_person_lookup: bool = True,
     time_budget_seconds: int = ENRICH_TIME_BUDGET_SEC,
 ) -> dict[str, Any]:
     """Propose title/company/phone fills sourced from Kory's own email signatures.
@@ -1200,12 +1201,15 @@ def propose_field_enrichment(
     remaining = len(fresh) - len(queue)
 
     from app.integrations import hubspot_company_lookup as company_lookup
+    from app.integrations import hubspot_person_lookup as person_lookup
 
     # Built from the contacts already read — no extra calls.
     consensus = company_lookup.build_domain_consensus(contacts, is_placeholder=is_placeholder)
 
     proposals: list[dict[str, Any]] = []
     no_source: list[dict[str, Any]] = []
+    not_people: list[dict[str, Any]] = []
+    may_have_moved: list[dict[str, Any]] = []
     checked_ids: list[str] = []
     ran_out_of_time = False
     started = time.monotonic()
@@ -1292,7 +1296,64 @@ def propose_field_enrichment(
             else:
                 continue
 
+        # Phase 3 — the guarded person lookup, for what neither HubSpot's own
+        # records nor the inbox could close.
+        #
+        # The only tier that looks up an *individual*, and so the only one that
+        # can be wrong about which human it found. It never asks what this
+        # person's title is; it asks whether a candidate profile shows a role at
+        # the employer already on file. A stranger who shares the name does not
+        # also share the employer, which is what makes the answer checkable.
+        known_company = fields.get("company") or str(contact.get("company") or "")
+        if is_placeholder(known_company, field="company"):
+            known_company = ""
+        unresolved = [f for f in ("company", "jobtitle") if f not in fields and _needs_filling(contact, f)]
+        not_a_person = False
+        if use_person_lookup and unresolved and time.monotonic() - started <= time_budget_seconds:
+            try:
+                person = person_lookup.resolve_person(contact, known_company=known_company)
+            except Exception:
+                person = None
+            skip = (person or {}).get("skip")
+            if skip == "not_a_person":
+                # A finding, not a failed lookup. Both real cases — "Dunes Point
+                # Capital Team" and "Exuma Funds General Mailbox" — resolved to
+                # a genuine executive at the right company, so every check other
+                # than the name would have passed them.
+                not_a_person = True
+                not_people.append(
+                    {
+                        "contact_id": contact.get("id"),
+                        "name": contact.get("name"),
+                        "email": email,
+                        "reason": person.get("reason"),
+                    }
+                )
+            elif skip == "may_have_moved":
+                may_have_moved.append(
+                    {
+                        "contact_id": contact.get("id"),
+                        "name": contact.get("name"),
+                        "email": email,
+                        "reason": person.get("reason"),
+                        "profile_url": person.get("profile_url"),
+                    }
+                )
+            elif person:
+                for key, value in (person.get("fields") or {}).items():
+                    # The LinkedIn URL rides along on a proven match; every other
+                    # field still has to be an actual gap.
+                    if key in fields or (key != "hs_linkedin_url" and key not in unresolved):
+                        continue
+                    fields[key] = value
+                    evidence[key] = (person.get("evidence") or {}).get(key) or {}
+
         if not fields:
+            if not_a_person:
+                # Saying "I could not establish anything" about a distribution
+                # address invites someone to go and find a title for it.
+                checked_ids.append(str(contact.get("id") or ""))
+                continue
             no_source.append(
                 {
                     "contact_id": contact.get("id"),
@@ -1373,16 +1434,39 @@ def propose_field_enrichment(
             "'Prefer No Connection to Company' rather than filling a blank._"
         )
 
-    # Say plainly what could not be established, and do not suggest a route
-    # Lexi does not have. She has no LinkedIn access and no web lookup here;
-    # offering one sends Kory chasing a capability that is not wired up.
+    # Findings that are not fills. A distribution address and a person who has
+    # changed jobs are both worth knowing about, and neither is a gap to close.
+    if not_people:
+        lines.append(
+            f"\n**{len(not_people)} of these are not people.** Shared mailboxes and "
+            "group addresses — I won't put a job title on one, because it makes the "
+            "record look like a human being:"
+        )
+        for row in not_people[:5]:
+            lines.append(f"• {row.get('name') or row.get('email')} — {row.get('reason')}")
+
+    if may_have_moved:
+        lines.append(
+            f"\n**{len(may_have_moved)} appear to have moved on.** Their profile shows "
+            "the role at that employer has ended, so filling in the old title would make "
+            "a stale record look freshly confirmed:"
+        )
+        for row in may_have_moved[:5]:
+            lines.append(f"• {row.get('reason')}")
+
+    # Say plainly what could not be established. This must stay accurate about
+    # what Lexi can actually reach: she *does* look people up now, but only
+    # where a candidate profile can be corroborated against the employer already
+    # on file. Overstating it invites blind trust; understating it sends Kory
+    # chasing work she has already done.
     if no_source:
         researchable = [r for r in no_source if r.get("corporate_domain")]
         lines.append(
             f"\n**{len(no_source)} I could not establish anything for.** Nothing in your inbox, "
-            "nothing in HubSpot's own company records, and nothing usable on their company's "
-            "website. I don't look people up individually — I have no LinkedIn access, and I "
-            "won't put a job title on someone from a web search I can't verify is the right person."
+            "nothing in HubSpot's own company records, nothing usable on their company's "
+            "website, and no LinkedIn profile I could tie to them with certainty. Where I "
+            "find a profile but can't confirm it's the same person — same name, different "
+            "employer — I leave it alone rather than guess."
         )
         if researchable:
             lines.append(
@@ -1415,6 +1499,8 @@ def propose_field_enrichment(
         "proposals": proposals,
         "needs_research": no_source,
         "no_source_count": len(no_source),
+        "not_people": not_people,
+        "may_have_moved": may_have_moved,
         "placeholder_replacements": junk_fixes,
         "sources": dict(by_source),
         "checked": checked,
@@ -1432,6 +1518,7 @@ _SOURCE_LABELS = {
     "hubspot_company_domain": "HubSpot company record for the domain",
     "kory_book_consensus": "your other contacts at that domain",
     "outlook_signature": "their email signature",
+    "linkedin_profile_corroborated": "their LinkedIn profile, matched on the employer you already had",
 }
 
 
@@ -2653,12 +2740,21 @@ def _record_applied_write(
         conn.commit()
 
 
-def revert_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str, Any]:
+def revert_hubspot_batch(
+    *, batch_id: str, approved: bool = False, force: bool = False
+) -> dict[str, Any]:
     """Put every field this batch wrote back to what it was.
 
     Enrichment only. A merge cannot be undone by anything here — HubSpot itself
     cannot undo one — which is exactly why merges are applied one pair at a time
     and this refuses to pretend otherwise.
+
+    Re-checks before restoring, the same way the apply path does. A batch can sit
+    applied for weeks; if someone has since corrected one of these fields by
+    hand, an unconditional restore would silently throw their work away and call
+    it an undo. Fields that no longer hold what we wrote are left alone and
+    reported. ``force`` overrides that, for the case where the batch itself is
+    what needs reversing regardless.
     """
     assert_kory_approved_write(approved=approved, action=f"HubSpot rollback of batch {batch_id}")
     from app.storage.lexi_db import get_lexi_connection
@@ -2666,7 +2762,7 @@ def revert_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str, 
     with get_lexi_connection() as conn:
         ensure_applied_writes_table(conn)
         rows = conn.execute(
-            "SELECT id, contact_id, field, old_value FROM hubspot_applied_writes "
+            "SELECT id, contact_id, field, old_value, new_value FROM hubspot_applied_writes "
             "WHERE batch_id = ? AND reverted_at IS NULL",
             (batch_id,),
         ).fetchall()
@@ -2694,12 +2790,51 @@ def revert_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str, 
             ),
         }
 
+    # What the records hold right now, so a hand-edit made since the batch was
+    # applied is not mistaken for our own write and quietly discarded.
+    live_by_id: dict[str, dict[str, Any]] = {}
+    if not force:
+        try:
+            live_by_id = {
+                str(c.get("id")): c
+                for c in contacts_by_ids(sorted({str(r["contact_id"]) for r in rows}))
+            }
+        except Exception:
+            # Reading the current state is a safety check, not the operation.
+            # If HubSpot cannot be read the honest move is to stop, not to
+            # restore blind.
+            return {
+                "ok": False,
+                "batch_id": batch_id,
+                "error_code": "precheck_failed",
+                "kory_message": (
+                    f"Couldn't read the current values for batch `{batch_id}`, so I stopped "
+                    "rather than restore over the top of whatever is there now."
+                ),
+            }
+
     # Group by contact so one record is one API call, not one per field.
     by_contact: dict[str, dict[str, Any]] = {}
     ids_by_contact: dict[str, list[int]] = {}
+    changed_since: list[dict[str, Any]] = []
     for row in rows:
-        by_contact.setdefault(row["contact_id"], {})[row["field"]] = row["old_value"] or ""
-        ids_by_contact.setdefault(row["contact_id"], []).append(row["id"])
+        cid = str(row["contact_id"])
+        if not force and cid in live_by_id:
+            current = str(live_by_id[cid].get(row["field"]) or "").strip()
+            written = str(row["new_value"] or "").strip()
+            if current != written:
+                changed_since.append(
+                    {
+                        "contact_id": cid,
+                        "name": live_by_id[cid].get("name"),
+                        "field": row["field"],
+                        "now": current,
+                        "we_wrote": written,
+                    }
+                )
+                continue
+        by_contact.setdefault(cid, {})[row["field"]] = row["old_value"] or ""
+        ids_by_contact.setdefault(cid, []).append(row["id"])
 
     reverted, errors = 0, []
     done_ids: list[int] = []
@@ -2724,15 +2859,28 @@ def revert_hubspot_batch(*, batch_id: str, approved: bool = False) -> dict[str, 
             )
             conn.commit()
 
+    head = f"Put back {reverted} field(s) from batch `{batch_id}`."
+    if errors:
+        head += f" {len(errors)} failed."
+    lines = [head]
+    if changed_since:
+        lines.append(
+            f"\n**Left {len(changed_since)} alone — edited since I wrote them.** "
+            "Undoing would have thrown that work away:"
+        )
+        for row in changed_since[:5]:
+            lines.append(
+                f"• {row.get('name') or row['contact_id']} — {row['field']} now reads "
+                f"'{row['now']}', I wrote '{row['we_wrote']}'"
+            )
+        lines.append("_Say 'undo it anyway' and I'll roll those back regardless._")
     return {
         "ok": not errors,
         "batch_id": batch_id,
         "reverted": reverted,
+        "skipped_changed_since": changed_since,
         "errors": errors,
-        "kory_message": (
-            f"Put back {reverted} field(s) from batch `{batch_id}`."
-            + (f" {len(errors)} failed." if errors else "")
-        ),
+        "kory_message": "\n".join(lines),
     }
 
 
