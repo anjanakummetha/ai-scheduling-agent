@@ -1,0 +1,15 @@
+# Lexi log rotation — install: cp deploy/logrotate-lexi /etc/logrotate.d/lexi
+# mcp-stderr.log reached 147MB unbounded (latency item 1c); the services hold
+# their log files open, so copytruncate is required — no restart, no data gap
+# beyond the copy window.
+/home/lexi/.hermes/logs/*.log /home/lexi/AI_Scheduling_Agent/logs/*.log {
+    weekly
+    rotate 4
+    maxsize 50M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su lexi lexi
+}

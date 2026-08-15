@@ -63,11 +63,47 @@ def get_composio() -> Composio:
     # indefinitely (a write with no timeout previously hung for minutes).
     # max_retries=0 keeps our own _execute_with_retry the sole retry authority —
     # the SDK must never retry a write (that could double-send/double-book).
-    return Composio(
+    client = Composio(
         api_key=_require_api_key(),
         timeout=settings.composio_timeout_seconds,
         max_retries=0,
     )
+    _install_schema_cache(client)
+    return client
+
+
+def _install_schema_cache(client: Composio) -> None:
+    """Cache tool schemas per slug for the process lifetime.
+
+    The SDK's _execute_tool re-fetches the tool schema
+    (GET /tools/<SLUG>?toolkit_versions=latest) before EVERY execute — the
+    top measured latency lever (it doubles every round trip) — and uses the
+    result only to resolve the toolkit slug for version resolution. The SDK
+    already keeps an instance-lifetime schema cache (_tool_schemas) on the
+    other execute path, so slug-keyed process-lifetime caching here is no less
+    fresh than the SDK's own behavior. Escape hatch:
+    LEXI_COMPOSIO_SCHEMA_CACHE=false.
+    """
+    import os
+
+    if os.getenv("LEXI_COMPOSIO_SCHEMA_CACHE", "true").strip().lower() in {
+        "false",
+        "0",
+        "no",
+    }:
+        return
+    tools = client.tools
+    original = tools.get_raw_composio_tool_by_slug
+    cache: dict[str, Any] = {}
+
+    def cached(slug: str):
+        hit = cache.get(slug)
+        if hit is None:
+            hit = original(slug)
+            cache[slug] = hit
+        return hit
+
+    tools.get_raw_composio_tool_by_slug = cached  # type: ignore[method-assign]
 
 
 def _account_entity_id(connection_id: str) -> str:
