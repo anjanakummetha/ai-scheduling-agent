@@ -1,4 +1,4 @@
-"""Tests for Heidi escalation, travel shift, outbound guard."""
+"""Tests for Kory escalation (Heidi path removed 2026-08-04), travel shift, outbound guard."""
 
 from __future__ import annotations
 

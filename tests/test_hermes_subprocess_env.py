@@ -38,7 +38,7 @@ def test_run_teams_card_action_uses_lexi_composio_key_not_hermes():
             """
 from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv(Path('app/bot/run_teams_card_action.py').resolve().parents[2] / '.env', override=True)
+load_dotenv(Path('app/config.py').resolve().parents[1] / '.env', override=True)
 from app.config import settings
 print(settings.composio_api_key or '')
 """,

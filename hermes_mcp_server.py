@@ -1146,7 +1146,23 @@ def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     return json.dumps(_chat_text_breaks({"ok": result.get("ok", False), **result}), default=str)
 
 
-@_tool
+def _card_tool(func):
+    """Register card tools only when cards are the active surface.
+
+    Cards are PARKED (ruling 2026-08-08): text-only is the supported mode and
+    no card is ever pushed — but this tool was still registered, so the model
+    could be steered into the card path by a stale card resurfacing in Teams
+    history. Same pattern as _campaign_tool: while lexi_teams_text_only is on,
+    the function exists but Hermes never sees it.
+    """
+    from app.config import settings as _settings
+
+    if getattr(_settings, "lexi_teams_text_only", True):
+        return func
+    return _tool(func)
+
+
+@_card_tool
 def lexi_handle_teams_card_submit(payload_json: str, authorized_by: str = "kory") -> str:
     """Process an editable approval Adaptive Card submit (draft edits + Send/Discard/Save).
 

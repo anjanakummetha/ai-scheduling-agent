@@ -1,4 +1,12 @@
-"""Route email sent directly to lexi@ as another chat channel."""
+"""Narrow email-to-lexi@ command router.
+
+Email as a GENERAL command channel was scrapped (decision 2026-08-05, Group N
+deferred): Teams is the command surface. Only the three sanctioned commands
+from Kory's own address survive here — don't-schedule, remember-a-fact, and
+remind-me-to (Asana) — plus a redirect for briefing asks. Everything else gets
+a polite pointer to Teams. Do not widen these regexes; resolving free-text
+instructions needs the model, and that path lives in Teams.
+"""
 
 from __future__ import annotations
 
@@ -21,10 +29,6 @@ _DONT_SCHEDULE_RE = re.compile(
     re.IGNORECASE,
 )
 _ASANA_RE = re.compile(r"\b(?:asana|task|todo|to-do|remind me to)\b", re.IGNORECASE)
-_HUBSPOT_RE = re.compile(
-    r"\b(?:hubspot|crm|contacts?|outreach|inactive contacts?)\b",
-    re.IGNORECASE,
-)
 _BRIEF_RE = re.compile(
     r"\b(?:briefing|brief me|summary|morning brief|ceo brief)\b",
     re.IGNORECASE,
@@ -79,8 +83,6 @@ def parse_lexi_mail_intent(*, subject: str, body: str, sender: str = "") -> Lexi
         return LexiMailIntent("dont_schedule", "explicit_decline", instruction=combined[:500])
     if _BRIEF_RE.search(combined):
         return LexiMailIntent("briefing", "brief_request")
-    if _HUBSPOT_RE.search(combined):
-        return LexiMailIntent("hubspot", "hubspot_request", instruction=combined[:500])
     if _ASANA_RE.search(combined):
         return LexiMailIntent("asana", "asana_request", instruction=combined[:500])
     remember = _REMEMBER_RE.search(combined)
@@ -161,17 +163,6 @@ def handle_lexi_direct_mail(raw_email: dict[str, Any]) -> dict[str, Any]:
             "tasks": tasks,
         }
 
-    if intent.intent == "hubspot":
-        from app.integrations.hubspot_manager import hubspot_status_brief
-
-        brief = hubspot_status_brief()
-        return {
-            "handled": True,
-            "action": "hubspot",
-            "message": brief.get("kory_message", "HubSpot status unavailable."),
-            "thread_id": thread_id,
-        }
-
     if intent.intent == "forward_instruction":
         if _DONT_SCHEDULE_RE.search(body):
             return handle_lexi_direct_mail(
@@ -182,7 +173,7 @@ def handle_lexi_direct_mail(raw_email: dict[str, Any]) -> dict[str, Any]:
             "action": "forward_instruction",
             "message": (
                 "Got your forward — tell me in Teams what you'd like "
-                "(schedule, don't schedule, Asana task, HubSpot outreach)."
+                "(schedule, don't schedule, or an Asana task)."
             ),
             "thread_id": thread_id,
         }

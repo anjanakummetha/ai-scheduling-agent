@@ -648,7 +648,7 @@ def _run_kory_briefings() -> None:
         from app.jobs.kory_briefings import run_kory_briefing_cycle
 
         result = run_kory_briefing_cycle()
-        if result.get("daily_briefing_sent") or result.get("kory_24h_reminders"):
+        if result.get("kory_24h_reminders"):
             logger.info("Kory briefings: %s", result)
     except Exception as exc:
         _log_orchestrator_error(

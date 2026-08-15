@@ -41,10 +41,3 @@ def escalation_email_allowed() -> bool:
     escalation path became Teams-to-Kory only; kept for the dry-run script."""
     return outbound_writes_allowed()
 
-
-def staging_mode_label() -> str:
-    if settings.lexi_dry_run:
-        return "dry_run"
-    if not teams_push_allowed():
-        return "teams_suppressed"
-    return "live"

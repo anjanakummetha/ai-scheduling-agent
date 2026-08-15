@@ -383,7 +383,7 @@ def find_pending_item_by_label(*, subject: str, sender: str) -> LexiQueueItem | 
 
 
 TEAMS_HELP_TEXT = """**Lexi**
-- Ask naturally: "draft a reply to Dan about payroll" or use card buttons
+- Ask naturally: "draft a reply to Dan about payroll"
 - `pending` — drafts ready to send (and invites ready to dispatch)
 - `cancel meeting #N` — cancel a booked meeting (attendee gets the notice)
 - `inbound` — mail waiting for your draft yes/no
@@ -391,9 +391,8 @@ TEAMS_HELP_TEXT = """**Lexi**
 - `unanswered` — emails you may still need to reply to
 - `today` — today's calendar
 - `prebrief` — pre-meeting briefs (who introduced + context)
-- `brief` — full morning CEO briefing
-- Card buttons use the email subject and sender (no numeric ids)
-- Approval cards have an editable draft — edit in the card, Save draft, then Send
-- Approve in chat only when you want it sent
+- `brief` — points you to the dashboard (the dashboard owns the morning briefing)
+- `approve #N` / `reject #N — reason` / `show draft #N` — typed commands are the approval surface
+- Approve only when you want it sent — nothing sends without it
 
 Notifications: when you CC Lexi, when someone replies on a Lexi thread, or important scheduling mail."""
