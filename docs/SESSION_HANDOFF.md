@@ -1,7 +1,90 @@
-# Lexi — Session Handoff (updated 2026-08-15, overnight)
+# Lexi — Session Handoff (updated 2026-08-15, scheduling-fix session)
 
-**Resume phrase:** *"HubSpot is finished and deployed. Next session is
-scheduling changes."*
+**Resume phrase:** *"Scheduling fixes are deployed and live-verified. Anjana's
+final Teams pass is the only thing left before Kory."*
+
+---
+
+## THIS SESSION (2026-08-15): every defect from Kory's Aug-11 test, fixed and live-verified
+
+Deployed to the box at `d3a6bce`. **1,088 tests green** (was 1,041). Full live
+E2E ran against the real pipeline (proposal 9809, `[TEST] … LT-R16` to
+Anjana's gmail): offer sent from Lexi's mailbox with CC to Kory, bullets on
+separate lines, **holds placed for exactly the offered times**, verified by
+reading the calendar and Lexi's sentitems back — then swept to zero residue.
+Session cost on Kory's keys: **$0.001 Claude, 129 Composio calls** — all
+verification ran below the model.
+
+What was broken on Aug 11 → what changed:
+
+1. **Booked time offered (Aug 25 9:00 = Alejandra's coffee).** The model
+   hand-wrote slots via `lexi_update_proposal_draft`; nothing validated them
+   and `proposed_slots` never updated, so holds landed on the engine's OLD
+   slots (Aug 24/26/28) while the email offered different times — which is
+   also why Kory "saw no holds". Now: `update_proposal_draft` validates every
+   offered time against the live calendar + rules (refuses with the clash
+   named) and re-stages `proposed_slots` to match
+   (`app/scheduling/draft_slot_sync.py`); the send path re-verifies
+   draft==slots AND slot freshness before the email exists
+   (`_pre_send_slot_gate`, comms_agent). Live-verified: the exact Aug-25 draft
+   is refused naming "Coffee: Alejandra Harvey <> Kory Mitchell".
+2. **"Sent! with all three holds confirmed."** Approve results now carry
+   `holds_placed_times` read back from the holds table, the Teams reply
+   enumerates them (or says "NO calendar holds were placed"), and staging
+   results state "nothing sent, no holds yet" explicitly.
+3. **Family blocks.** Kory's rule (saved to kory_memory on Aug 11) is now
+   CODE: a family-signal title on Master blocks only with a standalone K/Kory
+   marker; ambiguous titles keep blocking. Live sweep freed exactly
+   "B @ Electing Women Social", the Nanny Erica blocks, "Maclain with Liz" —
+   and kept "B plus K with liz" and "Back to School Night ( B & K)" blocking.
+4. **More Braver buffer** is code too: nothing starts within 30 min of it
+   ending (validator rule, live-verified both sides of the boundary —
+   note the live event runs 10:00–2:00, so Kory's "2:00 doesn't work" was
+   the buffer at the END).
+5. **"Hi Iconic," / "From Iconic Founders Group".** Signature mining stored a
+   company footer as a person's display name (sticky). Writer now refuses
+   org-like names, reader refuses to render them, and 26 polluted rows were
+   repaired on the box (Heidi, Natalie, Dan, Travis among them; "Vince"
+   deliberately preserved).
+6. **Notification fan-out.** Hold release = ONE message per proposal listing
+   all released slots and ending on the re-offer decision; release also
+   closes a stale pending hold-reminder (9187's dead card class). Thread
+   FYI pings collapse per thread (15-min cooldown; decision pings never
+   suppressed). Previews cut on word boundaries.
+7. **Bullets on one line.** `_ensure_paragraph_spacing` merged bullet lines
+   into the lead-in; bullet lines now stay their own lines (live-verified: 3
+   `<li>` items in the sent LT-R16 email).
+8. **Hold reminder** now greets the real counterpart and uses the recipient
+   timezone it always fetched.
+9. **Parser:** "1:00–1:30 PM" shared-meridiem ranges and "11:00 AM–11:30 AM ET"
+   trailing zone labels now parse correctly (the live E2E's fail-closed
+   refusal found the second one).
+10. **Latency:** Composio tool schemas cached per slug per process (the
+    re-fetch doubled every round trip; escape hatch
+    `LEXI_COMPOSIO_SCHEMA_CACHE=false`). Gateway prompt caching CONFIRMED
+    live (100% cache-hit on Aug-11 session). `mcp-stderr.log` truncated
+    (was 147MB) + logrotate installed (`/etc/logrotate.d/lexi`).
+11. **Remember: worked all along.** All four Aug-11 facts saved verbatim;
+    they flow into prompts and the enforceable ones into the validator; the
+    two scheduling-critical ones are now deterministic code (items 3–4).
+12. **Briefing (1b-3): benign + accurate.** Live data dir is
+    `/var/lib/ceo-dashboard` (fresh artifacts); `/opt/ceo-dashboard/data/` is
+    a dead deploy copy. A generation failure produces NO email, never a stale
+    one. Aug-14 briefing cross-checked against the calendar — every item maps
+    to a real event. Side find: the Bruce Krinsky task appears twice in
+    OVERDUE because it exists twice in Asana (the parked dup-detection item).
+
+**Left deliberately:** the 26 stale `awaiting_reply_prompt` proposals from
+Aug 3 (bulk close needs Kory's sign-off, unchanged ruling); E-9/E-10 hold
+cosmetics (mashed "Anjanakummetha" title, busy-not-tentative); retry
+"keep these slots" pinning (the validated-edit path makes the current
+workaround safe — the tool description now steers the model to it);
+whether the CID logo actually renders in Gmail (only a human inbox shows it —
+fold into Anjana's Teams pass).
+
+---
+
+# Previous handoff (2026-08-15 overnight, HubSpot) below
 
 `main` at `c1ad002`+. **1,041 tests green.** Laptop / GitHub / box in sync — the
 box runs `c1ad002`; anything after it is documentation only and needs no deploy.
@@ -198,6 +281,22 @@ Three things wrong, in rough order of severity:
 
 Not investigated yet — recorded from a screenshot, not the log. Start at
 `agent.log` around 11:54 and at whatever emits `hold released (no reply)`.
+
+### 1b-3. Dashboard briefing artifact stale since Aug 8 — **found 2026-08-15**
+`/opt/ceo-dashboard/data/daily-briefing.json` (and `health-logs.json`) were
+last written **2026-08-08 04:09 UTC**, yet `lexi-morning-briefing.timer` fired
+normally on 2026-08-14 10:30 UTC. The morning email is generated by POSTing to
+the dashboard's `/api/hermes/briefing` (`scripts/morning_briefing_email.py:26`),
+so an artifact that stopped updating means the briefing email may be carrying
+stale or fallback content — or, benignly, the endpoint returns fresh content
+without persisting the artifact. Found while auditing API-key spend, not
+investigated.
+
+**Where to start:** compare the briefing email Kory actually received on
+Aug 14/15 (the sent copy is stored in the app DB) against live calendar/inbox
+data for that day; `journalctl -u ceo-dashboard` around 10:30 UTC for how the
+POST was handled; then check whether the endpoint is supposed to rewrite
+`daily-briefing.json` on success at all.
 
 ### 1c. Latency — deferred, deliberately
 Measured, ranked, not implemented. See `lexi-latency-findings` memory. Median
