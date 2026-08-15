@@ -1,8 +1,8 @@
-# Lexi — Session Handoff (updated 2026-08-14, evening)
+# Lexi — Session Handoff (updated 2026-08-15, overnight)
 
 **Resume phrase:** *"HubSpot cleanup is built and deployed — Kory tests it in Teams."*
 
-`main` at `5b18b07`. **913 tests green.** Laptop / GitHub / box in sync.
+`main` at `26ac3fc`. **1,041 tests green.** Laptop / GitHub / box in sync.
 
 ---
 
@@ -99,17 +99,24 @@ against the destination, not the reply.**
 ## 1. OPEN ITEMS (priority order)
 
 ### 1a. HubSpot — **built; waiting on Kory in Teams**
-See the block at the top. Reads were already good; the cleanup path is new and
-rehearsed against live data but has never run in Teams.
+See the block at the top. Reads were already good; the cleanup path is new,
+rehearsed against live data, and apply and undo have both now run against the
+real portal — but none of it has run *in Teams*.
 
 **The first apply in Teams writes to the real shared portal.** Enrichment is
 undoable (`lexi_hubspot_undo_batch`). A merge is not, by anything, ever — 16 of
 the 27 pairs are colleagues' records and the guard blocks those without an
 explicit ack.
 
-Still open here: the ~30 placeholder-company contacts have no signature to mine,
-so nothing currently fills them. Decide on web search after Kory has seen what
-signature mining alone produces.
+**The placeholder-company contacts are no longer stuck.** They came *from*
+LinkedIn, so they carry a `hs_linkedin_url`, and the profile tier resolves them
+from it — Gregory Krier, James Hite, Rich Halvas, Andrew Beaudoin and Matthew
+Battey all came back on a probe of the thirteen. Web search on the individual is
+no longer an open question either way: it is built, corroborated, and shipped.
+
+**Measured ceiling, full sweep 2026-08-15: 65 values across 59 contacts** —
+company 36, phone 16, job title 13. Was 46 across 43. The profile tier is 20 of
+the 65 and roughly doubles what she reaches on title and company.
 
 ### 1b. Asana duplicate detection — **still PARKED** (the HubSpot twin is fixed)
 The same defect in `stage_meeting_note` was fixed this evening: the read-only
@@ -330,6 +337,12 @@ one since it shipped; merge and enrichment never did, and
   payload. That is how the toll-free phone number surfaced, and later how `WM`,
   the credential names and the domain-suffix misses surfaced — no fixture would
   have contained any of them, because nobody would think to write one.
+- **HubSpot will accept a write, return success, and store nothing.**
+  `hs_linkedin_url` advertises `readOnlyValue: false` in its own property
+  metadata. Writing to it succeeds and the field stays empty — caught only by
+  reading the contact back. **Property metadata is a claim, not a fact.** Any
+  field added to `SETTABLE_FIELDS` needs a live write-and-read round trip first;
+  company, jobtitle and phone have had one.
 - **A test can encode the bug.** `is_placeholder("WM", field="company")` was
   *asserted true*, with a comment explaining why a two-letter company name could
   not be real. Kory has a contact at Waste Management. When live data contradicts

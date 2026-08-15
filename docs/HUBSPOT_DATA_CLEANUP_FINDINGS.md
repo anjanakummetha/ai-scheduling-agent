@@ -61,6 +61,27 @@ title is.** It asks whether a candidate profile shows a role at the employer
 employer, so the answer is checkable rather than merely plausible. Where nothing
 can corroborate, it refuses and says so.
 
+**What she actually fills, measured by a complete sweep of the book on
+2026-08-15** — not estimated:
+
+| Field | Before the profile tier | Now |
+|---|---:|---:|
+| Company | 26 | **36** |
+| Job title | 4 | **13** |
+| Phone | 16 | **16** |
+| **Total values** | **46** | **65** |
+| **Contacts touched** | **43** | **59** |
+
+Where they come from: HubSpot's own company link 20 · email signatures 20 ·
+**LinkedIn, corroborated 15** · LinkedIn URL already on the record 5 · company
+websites 5.
+
+So the profile tier is about **a third of everything Lexi can fill**, and it
+roughly **doubles** what she reaches on the two fields it addresses — 30 values
+to 49. In book-wide terms that is 28% of the 177 title-and-company gaps, against
+9% for everything before it. An earlier estimate in this document guessed 40%;
+the measured number is lower and this is the one to quote.
+
 Where the gaps actually are, measured across the contacts she can work on:
 
 | Field | Gaps | Reachable | A wall | Why the wall |
