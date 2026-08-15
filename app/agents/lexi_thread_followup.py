@@ -205,16 +205,42 @@ def _try_inbound_time_suggestion(
     }
 
 
+def _truncate_at_word(text: str, limit: int) -> str:
+    """Cut on a word boundary with an ellipsis — a mid-word chop ("I a") reads
+    as a glitch in the Teams card (live 2026-08-13)."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(",;:—-")
+    return f"{cut}…"
+
+
 def _body_preview(body: str, limit: int = 120) -> str:
-    """First substantive line — skip greeting-only lines ('Hi Lexi,')."""
-    for line in (body or "").strip().splitlines():
+    """First substantive sentence-ish chunk — skip greeting-only lines
+    ('Hi Lexi,'), and join hard-wrapped lines so the preview isn't cut at a
+    wrap point."""
+    lines = (body or "").strip().splitlines()
+    started = False
+    collected: list[str] = []
+    for line in lines:
         line = line.strip()
         if not line:
+            if started:
+                break
             continue
-        if re.match(r"^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b[^a-z]*[a-z]*\s*[,!—-]*$", line, re.I):
+        if not started and re.match(
+            r"^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b[^a-z]*[a-z]*\s*[,!—-]*$",
+            line,
+            re.I,
+        ):
             continue
-        return line[:limit]
-    return (body or "").strip().split("\n")[0][:limit]
+        started = True
+        collected.append(line)
+        if sum(len(c) for c in collected) >= limit:
+            break
+    if collected:
+        return _truncate_at_word(" ".join(collected), limit)
+    return _truncate_at_word((body or "").strip(), limit)
 
 
 def _handle_unparsed_followup(
@@ -472,9 +498,32 @@ def _reschedule_booked_meeting(
     }
 
 
+# FYI-grade pings ("new reply on a thread") collapse per proposal: several new
+# messages on one thread in one poll cycle used to fire one card each (live
+# 2026-08-13: one reply split across messages -> three cards in six seconds).
+# Decision-grade kinds (cancel_request, inbound_time_blocked, unparsed_reply)
+# are never suppressed.
+_FYI_PING_KINDS = frozenset({"thread_update"})
+_FYI_PING_COOLDOWN_SECONDS = 900
+_last_fyi_ping: dict[int, float] = {}
+
+
 def _notify_kory_followup(proposal_id: int, *, summary: str, kind: str) -> None:
     if not settings.lexi_teams_enabled:
         return
+    if kind in _FYI_PING_KINDS:
+        import time as _time
+
+        last = _last_fyi_ping.get(proposal_id, 0.0)
+        if _time.time() - last < _FYI_PING_COOLDOWN_SECONDS:
+            logger.info(
+                "Lexi thread follow-up ping (%s) for proposal %s suppressed — "
+                "within the per-thread cooldown window.",
+                kind,
+                proposal_id,
+            )
+            return
+        _last_fyi_ping[proposal_id] = _time.time()
     from app.bot.teams_publisher import schedule_teams_scheduling_guidance_push
 
     schedule_teams_scheduling_guidance_push(proposal_id, summary=summary, force=True)

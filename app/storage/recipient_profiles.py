@@ -251,8 +251,24 @@ def display_name_for_email(email: str | None) -> str:
     try:
         profile = get_recipient_profile(raw) or {}
         stored = str(profile.get("display_name") or "").strip()
-        if stored:
+        if stored and not _looks_like_org_name(stored):
             return stored
     except Exception:  # store unavailable — the address still has to render
         pass
     return humanize_email_local_part(raw)
+
+
+# Signature mining once stored a company footer ("Iconic Founders Group") as a
+# person's display name; first-write-wins made it sticky and every greeting
+# rendered "Hi Iconic,". The writer now refuses org-like candidates, and this
+# read-side guard keeps any already-polluted row from rendering until repaired.
+_ORG_NAME_RE = re.compile(
+    r"\b(group|founders?|llc|inc|corp(oration)?|company|ventures?|capital|"
+    r"partners?|advisors?|team|holdings?|solutions?|services|consulting|"
+    r"associates|agency|enterprises?)\b\.?",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_org_name(name: str) -> bool:
+    return bool(_ORG_NAME_RE.search(name))

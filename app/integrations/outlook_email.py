@@ -1533,6 +1533,19 @@ def _plain_text(body: str) -> str:
     return html.unescape(text)
 
 
+# Company/team wording that must never be stored as a PERSON's display name.
+# The signature scan reads the last lines of a body that can include quoted
+# history, so a colleague's reply once stored "Iconic Founders Group" as the
+# counterpart's name — every later greeting rendered "Hi Iconic," and Teams
+# cards read "From Iconic Founders Group" (live, proposal 9187 hold reminder).
+_ORG_NAME_WORDS = re.compile(
+    r"\b(group|founders?|llc|inc|corp(oration)?|company|co|ventures?|capital|"
+    r"partners?|advisors?|team|holdings?|solutions?|services|consulting|"
+    r"associates|agency|enterprises?|exteriors?|industries)\b\.?",
+    re.IGNORECASE,
+)
+
+
 def _clean_name_candidate(candidate: str) -> str | None:
     cleaned = candidate.strip().strip(",.!-")
     if not cleaned or "@" in cleaned or len(cleaned) > 40:
@@ -1541,6 +1554,8 @@ def _clean_name_candidate(candidate: str) -> str | None:
         return None
     words = cleaned.split()
     if len(words) > 3:
+        return None
+    if _ORG_NAME_WORDS.search(cleaned):
         return None
     return " ".join(word.capitalize() for word in words)
 

@@ -44,11 +44,16 @@ def _release_expired_holds() -> int:
     now = datetime.now(timezone.utc).isoformat()
     count = 0
     released_proposals: set[int] = set()
+    # One proposal's holds expire together — Kory gets ONE message listing all
+    # released slots, not one per slot (live 2026-08-14: a three-slot offer
+    # produced three identical cards).
+    released_info: dict[int, dict[str, Any]] = {}
     with get_lexi_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.id, h.proposal_id, h.event_id, h.slot_start, h.expires_at,
                    p.status AS proposal_status, p.intent_classification,
+                   p.scheduling_note,
                    e.subject, e.sender
             FROM holds AS h
             INNER JOIN proposals AS p ON p.id = h.proposal_id
@@ -92,11 +97,41 @@ def _release_expired_holds() -> int:
                 },
             )
             count += 1
-            released_proposals.add(int(row["proposal_id"]))
-            _maybe_notify_hold_released(row)
+            pid = int(row["proposal_id"])
+            released_proposals.add(pid)
+            info = released_info.setdefault(pid, {"row": row, "slots": []})
+            info["slots"].append(str(row["slot_start"] or ""))
+
+        # A pending 3-day reminder whose holds just expired quotes slots that
+        # no longer exist — approving it would email dead times. Close it out
+        # rather than leaving the stale card actionable (live 2026-08-13:
+        # proposal 9187 sat pending_approval on a destroyed draft).
+        for pid, info in released_info.items():
+            row = info["row"]
+            if (
+                str(row["proposal_status"] or "") == "pending_approval"
+                and str(row["scheduling_note"] or "").startswith("HOLD_REMINDER")
+            ):
+                conn.execute(
+                    "UPDATE proposals SET status = 'rejected', "
+                    "updated_at = datetime('now') WHERE id = ?",
+                    (pid,),
+                )
+                _audit(
+                    conn,
+                    proposal_id=pid,
+                    message=(
+                        "Pending hold-reminder closed: its holds expired and were "
+                        "released, so the reminder's quoted times are gone."
+                    ),
+                    payload={"proposal_id": pid},
+                )
 
         if count:
             conn.commit()
+
+    for pid, info in released_info.items():
+        _maybe_notify_holds_released(info["row"], info["slots"])
 
     # "Release the hold ... and re-remind them at the same time" (HOLD_RULES).
     # Stage the prospect follow-up draft for any offer that expired without a
@@ -185,7 +220,18 @@ def _friday_cleanup_next_week_holds() -> int:
     return count
 
 
-def _maybe_notify_hold_released(row: Any) -> None:
+def _format_released_slot(raw: str) -> str:
+    parsed = _parse_iso(raw)
+    if not parsed:
+        return raw
+    from app.scheduling.busy_intervals import local_dt
+
+    return local_dt(parsed).strftime("%A, %B %-d at %-I:%M %p MT")
+
+
+def _maybe_notify_holds_released(row: Any, slots: list[str]) -> None:
+    """ONE Teams message per proposal, listing every released slot, ending on
+    the decision Kory owns (re-offer or drop) — Teams is for decisions."""
     from app.safety.outbound_guard import teams_push_allowed
 
     if not teams_push_allowed():
@@ -199,15 +245,18 @@ def _maybe_notify_hold_released(row: Any) -> None:
         sender = display_sender(row["sender"] or "unknown")
         held_days = _held_days_for_intent(row["intent_classification"])
         day_word = "day" if held_days == 1 else "days"
+        slot_lines = "\n".join(f"- {_format_released_slot(s)}" for s in slots)
+        slot_word = "slot" if len(slots) == 1 else f"{len(slots)} held slots"
+        pid = int(row["proposal_id"])
         text = (
-            f"**Lexi — hold released (no reply)**\n"
-            f"**{subject}**\n"
-            f"From {sender}\n"
-            f"Slot: {row['slot_start']}\n\n"
-            f"Held {held_days} {day_word} with no response — calendar hold removed. "
-            f"Ask me to re-offer times for **{subject}** from {sender}."
+            f"**Lexi — {subject}: {slot_word} released (no reply from {sender})**\n"
+            f"{slot_lines}\n\n"
+            f"Held {held_days} {day_word} with no response — the calendar holds "
+            f"are removed.\n"
+            f"Want me to re-offer times? Say **retry scheduling #{pid}** — or "
+            f"ignore this to drop it."
         )
-        coro = push_approval_text_to_teams(text, proposal_id=row["proposal_id"])
+        coro = push_approval_text_to_teams(text, proposal_id=pid)
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(coro)

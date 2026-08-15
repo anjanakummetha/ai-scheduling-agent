@@ -38,7 +38,20 @@ def compose_hold_reminder_draft(
     sign_off = kory_rules.EMAIL_RULES.get("sign_off", "Let's Win")
 
     if slots:
-        slot_lines = [format_slot_for_email(slot) for slot in slots[:3]]
+        # Quote the reminder in the same timezone the offer email used —
+        # recipient_timezone was fetched by every caller but never applied,
+        # so an Eastern contact's reminder silently switched to MT.
+        tz = None
+        if recipient_timezone:
+            try:
+                from zoneinfo import ZoneInfo
+
+                tz = ZoneInfo(str(recipient_timezone))
+            except Exception:  # unknown tz label — MT fallback, as before
+                tz = None
+        slot_lines = [
+            format_slot_for_email(slot, recipient_tz=tz) for slot in slots[:3]
+        ]
         options = "\n".join(f"- {line}" for line in slot_lines if line)
         body = (
             f"Hi {first_name},\n\n"
