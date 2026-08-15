@@ -167,3 +167,22 @@ def test_pre_send_gate_passes_clean_proposal():
     ):
         err = _pre_send_slot_gate(proposal)
     assert err is None
+
+
+def test_dual_timezone_offer_lines_pass_send_gate():
+    # The production offer format quotes recipient time first with the zone
+    # label after the range end: "11:00 AM–11:30 AM ET (9:00 AM–9:30 AM MT)".
+    # Live 2026-08-15: the gate misread 11:00 as MT and refused a correct
+    # draft. The label must apply to the range start.
+    draft = (
+        "Hi Anjana,\n\nA few times:\n\n"
+        "• Monday, August 17 at 11:00 AM–11:30 AM ET (9:00 AM–9:30 AM MT)\n"
+        "• Tuesday, August 18 at 11:00 AM–11:30 AM ET (9:00 AM–9:30 AM MT)\n\n"
+        "Would any of these work?"
+    )
+    staged = [
+        {"start": "2026-08-17T09:00:00-06:00", "end": "2026-08-17T09:30:00-06:00"},
+        {"start": "2026-08-18T09:00:00-06:00", "end": "2026-08-18T09:30:00-06:00"},
+    ]
+    ok, err = draft_matches_slots(draft_body=draft, proposed_slots=staged)
+    assert ok, err

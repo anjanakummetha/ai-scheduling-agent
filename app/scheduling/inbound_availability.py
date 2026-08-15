@@ -95,6 +95,20 @@ _SHARED_MERIDIEM_RANGE_RE = re.compile(
 )
 
 
+# "11:00 AM–11:30 AM ET" — the zone label is written once, after the range END,
+# but the parser reads the range START and looks for a label immediately after
+# it, so the ET was lost and the time read as MT (surfaced live 2026-08-15: the
+# send gate refused a correct ET-first offer draft as a slot mismatch).
+# Propagate the trailing label onto the start time.
+_RANGE_TZ_LABEL_RE = re.compile(
+    r"\b(\d{1,2}:\d{2}\s*(?:am|pm))\s*[–—\-]\s*"
+    r"(\d{1,2}:\d{2}\s*(?:am|pm))\s+"
+    r"(et|est|edt|eastern|ct|cst|cdt|central|mt|mst|mdt|mountain"
+    r"|pt|pst|pdt|pacific)\b",
+    re.I,
+)
+
+
 def _normalize_shared_meridiem_ranges(text: str) -> str:
     def _fix(match: re.Match[str]) -> str:
         h1, m1, h2, m2, meridiem = match.groups()
@@ -106,7 +120,8 @@ def _normalize_shared_meridiem_ranges(text: str) -> str:
             f"{h1}:{m1 or '00'} {start_mer} – {h2}:{m2 or '00'} {mer}"
         )
 
-    return _SHARED_MERIDIEM_RANGE_RE.sub(_fix, text)
+    text = _SHARED_MERIDIEM_RANGE_RE.sub(_fix, text)
+    return _RANGE_TZ_LABEL_RE.sub(r"\1 \3 – \2 \3", text)
 
 
 def extract_inbound_time_candidates(body: str, *, reference: datetime | None = None) -> list[dict[str, str]]:
