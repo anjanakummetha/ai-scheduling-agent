@@ -186,7 +186,21 @@ def test_short_job_titles_are_not_placeholders():
     """VP and PM are real titles; flagging them would 'fix' valid data."""
     assert not hm.is_placeholder("VP", field="jobtitle")
     assert not hm.is_placeholder("PM", field="jobtitle")
-    assert hm.is_placeholder("WM", field="company")
+
+
+def test_a_two_letter_company_name_is_not_junk():
+    """This test used to assert the opposite, on the reasoning that a
+    two-letter company name could not be real.
+
+    Kory has a contact at WM — Waste Management — and the rule was quietly
+    offering that company field for overwrite as though it were a placeholder.
+    A wrong 'fix' to correct data is worse than the gap it was chasing.
+    """
+    for real in ("WM", "GE", "3M", "EY", "BP", "HP"):
+        assert not hm.is_placeholder(real, field="company")
+    # Punctuation at the same length is still junk.
+    for junk in ("--", "??", "..", "-", "?"):
+        assert hm.is_placeholder(junk, field="company")
 
 
 # --- failures must never read as "nothing found" ---------------------------

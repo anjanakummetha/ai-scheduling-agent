@@ -132,6 +132,14 @@ def main() -> None:
             print(f"      {k} = {v!r}" + (f"   (replacing {was!r})" if was else "   (was blank)"))
         print(f"      source: {prov.get('subject') or '—'}  [{prov.get('message_id', '')[:24]}]")
 
+    print(f"\n  where they came from: {json.dumps(proposed.get('sources') or {}, default=str)}")
+    for row in proposed.get("not_people") or []:
+        print(f"    NOT A PERSON  {row.get('name')} — {row.get('reason')}")
+    for row in proposed.get("may_have_moved") or []:
+        print(f"    MAY HAVE MOVED  {row.get('reason')}")
+
+    person_tier_decisions(proposed)
+
     if not proposed.get("proposal_count"):
         print("\n  Nothing proposed — skipping apply/undo, the guard section still runs.")
         merge_guard_check(args, staged)
@@ -161,9 +169,21 @@ def main() -> None:
     for r in rows[:10]:
         print(f"    contact {r['contact_id']}  {r['field']}: {r['old_value']!r} -> {r['new_value']!r}")
 
-    rule("5. Undo — the payloads that WOULD restore them")
+    rule("5a. Undo — the re-check, which must refuse here")
+    # The writes above were intercepted, so HubSpot still reads blank. That is
+    # exactly the shape of "someone changed it after we wrote it", and the undo
+    # is supposed to leave those alone. A rehearsal that quietly restored them
+    # would be hiding the guard rather than proving it.
+    guarded = hs.revert_hubspot_batch(batch_id=batch_id, approved=True)
+    print(f"  reverted: {guarded.get('reverted')}  "
+          f"left alone: {len(guarded.get('skipped_changed_since') or [])}")
+    for row in (guarded.get("skipped_changed_since") or [])[:5]:
+        print(f"    {row.get('name')}  {row['field']}: now {row['now']!r}, we wrote {row['we_wrote']!r}")
+    assert guarded.get("reverted") == 0, "the undo re-check did not fire"
+
+    rule("5b. Undo — forced, the payloads that WOULD restore them")
     before = len(intercepted)
-    undone = hs.revert_hubspot_batch(batch_id=batch_id, approved=True)
+    undone = hs.revert_hubspot_batch(batch_id=batch_id, approved=True, force=True)
     print(f"  result: {json.dumps(undone, default=str)}")
     for slug, payload in intercepted[before:]:
         print(f"    {slug}  {json.dumps(payload, default=str)}")
@@ -176,6 +196,51 @@ def main() -> None:
     rule("RESULT")
     print(f"  {len(intercepted)} write(s) intercepted. HubSpot was not modified.")
     assert all(slug in WRITE_SLUGS for slug, _ in intercepted)
+
+
+def person_tier_decisions(proposed: dict[str, Any]) -> None:
+    """Show the profile tier's reasoning on contacts it could not resolve.
+
+    The accepts are visible in the proposals above. The refusals are the part
+    worth watching, because a refusal that fires for the wrong reason looks
+    identical to one that fires for the right reason — and a *missing* refusal
+    is how somebody else's job title ends up in the shared CRM.
+    """
+    import app.integrations.hubspot_person_lookup as pl
+
+    unresolved = [r for r in (proposed.get("needs_research") or []) if r.get("corporate_domain")]
+    if not unresolved:
+        return
+    rule("2b. Profile tier — why each unresolved contact was refused")
+    print(f"  {len(unresolved)} on a company domain; opening the first 8\n")
+    for row in unresolved[:8]:
+        name, email = str(row.get("name") or ""), str(row.get("email") or "")
+        domain = row.get("domain") or ""
+        blocked = pl.non_person_reason(name, email)
+        if blocked:
+            print(f"  {name or email}\n      refused before any lookup: {blocked}")
+            continue
+        urls = pl.find_profile_urls(name, domain)
+        if not urls:
+            print(f"  {name} @ {domain}\n      no LinkedIn profile found at all")
+            continue
+        print(f"  {name} @ {domain}")
+        for url in urls[:pl.MAX_CANDIDATES]:
+            entity = pl.fetch_person(url)
+            if not entity:
+                print(f"      {url} — no structured record behind it")
+                continue
+            verdict = pl.compare_names(name, entity.get("name"))
+            role = pl.role_at_known_employer(entity, domain=domain)
+            employers = sorted({
+                str((w.get("company") or {}).get("name") or "")
+                for w in (entity.get("workHistory") or [])
+                if isinstance(w, dict) and (w.get("company") or {}).get("name")
+            })
+            print(f"      {url}")
+            print(f"        profile name : {entity.get('name')!r}  -> {'same person' if verdict.get('match') else verdict.get('reason')}")
+            print(f"        employers    : {employers[:4]}")
+            print(f"        role at {domain}: {role['title'] if role else 'NONE — refused'}")
 
 
 def merge_guard_check(args: argparse.Namespace, staged: list[str] | None = None) -> None:

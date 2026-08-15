@@ -95,7 +95,10 @@ def _truthy(raw: Any) -> bool:
     return str(raw).strip().lower() in {"true", "1", "yes"}
 
 
-# Short but legitimate — a two-letter job title is normal, a two-letter company is not.
+# Short but legitimate. Two-letter job titles are normal, and so are two-letter
+# company names — WM, GE, 3M, EY, BP. An earlier version of this file asserted
+# the opposite in a comment; Kory has a contact at WM, whose company field was
+# being offered for overwrite as though it were junk.
 _REAL_SHORT_TITLES = {"vp", "pm", "gm", "md", "cf", "ce", "hr", "it", "pa", "ea"}
 
 
@@ -115,9 +118,15 @@ def is_placeholder(value: Any, *, field: str = "") -> bool:
     normalized = re.sub(r"\s+", " ", re.sub(r"[^\w\s/?.*#—–-]", " ", text)).strip(" .,")
     if _PLACEHOLDER_RE.match(normalized):
         return True
-    if len(text) <= 2:
-        # "VP" is a real title; "WM" as a company name is not.
-        return not (field == "jobtitle" and text.lower() in _REAL_SHORT_TITLES)
+    if len(text) <= 1:
+        return True
+    if len(text) == 2:
+        if field == "jobtitle":
+            return text.lower() not in _REAL_SHORT_TITLES
+        # Letters or digits are a plausible short company name; anything else at
+        # this length is punctuation, and the patterns above already caught the
+        # ones that spell something.
+        return not text.isalnum()
     return False
 
 
@@ -1019,6 +1028,17 @@ ENRICH_TIME_BUDGET_SEC = 70
 # the same. `clear_enrichment_check_cache()` is the way back.
 ENRICH_MISS_TTL_DAYS = 14
 
+# How many contacts per batch may have a LinkedIn profile *searched* for. A
+# contact that already carries a URL is exempt: that path is one fetch, and it
+# serves the placeholder records nothing else can touch. Measured live — an
+# unrationed batch spent its whole 70-second budget on four contacts.
+PERSON_SEARCH_MAX_PER_BATCH = 6
+
+# Share of the batch budget the company tiers may spend before the inbox and
+# profile tiers get their turn. They are the most certain sources, so they go
+# first — but "first" must not mean "all of it".
+PHASE1_BUDGET_SHARE = 0.55
+
 
 def _ensure_enrichment_checks_table(conn: Any) -> None:
     conn.execute(
@@ -1197,6 +1217,12 @@ def propose_field_enrichment(
     already_checked = _recently_checked_contacts()
     fresh = [c for c in contacts if str(c.get("id") or "") not in already_checked]
     skipped_known = len(contacts) - len(fresh)
+    # Contacts that already carry a LinkedIn URL go first. Resolving one of those
+    # is a single fetch instead of a search plus two, and they are also the group
+    # nothing else can reach — the "Prefer No Connection to Company" records came
+    # from LinkedIn, so they have a URL and no employer. Cheapest and highest
+    # yield in the same sort key.
+    fresh.sort(key=lambda c: 0 if str(c.get("hs_linkedin_url") or "").strip() else 1)
     queue = fresh[:batch]
     remaining = len(fresh) - len(queue)
 
@@ -1210,6 +1236,7 @@ def propose_field_enrichment(
     no_source: list[dict[str, Any]] = []
     not_people: list[dict[str, Any]] = []
     may_have_moved: list[dict[str, Any]] = []
+    needs_your_call: list[dict[str, Any]] = []
     checked_ids: list[str] = []
     ran_out_of_time = False
     started = time.monotonic()
@@ -1220,11 +1247,18 @@ def propose_field_enrichment(
     # lookups are cached, so this runs to completion before any time is spent on
     # the inbox. Doing it per-contact inside the expensive loop meant the time
     # limit cut off contacts whose employer HubSpot already knew.
+    #
+    # Bounded to part of the budget. Its last tier fetches a company website,
+    # which is as slow as anything downstream, and left unbounded it consumed
+    # the whole batch — measured live, twenty candidates spent seventy seconds
+    # here and three contacts reached the inbox. The tiers below have to be
+    # reachable or they may as well not exist.
     found_company: dict[str, dict[str, Any]] = {}
+    phase1_deadline = time_budget_seconds * PHASE1_BUDGET_SHARE
     for contact in queue:
         if not _needs_filling(contact, "company"):
             continue
-        if time.monotonic() - started > time_budget_seconds:
+        if time.monotonic() - started > phase1_deadline:
             ran_out_of_time = True
             break
         try:
@@ -1238,6 +1272,7 @@ def propose_field_enrichment(
 
     # Phase 2 — the inbox, for whatever is still missing.
     checked = 0
+    searches_done = 0
     for contact in queue:
         cid = str(contact.get("id") or "")
         fields: dict[str, str] = {}
@@ -1309,7 +1344,19 @@ def propose_field_enrichment(
             known_company = ""
         unresolved = [f for f in ("company", "jobtitle") if f not in fields and _needs_filling(contact, f)]
         not_a_person = False
-        if use_person_lookup and unresolved and time.monotonic() - started <= time_budget_seconds:
+        # A profile already on the record costs one fetch; finding one costs a
+        # search and up to two more. Only the expensive path is rationed, or a
+        # single slow batch starves the contacts this tier exists to serve.
+        on_record = bool(str(contact.get("hs_linkedin_url") or "").strip())
+        affordable = on_record or searches_done < PERSON_SEARCH_MAX_PER_BATCH
+        if not on_record:
+            searches_done += 1
+        if (
+            use_person_lookup
+            and unresolved
+            and affordable
+            and time.monotonic() - started <= time_budget_seconds
+        ):
             try:
                 person = person_lookup.resolve_person(contact, known_company=known_company)
             except Exception:
@@ -1329,14 +1376,15 @@ def propose_field_enrichment(
                         "reason": person.get("reason"),
                     }
                 )
-            elif skip == "may_have_moved":
-                may_have_moved.append(
+            elif skip in {"may_have_moved", "several_current_roles"}:
+                (may_have_moved if skip == "may_have_moved" else needs_your_call).append(
                     {
                         "contact_id": contact.get("id"),
                         "name": contact.get("name"),
                         "email": email,
                         "reason": person.get("reason"),
                         "profile_url": person.get("profile_url"),
+                        "options": person.get("options") or [],
                     }
                 )
             elif person:
@@ -1454,6 +1502,14 @@ def propose_field_enrichment(
         for row in may_have_moved[:5]:
             lines.append(f"• {row.get('reason')}")
 
+    if needs_your_call:
+        lines.append(
+            f"\n**{len(needs_your_call)} hold more than one role right now** and nothing on "
+            "the record says which one you deal with them in. Tell me which and I'll fill it:"
+        )
+        for row in needs_your_call[:5]:
+            lines.append(f"• {row.get('reason')}")
+
     # Say plainly what could not be established. This must stay accurate about
     # what Lexi can actually reach: she *does* look people up now, but only
     # where a candidate profile can be corroborated against the employer already
@@ -1501,6 +1557,7 @@ def propose_field_enrichment(
         "no_source_count": len(no_source),
         "not_people": not_people,
         "may_have_moved": may_have_moved,
+        "needs_your_call": needs_your_call,
         "placeholder_replacements": junk_fixes,
         "sources": dict(by_source),
         "checked": checked,
@@ -1519,6 +1576,7 @@ _SOURCE_LABELS = {
     "kory_book_consensus": "your other contacts at that domain",
     "outlook_signature": "their email signature",
     "linkedin_profile_corroborated": "their LinkedIn profile, matched on the employer you already had",
+    "linkedin_profile_on_record": "the LinkedIn profile already on their contact record",
 }
 
 

@@ -167,11 +167,29 @@ def reset_cache() -> None:
 # --- identity ---------------------------------------------------------------
 
 
+# Letters people append to (and occasionally prepend to) their own name. Found
+# live: HubSpot holds "Jason Buesing PE", and the profile for James Hite comes
+# back as "CRIS James Hite" — his construction-risk credential parsed into the
+# first-name field. Left in place, both read as a different human.
+_CREDENTIALS = frozenset(
+    {
+        "jr", "sr", "ii", "iii", "iv", "v",
+        "md", "phd", "cpa", "esq", "pe", "cris", "pmp", "mba", "jd", "cfa",
+        "rn", "leed", "aia", "pls", "cfp", "clu", "chfc", "arm", "cic", "crm",
+        "cpcu", "aic", "se", "pls", "gri", "ccim", "sior", "cbi", "ea", "cma",
+        "cissp", "msn", "dds", "dvm", "do", "od", "lutcf", "cebs", "shrm",
+    }
+)
+
+
 def _tokens(name: Any) -> list[str]:
-    """Name words, lowercased, punctuation dropped, suffixes removed."""
+    """Name words, lowercased, punctuation dropped, credentials removed."""
     raw = re.sub(r"[^a-z\s'\-]", " ", str(name or "").lower())
     parts = [p.strip("'-") for p in raw.split() if p.strip("'-")]
-    return [p for p in parts if p not in {"jr", "sr", "ii", "iii", "iv", "md", "phd", "cpa", "esq"}]
+    stripped = [p for p in parts if p not in _CREDENTIALS]
+    # Only if something is left. "CPA" alone is a bad record, not a nameless one,
+    # and the caller needs to see it has too few words rather than none.
+    return stripped or parts
 
 
 def non_person_reason(name: Any, email: Any = "") -> str:
@@ -286,30 +304,88 @@ def _company_key(name: Any) -> str:
     return _key(stripped) or _key(name)
 
 
+# Tokens a company bolts onto its domain that carry no identity: mccombshq.com
+# is McCombs, skygroup-co.com is Sky Group. Stripped only when what remains is
+# still long enough to identify somebody.
+_DOMAIN_NOISE = (
+    "hq", "inc", "llc", "corp", "co", "company", "group", "holdings", "usa",
+    "online", "global", "intl", "international", "team", "app", "io", "hub",
+)
+# A key has to be this long before *containment* counts, or a stripped stub
+# matches half the companies in the book. Exact equality is held to a lower bar:
+# "ima" is the whole identity of IMA Financial Group, and imacorp.com is how they
+# write it. Three characters that match exactly, on a contact whose name already
+# matched, is corroboration; three characters found inside a longer name is not.
+_MIN_KEY = 4
+_MIN_EXACT_KEY = 3
+
+
+def _company_keys(name: Any) -> set[str]:
+    """Every form of a company name worth comparing a domain against."""
+    text = str(name or "")
+    keys = {_company_key(text), _key(text)}
+    words = [w for w in re.split(r"[^a-z0-9]+", _COMPANY_NOISE.sub(" ", text).lower()) if w]
+    if words:
+        keys.add(words[0])
+        keys.add("".join(words[:2]))
+    return {k for k in keys if k}
+
+
+def _domain_keys(domain: str) -> set[str]:
+    """The identifying part of a hostname, with and without bolt-on suffixes."""
+    labels = [p for p in str(domain or "").lower().split(".") if p]
+    if len(labels) < 2:
+        return set()
+    # The label before the TLD: mail.acme.com -> acme, mccombshq.com -> mccombshq.
+    base = labels[-2]
+    parts = [p for p in re.split(r"[^a-z0-9]+", base) if p]
+    keys = {"".join(parts)}
+    # Drop trailing noise words when the domain is hyphenated (skygroup-co).
+    trimmed = list(parts)
+    while len(trimmed) > 1 and trimmed[-1] in _DOMAIN_NOISE:
+        trimmed.pop()
+    keys.add("".join(trimmed))
+    # And when it is not (mccombshq -> mccombs).
+    for key in list(keys):
+        for suffix in _DOMAIN_NOISE:
+            if key.endswith(suffix) and len(key) - len(suffix) >= _MIN_EXACT_KEY:
+                keys.add(key[: -len(suffix)])
+    return {k for k in keys if len(k) >= _MIN_EXACT_KEY}
+
+
 def employer_matches(profile_company: Any, *, known_company: str = "", domain: str = "") -> str:
     """How this profile employer corroborates what we already knew, or "".
 
     Two independent routes, either of which is enough: the name we already hold,
     or the domain the contact's email came from. The domain route is the reason
-    "Holmes Murphy & Associates" can corroborate holmesmurphy.com.
+    "Holmes Murphy & Associates" can corroborate holmesmurphy.com, and why
+    "McCombs Enterprises" corroborates mccombshq.com.
     """
-    prof_key = _company_key(profile_company)
-    if not prof_key:
+    label = str(profile_company).strip()
+    prof_keys = _company_keys(profile_company)
+    if not prof_keys:
         return ""
 
     if known_company:
-        known_key = _company_key(known_company)
-        if known_key and (known_key == prof_key or known_key in prof_key or prof_key in known_key):
-            return f"their profile lists {str(profile_company).strip()}, which is the employer already on the record"
+        for known in _company_keys(known_company):
+            if len(known) < 3:
+                continue
+            if any(known == p or known in p or p in known for p in prof_keys if len(p) >= 3):
+                return f"their profile lists {label}, which is the employer already on the record"
 
     if domain and domain not in FREE_MAIL_DOMAINS:
-        domain_key = _key(domain.rpartition(".")[0])
-        if domain_key and (domain_key in prof_key or prof_key in domain_key):
-            return f"their profile lists {str(profile_company).strip()}, which matches their email domain {domain}"
+        dom_keys = _domain_keys(domain)
+        # Exact first, because it tolerates short keys: imacorp.com -> "ima",
+        # which is exactly what IMA Financial Group is called.
+        if any(dom == p for dom in dom_keys for p in prof_keys):
+            return f"their profile lists {label}, which matches their email domain {domain}"
+        for dom in (d for d in dom_keys if len(d) >= _MIN_KEY):
+            if any(dom in p or p in dom for p in prof_keys if len(p) >= _MIN_KEY):
+                return f"their profile lists {label}, which matches their email domain {domain}"
         # Or the domain is an acronym of the company words.
-        words = [w for w in re.split(r"[^a-z0-9]+", _COMPANY_NOISE.sub(" ", str(profile_company)).lower()) if w]
-        if words and "".join(w[0] for w in words) == domain_key:
-            return f"their profile lists {str(profile_company).strip()}, whose initials are their email domain {domain}"
+        words = [w for w in re.split(r"[^a-z0-9]+", _COMPANY_NOISE.sub(" ", label).lower()) if w]
+        if words and dom_keys and "".join(w[0] for w in words) in dom_keys:
+            return f"their profile lists {label}, whose initials are their email domain {domain}"
     return ""
 
 
@@ -423,6 +499,23 @@ def fetch_person(url: str) -> dict[str, Any] | None:
 # --- the whole thing --------------------------------------------------------
 
 
+def current_roles(entity: dict[str, Any], *, today: date | None = None) -> list[dict[str, str]]:
+    """Roles with no end date — the jobs this person still holds."""
+    today = today or date.today()
+    out: list[dict[str, str]] = []
+    for work in entity.get("workHistory") or []:
+        if not isinstance(work, dict):
+            continue
+        company = (work.get("company") or {}).get("name") if isinstance(work.get("company"), dict) else None
+        title = str(work.get("title") or "").strip()
+        if not company or not title or _NON_EMPLOYMENT_TITLES.match(title):
+            continue
+        ended = _ended(work.get("dates"))
+        if ended is None or ended >= today:
+            out.append({"title": title, "company": str(company).strip()})
+    return out
+
+
 def resolve_person(
     contact: dict[str, Any],
     *,
@@ -433,8 +526,15 @@ def resolve_person(
     """A defensible job title for this contact, or None. Never a guess.
 
     Returns ``{"fields": {...}, "evidence": {...}}`` shaped for the enrichment
-    proposal path, or a ``{"skip": reason}`` marker for records that are not
-    people -- those are a finding in their own right, not a failed lookup.
+    proposal path, or a ``{"skip": reason}`` marker -- a shared mailbox, someone
+    who has changed jobs, or a person holding several roles at once are findings
+    in their own right, not failed lookups.
+
+    Two ways in. If HubSpot already holds a LinkedIn URL for this contact, that
+    is the first candidate and no search is needed — but it is *not* taken on
+    trust. Measured live: Phil Holland's stored URL resolves to Brian Holland,
+    the same class of bad match Sales Navigator made on Thomas Heckler. The
+    name check is what stands between that and a wrong job title.
     """
     name = str(contact.get("name") or "").strip()
     email = str(contact.get("email") or "").strip()
@@ -445,13 +545,22 @@ def resolve_person(
         return {"skip": "not_a_person", "reason": blocked}
 
     anchor = known_company or (domain if domain and domain not in FREE_MAIL_DOMAINS else "")
-    if not anchor:
-        # Nothing to check an answer against. A personal address with no
-        # employer on file is exactly the case where a confident wrong title
-        # would sail straight through.
+    on_record = str(contact.get("hs_linkedin_url") or "").strip()
+
+    candidates: list[str] = []
+    if on_record.lower().rstrip("/").find("linkedin.com/in/") != -1:
+        candidates.append(on_record.rstrip("/"))
+    if anchor:
+        for url in find_profile_urls(name, anchor)[:max_candidates]:
+            if url.lower() not in {c.lower() for c in candidates}:
+                candidates.append(url)
+    if not candidates:
+        # Nothing to check an answer against and no URL on file. A personal
+        # address with no employer is exactly the case where a confident wrong
+        # title would sail straight through.
         return None
 
-    for url in find_profile_urls(name, anchor)[:max_candidates]:
+    for url in candidates:
         entity = fetch_person(url)
         if not entity:
             continue
@@ -462,7 +571,52 @@ def resolve_person(
             entity, known_company=known_company, domain=domain, today=today
         )
         if not role:
-            continue
+            if anchor or url != candidates[0]:
+                # We had something to corroborate against and the profile did
+                # not carry it. That is a contradiction, not a gap.
+                continue
+            # No employer on file, no usable domain — but HubSpot itself put
+            # this URL on this contact and the name matches. Identity rests on
+            # those two facts, which is weaker than a corroborated employer and
+            # is labelled as such rather than blended in with it.
+            held = current_roles(entity, today=today)
+            if len(held) != 1:
+                if not held:
+                    continue
+                return {
+                    "skip": "several_current_roles",
+                    "reason": (
+                        f"{name} lists {len(held)} current roles — "
+                        + ", ".join(f"{r['title']} at {r['company']}" for r in held[:3])
+                        + ". I can't tell which one belongs on the record."
+                    ),
+                    "profile_url": url,
+                    "options": held,
+                }
+            only = held[0]
+            fields = {"jobtitle": only["title"], "company": only["company"]}
+            fields = {k: v for k, v in fields.items() if v}
+            detail = (
+                f"HubSpot already has this LinkedIn URL on the contact and the name "
+                f"matches; the profile shows one current role, {only['title']} at "
+                f"{only['company']} ({url}). Not independently corroborated — there is "
+                "no employer on the record to check it against."
+            )
+            if verdict.get("note"):
+                detail += f" {verdict['note']}."
+            return {
+                "fields": fields,
+                "evidence": {
+                    k: {
+                        "source": "linkedin_profile_on_record",
+                        "detail": detail,
+                        "confidence": "on_record",
+                        "profile_url": url,
+                    }
+                    for k in fields
+                },
+                "profile_url": url,
+            }
         if not role["current"]:
             # They have left. Writing the old title would make a stale record
             # look freshly confirmed, which is worse than the blank.
