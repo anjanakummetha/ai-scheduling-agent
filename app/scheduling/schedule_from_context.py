@@ -188,7 +188,9 @@ def schedule_from_context(
         intent=intent,
         use_llm=llm_plan,
     )
-    plan.kory_guidance = (kory_scheduling_guidance or "").strip()
+    from app.scheduling.scheduling_plan import apply_guidance_window
+
+    apply_guidance_window(plan, kory_scheduling_guidance)
     # The travel shift is desired behavior (V-3: don't book travel weeks), but
     # it must not be SILENT: it replaces the sender's window before the engine
     # runs, so the gate honestly reports slots "in window" and no expansion
@@ -218,11 +220,15 @@ def schedule_from_context(
     inbound_notes: list[str] = []
     if try_inbound_availability and body_looks_like_inbound_availability(scheduling_body):
         inbound = _try_inbound_slots(
-            scheduling_body,
+            body,  # the SENDER's text only — see guidance handling below
+            guidance=kory_scheduling_guidance,
             calendar_context=calendar_context,
             intent=intent,
             subject=subj,
             plan=plan,
+            # Unlabeled inbound times are written in the sender's own zone —
+            # but only when detection is confident; uncertain stays MT.
+            default_tz=(tz_result.tz_name() if not uncertain_tz else None),
         )
         if inbound and inbound.ok:
             inbound.recipient_timezone = tz_result.tz_name()
@@ -387,17 +393,32 @@ def schedule_from_context(
 def _try_inbound_slots(
     body: str,
     *,
+    guidance: str = "",
     calendar_context: dict[str, Any],
     intent: str | None,
     subject: str,
     plan: Any = None,
+    default_tz: str | None = None,
 ) -> ScheduleFromContextResult | None:
     from app.scheduling.inbound_availability import (
         extract_inbound_time_candidates,
         validate_inbound_candidates,
     )
 
-    candidates = extract_inbound_time_candidates(body)
+    # Sender candidates come from the sender's text alone. Kory's guidance
+    # contributes a candidate ONLY when he names an explicit clock time
+    # ("offer Monday 10:30 only" — live H-4); constraint-only guidance
+    # ("Tuesday or Wednesday, 45 minutes, afternoon") used to be parsed out
+    # of the merged body as if the SENDER had proposed those times, staging a
+    # phantom 9 AM default instead of running the engine with constraints.
+    candidates = extract_inbound_time_candidates(body, default_tz=default_tz)
+    if guidance.strip():
+        seen = {c["start"] for c in candidates}
+        for cand in extract_inbound_time_candidates(
+            guidance, include_flags=True  # Kory writes MT — no sender tz here
+        ):
+            if cand.pop("explicit_time", False) and cand["start"] not in seen:
+                candidates.append(cand)
     if not candidates:
         return None
 

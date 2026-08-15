@@ -52,7 +52,8 @@ def try_handle_recipient_slot_reply(raw_email: dict[str, Any]) -> dict[str, Any]
         )
 
         if body_looks_like_inbound_availability(body) and extract_inbound_time_candidates(
-            body
+            body,
+            default_tz=str(proposal.get("recipient_timezone") or "") or None,
         ):
             # "None of those work — could we do Monday at 1 instead?" is a
             # COUNTER-PROPOSAL, not a plain rejection: hand it to the
@@ -81,7 +82,12 @@ def try_handle_recipient_slot_reply(raw_email: dict[str, Any]) -> dict[str, Any]
             "message": "Recipient said offered times do not work — notified Kory.",
         }
 
-    chosen = match_recipient_slot_choice(body, slots, sender_email=sender)
+    chosen = match_recipient_slot_choice(
+        body,
+        slots,
+        sender_email=sender,
+        recipient_tz=str(proposal.get("recipient_timezone") or "") or None,
+    )
     if not chosen:
         logger.info(
             "Reply on offer_sent proposal %s but no slot match yet.",
@@ -129,6 +135,7 @@ def _find_offer_sent_proposal(
                 SELECT
                     p.id AS proposal_id,
                     p.proposed_slots,
+                    p.recipient_timezone,
                     p.intent_classification,
                     e.sender,
                     e.subject
@@ -152,6 +159,7 @@ def _find_offer_sent_proposal(
             SELECT
                 p.id AS proposal_id,
                 p.proposed_slots,
+                p.recipient_timezone,
                 p.intent_classification,
                 e.sender,
                 e.subject

@@ -159,6 +159,16 @@ def verify_before_kory_approval(
         body=body,
         plan_duration_minutes=(plan.duration_minutes if plan else None),
     )
+    # Kory's directive beats the meeting-type default: "make it 45 minutes"
+    # re-sizes the engine's slots, and the gate must expect the size he asked
+    # for — this check used to refuse the very slots his guidance produced
+    # (gate_blocked "block is 45 min; expected 30 min" class, live 24h audit).
+    if plan is not None and getattr(plan, "kory_guidance", ""):
+        from app.scheduling.calendar_intelligence import parse_duration_from_text
+
+        guided = parse_duration_from_text(plan.kory_guidance)
+        if guided:
+            expected_block = guided
 
     for index, slot in enumerate(slots, start=1):
         if slot_conflicts_busy(slot, busy):

@@ -63,6 +63,27 @@ class SchedulingPlan:
     kory_guidance: str = ""
 
 
+def apply_guidance_window(plan: "SchedulingPlan", guidance: str) -> "SchedulingPlan":
+    """Kory's guidance window beats the sender's ("offer the week of Aug 24
+    instead" vs the email's "next week"). The merged body contains both
+    phrases and the sender's used to win, staging slots in the very week Kory
+    had just steered away from. Applied at plan level — not inside the
+    engine — so the fallback ladder can still widen FROM the guidance week."""
+    guidance = (guidance or "").strip()
+    plan.kory_guidance = guidance
+    if not guidance:
+        return plan
+    window = infer_scheduling_window(subject="", body=guidance)
+    if window is not None:
+        plan.window = SchedulingWindow(
+            start=window.start,
+            end=window.end,
+            source="kory_guidance",
+            label=window.label,
+        )
+    return plan
+
+
 def build_scheduling_plan(
     *,
     subject: str = "",

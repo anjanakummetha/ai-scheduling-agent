@@ -114,7 +114,9 @@ def refresh_proposal_scheduling_offer(
         intent=intent,
         use_llm=bool(settings.llm_api_key),
     )
-    plan.kory_guidance = guidance
+    from app.scheduling.scheduling_plan import apply_guidance_window
+
+    apply_guidance_window(plan, guidance)
     if plan.task_type != "offer_times":
         return proposal_record, True
 

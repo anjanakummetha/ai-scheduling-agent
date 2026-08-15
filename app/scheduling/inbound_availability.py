@@ -62,6 +62,10 @@ def _default_hour_from_body(text: str) -> int | None:
 # parsed as the sender's newly-proposed availability.
 _QUOTE_CUT_MARKERS = (
     re.compile(r"^\s*on\b.{0,200}\bwrote:\s*$", re.I | re.M),
+    # Gmail wraps long attributions across two lines ("On Thu, Jul 24 ... Lexi
+    # Knightly\n<lexi@...> wrote:") — the one-line pattern missed them and the
+    # attribution's own date/time was mined as the sender's proposal (B9).
+    re.compile(r"^\s*on\b[^\n]{0,200}\n[^\n]{0,120}\bwrote:\s*$", re.I | re.M),
     re.compile(r"^-{2,}\s*original message\s*-{2,}", re.I | re.M),
     re.compile(r"^\s*from:\s.+$", re.I | re.M),
     re.compile(r"^_{5,}\s*$", re.M),
@@ -124,11 +128,61 @@ def _normalize_shared_meridiem_ranges(text: str) -> str:
     return _RANGE_TZ_LABEL_RE.sub(r"\1 \3 – \2 \3", text)
 
 
-def extract_inbound_time_candidates(body: str, *, reference: datetime | None = None) -> list[dict[str, str]]:
-    """Heuristic parse of prospect-proposed times from email body."""
+def _writing_zone(default_tz: str | None) -> ZoneInfo:
+    """Zone an unlabeled time is written in: the sender's stored zone, else MT."""
+    if default_tz:
+        try:
+            return ZoneInfo(str(default_tz))
+        except Exception:  # noqa: BLE001 — junk stored tz must not break parsing
+            pass
+    return MT
+
+
+# "at 2" / "around 3:30" — a clock time with no meridiem. Only trusted when
+# anchored by at/around (bare numbers are usually counts, suite numbers, or
+# fractions), and never when a slash/colon/digit follows (dates, scores).
+_BARE_HOUR_RE = re.compile(
+    r"\b(at|around)\s+(\d{1,2})(:\d{2})?\b(?!\s*(?:am|pm|a\.m|p\.m|[:./\d-]))",
+    re.I,
+)
+
+
+def _infer_bare_hour_meridiem(text: str) -> str:
+    """Rewrite 'at 2' as 'at 2 pm' (business-hours reading: 1–7 → PM, 8–11 →
+    AM, 12 → PM) so the meridiem-requiring time regex sees it. 'Wednesday at 2
+    works' used to DROP the 2 and substitute a 9 AM default (audit B9)."""
+
+    def _fix(match: re.Match[str]) -> str:
+        anchor, hour_s, minute_s = match.group(1), match.group(2), match.group(3) or ""
+        hour = int(hour_s)
+        if not 1 <= hour <= 12:
+            return match.group(0)
+        meridiem = "pm" if (1 <= hour <= 7 or hour == 12) else "am"
+        return f"{anchor} {hour_s}{minute_s} {meridiem}"
+
+    return _BARE_HOUR_RE.sub(_fix, text)
+
+
+def extract_inbound_time_candidates(
+    body: str,
+    *,
+    reference: datetime | None = None,
+    default_tz: str | None = None,
+    include_flags: bool = False,
+) -> list[dict[str, str]]:
+    """Heuristic parse of prospect-proposed times from email body.
+
+    default_tz is the sender's stored timezone: an unlabeled "Thursday at 2"
+    from a Boston counterpart means 2 PM Eastern, not 2 PM MT — the offer email
+    rendered their zone first, so their reply is in it. An explicit zone label
+    next to the time still wins. Output slots are always MT ISO strings.
+    """
     now = (reference or datetime.now(tz=MT)).astimezone(MT)
+    zone = _writing_zone(default_tz)
     # Parse only the sender's new text — quoted history leaks stray dates/times.
-    text = _normalize_shared_meridiem_ranges(strip_quoted_reply(body))
+    text = _infer_bare_hour_meridiem(
+        _normalize_shared_meridiem_ranges(strip_quoted_reply(body))
+    )
     prefer_next_week = bool(re.search(r"\bnext\s+week\b", text, re.I))
     tod_hour = _default_hour_from_body(text)
     # A date named with no clock time (e.g. "August 25th") only becomes a candidate
@@ -160,25 +214,36 @@ def extract_inbound_time_candidates(body: str, *, reference: datetime | None = N
         ("weekday", re.compile(
             r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\b"
             rf"(?!\s*,?\s*(?:\d{{1,2}}/\d{{1,2}}|(?:{month_alt})\.?\s+\d))"
-            rf"(?:[^.\n]{{0,40}}?{time_re})?"
-            r"(?:\s*(?:mt|mst|mdt|mountain|mountain\s+time))?", re.I)),
-        # Numeric date: "8/25 at 9am".
+            rf"(?:[^.\n]{{0,40}}?{time_re})?", re.I)),
+        # Time first, day second: "3pm on Wednesday" / "2 PM next Tuesday".
+        ("time_weekday", re.compile(
+            rf"{time_re}\s+(?:on\s+|this\s+|next\s+)?"
+            r"(Monday|Tuesday|Wednesday|Thursday|Friday|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\b",
+            re.I)),
+        # Numeric date: "8/25 at 9am". "1/2 hour call at 3pm" is a duration
+        # fraction, not January 2 (audit B9) — the lookahead refuses it.
         ("mdy", re.compile(
-            rf"\b(\d{{1,2}})/(\d{{1,2}})(?:/(\d{{2,4}}))?(?:[^.\n]{{0,20}}?{time_re})?", re.I)),
+            rf"\b(\d{{1,2}})/(\d{{1,2}})(?!\s*(?:hour|hr)s?\b)"
+            rf"(?:/(\d{{2,4}}))?(?:[^.\n]{{0,20}}?{time_re})?", re.I)),
     ]
 
     for kind, pattern in patterns:
         for match in pattern.finditer(text):
+            if _refers_to_past_meeting(text, match.start()):
+                # "Great talking Monday at 3, how about Friday at 2?" — the
+                # Monday is the call that already HAPPENED; parsing it made
+                # next Monday 3pm a bookable candidate (audit B9).
+                continue
             slot = _match_to_slot(match, now=now, kind=kind,
                                   prefer_next_week=prefer_next_week, tod_hour=tod_hour,
-                                  date_only_default=date_only_default)
+                                  date_only_default=date_only_default, zone=zone)
             _add(slot)
             if slot:
                 # Continuation times share the named day: "Monday August 17 at
                 # 10:30 AM MT and 3:30 PM MT" is TWO candidates (live H-4 —
                 # the second time was silently dropped).
                 for cont in _continuation_times(text[match.end():match.end() + 60]):
-                    _add(_slot_at_same_day(slot, cont))
+                    _add(_slot_at_same_day(slot, cont, zone=zone))
             if len(candidates) >= 5:
                 break
     # "That Monday doesn't work, but Tuesday at 3:30 PM ET?" — the bare
@@ -186,22 +251,40 @@ def extract_inbound_time_candidates(body: str, *, reference: datetime | None = N
     # candidate carries an explicit clock time, defaulted ones are noise.
     explicit = [c for c in candidates if c.get("explicit_time")]
     chosen = explicit if explicit else candidates
-    for c in chosen:
-        c.pop("explicit_time", None)
+    if not include_flags:
+        for c in chosen:
+            c.pop("explicit_time", None)
     return chosen[:5]
+
+
+_PAST_REFERENCE_RE = re.compile(
+    r"(?:great|good|nice|enjoyed|loved)\s+(?:talking|chatting|catching up|"
+    r"speaking|meeting|call|conversation)[^.!?\n]{0,25}$"
+    r"|(?:thanks?|thank you)\s+for[^.!?\n]{0,30}$"
+    r"|\b(?:we|you and i)\s+(?:spoke|talked|met|chatted)[^.!?\n]{0,20}$"
+    r"|\bsince\s+(?:we|our)[^.!?\n]{0,20}$",
+    re.I,
+)
+
+
+def _refers_to_past_meeting(text: str, pos: int) -> bool:
+    """True when the time at `pos` refers to a meeting that already happened."""
+    return bool(_PAST_REFERENCE_RE.search(text[max(0, pos - 45):pos]))
 
 
 _CONTINUATION_RE = re.compile(
     r"\s*(?:m[sd]?t|mountain(?:\s+time)?|e[sd]?t|eastern|c[sd]?t|central"
     r"|p[sd]?t|pacific)?\.?\s*(?:,\s*)?(?:and|or|,)\s+(?:at\s+)?"
-    r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)",
+    r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)"
+    r"(?:\s*\(?\s*(e[sd]?t|eastern|c[sd]?t|central|m[sd]?t|mountain"
+    r"|p[sd]?t|pacific)\b)?",
     re.I,
 )
 
 
-def _continuation_times(tail: str) -> list[tuple[int, int]]:
-    """(hour24, minute) list from 'and 3:30 PM' continuations at tail start."""
-    out: list[tuple[int, int]] = []
+def _continuation_times(tail: str) -> list[tuple[int, int, str | None]]:
+    """(hour24, minute, tz_label) list from 'and 3:30 PM [ET]' continuations."""
+    out: list[tuple[int, int, str | None]] = []
     rest = tail
     while True:
         m = _CONTINUATION_RE.match(rest)
@@ -214,19 +297,34 @@ def _continuation_times(tail: str) -> list[tuple[int, int]]:
             hour += 12
         elif ampm == "am" and hour == 12:
             hour = 0
-        out.append((hour, minute))
+        out.append((hour, minute, (m.group(4) or "").lower() or None))
         rest = rest[m.end():]
     return out
 
 
-def _slot_at_same_day(slot: dict[str, str], clock: tuple[int, int]) -> dict[str, str] | None:
+def _slot_at_same_day(
+    slot: dict[str, str],
+    clock: tuple[int, int, str | None],
+    *,
+    zone: ZoneInfo,
+) -> dict[str, str] | None:
+    """A continuation time on the first candidate's day — the wall clock is in
+    the continuation's own labeled zone, else the sender's writing zone."""
     try:
         start = datetime.fromisoformat(slot["start"])
         end = datetime.fromisoformat(slot["end"])
     except (KeyError, ValueError):
         return None
     duration = end - start
-    new_start = start.replace(hour=clock[0], minute=clock[1])
+    label = clock[2]
+    wall_zone = zone
+    if label and label in _LABEL_ZONES:
+        wall_zone = ZoneInfo(_LABEL_ZONES[label])
+    new_start = (
+        start.astimezone(wall_zone)
+        .replace(hour=clock[0], minute=clock[1])
+        .astimezone(MT)
+    )
     return {
         "start": new_start.isoformat(),
         "end": (new_start + duration).isoformat(),
@@ -263,25 +361,43 @@ def _match_to_slot(
     prefer_next_week: bool = False,
     tod_hour: int | None = None,
     date_only_default: int | None = None,
+    zone: ZoneInfo = MT,
 ) -> dict[str, str] | None:
     try:
-        if kind == "weekday":
-            token = match.group(1).lower()
+        # The wall time is written in the sender's zone (an explicit label
+        # right after the time wins — live H-3: "3:30 PM ET" parsed as 15:30
+        # MT and hit the travel rule). The unlabeled default used to be MT
+        # even for a counterpart Lexi KNOWS is Eastern (audit B9 family).
+        label_zone = _tz_label_after(match)
+        wall_zone = label_zone or zone
+        if kind in ("weekday", "time_weekday"):
+            if kind == "weekday":
+                token = match.group(1).lower()
+                hm = _clock(match, 2, 3, 4, tod_hour, date_only_default)
+            else:  # "3pm on Wednesday" — time first, day second
+                token = match.group(4).lower()
+                hm = _clock(match, 1, 2, 3, tod_hour, date_only_default)
             target_wd = _WEEKDAYS.get(token[:3], _WEEKDAYS.get(token))
             if target_wd is None:
                 return None
-            hm = _clock(match, 2, 3, 4, tod_hour, date_only_default)
             if hm is None:
                 return None
             hour, minute = hm
             day = now.date()
-            if prefer_next_week:
+            # "next Tuesday" means Tuesday of NEXT week, not the nearest
+            # Tuesday (audit B9): anchor the search at next week's Monday.
+            preceding = match.string[max(0, match.start() - 8):match.start()]
+            next_prefixed = bool(
+                re.search(r"\bnext\s+$", preceding, re.I)
+                or re.search(r"\bnext\s+\w+$", match.group(0), re.I)
+            )
+            if prefer_next_week or next_prefixed:
                 day = (day - timedelta(days=day.weekday())) + timedelta(days=7)
             for _ in range(14):
                 if day.weekday() == target_wd and day >= now.date():
                     break
                 day += timedelta(days=1)
-            start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=MT)
+            start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=wall_zone)
             if start < now + timedelta(hours=2):
                 start += timedelta(days=7)
         elif kind == "month":
@@ -294,7 +410,7 @@ def _match_to_slot(
                 return None
             hour, minute = hm
             year = now.year
-            start = datetime(year, month, day_num, hour, minute, tzinfo=MT)
+            start = datetime(year, month, day_num, hour, minute, tzinfo=wall_zone)
             if start < now - timedelta(hours=12):
                 start = start.replace(year=year + 1)
         else:  # mdy
@@ -307,19 +423,16 @@ def _match_to_slot(
             if hm is None:
                 return None
             hour, minute = hm
-            start = datetime(year, month, day_num, hour, minute, tzinfo=MT)
+            start = datetime(year, month, day_num, hour, minute, tzinfo=wall_zone)
             if not match.group(3) and start < now - timedelta(hours=12):
                 start = start.replace(year=year + 1)
-        # A zone label right after the time ("3:30 PM ET") means the wall time
-        # is in THAT zone — parsing it as MT validated the wrong instant
-        # (live H-3: 3:30 PM ET became 15:30 MT and hit the travel rule).
-        label_zone = _tz_label_after(match)
-        if label_zone and str(label_zone) != str(MT):
-            start = start.replace(tzinfo=label_zone).astimezone(MT)
         # Reject implausible clock times (e.g. "12:27 AM" pulled from a quoted
-        # reply header) — real meeting proposals fall in business hours.
+        # reply header) — real meeting proposals fall in business hours. The
+        # check runs on the WALL clock the sender wrote (a legitimate
+        # "6 AM ET" is 4 AM MT — plausible to them is what matters here).
         if not (6 <= start.hour <= 21):
             return None
+        start = start.astimezone(MT)
         end = start + timedelta(minutes=30)
         explicit = any(
             match.group(i) is not None

@@ -529,6 +529,42 @@ def infer_allowed_weekdays(
     return None
 
 
+_GUIDANCE_DAY_RE = re.compile(
+    r"\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri)s?\b",
+    re.I,
+)
+_GUIDANCE_DAY_NEGATION_RE = re.compile(
+    r"\b(?:avoid|not|no|except|skip|besides|other than|anything but)\s+(?:on\s+)?$",
+    re.I,
+)
+
+
+def weekdays_from_guidance(guidance: str) -> set[int] | None:
+    """Weekday constraint from KORY'S OWN directive ("try Thursday instead",
+    "avoid Fridays"). Unlike infer_allowed_weekdays — which demands two days
+    plus and/or because a lone weekday in a long email is weak signal — a
+    single day in short, directive guidance is the whole instruction, and
+    ignoring it re-offered the days Kory had just steered away from.
+    """
+    text = (guidance or "").strip()
+    if not text:
+        return None
+    positives: set[int] = set()
+    negatives: set[int] = set()
+    for match in _GUIDANCE_DAY_RE.finditer(text):
+        day = _WEEKDAY_INDEX[match.group(1).lower()]
+        preceding = text[max(0, match.start() - 14):match.start()]
+        if _GUIDANCE_DAY_NEGATION_RE.search(preceding):
+            negatives.add(day)
+        else:
+            positives.add(day)
+    if positives:
+        return positives
+    if negatives:
+        return set(range(5)) - negatives
+    return None
+
+
 def slot_start_in_time_window(
     start_local: datetime,
     window: TimeOfDayWindow,

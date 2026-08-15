@@ -441,6 +441,36 @@ def validate_proposal_slots(
                 result.valid = False
                 result.violations.append(f"{prefix}: ends after 6 PM (non-dinner).")
 
+        # Kory's remembered day rules (saved via "remember ..." in Teams or a
+        # lexi@ note). Enforced here, not just pasted into the prompt — the
+        # engine's slots never pass through the prompt (live K-3: "no meetings
+        # before 8:30 AM MT Tuesdays" was stored, Tue 7:00 AM offered anyway).
+        result.rules_checked.append("kory_memory_day_rules")
+        wd_index = start_local.weekday()
+        if wd_index in prefs.blocked_weekdays:
+            result.valid = False
+            result.violations.append(
+                f"{prefix}: Kory's saved rule keeps {weekday}s clear — "
+                f"he can lift it with 'retry scheduling — {weekday} is fine'."
+            )
+        floor = prefs.earliest_start_by_day.get(wd_index) or prefs.earliest_start_by_day.get(-1)
+        if floor and (start_local.hour, start_local.minute) < floor:
+            result.valid = False
+            result.violations.append(
+                f"{prefix}: Kory's saved rule: nothing before "
+                f"{floor[0]:02d}:{floor[1]:02d} on {weekday}s."
+            )
+        cap = prefs.latest_end_by_day.get(wd_index) or prefs.latest_end_by_day.get(-1)
+        if cap and (
+            (start_local.hour, start_local.minute) >= cap
+            or (end_local.hour, end_local.minute) > cap
+        ):
+            result.valid = False
+            result.violations.append(
+                f"{prefix}: Kory's saved rule: nothing after "
+                f"{cap[0]:02d}:{cap[1]:02d} on {weekday}s."
+            )
+
         result.rules_checked.append("earliest_by_day")
         if weekday in kory_rules.WORKOUT_DAYS:
             if fmt == "virtual" and intent_key in VIRTUAL_INFORMAL_INTENTS | {"virtual_30", "unknown"}:

@@ -101,7 +101,10 @@ def _try_inbound_time_suggestion(
     if not body_looks_like_inbound_availability(body):
         return None
 
-    candidates = extract_inbound_time_candidates(body)
+    candidates = extract_inbound_time_candidates(
+        body,
+        default_tz=str(proposal.get("recipient_timezone") or "") or None,
+    )
     if not candidates:
         return None
 
@@ -544,6 +547,7 @@ def _find_lexi_involved_proposal(
                     p.id AS proposal_id,
                     p.status,
                     p.proposed_slots,
+                    p.recipient_timezone,
                     p.intent_classification,
                     p.is_delegation,
                     e.sender,
@@ -568,6 +572,7 @@ def _find_lexi_involved_proposal(
                     p.id AS proposal_id,
                     p.status,
                     p.proposed_slots,
+                    p.recipient_timezone,
                     p.intent_classification,
                     p.is_delegation,
                     e.sender,

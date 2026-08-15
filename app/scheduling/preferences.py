@@ -23,6 +23,13 @@ class SchedulingPreferences:
     )
     travel_week_max_meetings: int = 3
     lunch_allowed: bool = False
+    # Remembered day rules, enforced by the validator (live K-3: "no meetings
+    # before 8:30 AM MT Tuesdays" was stored and recalled fine — and the
+    # engine offered Tue 7:00 AM anyway, because nothing below the prompt
+    # ever read it). Weekdays are 0=Mon..6=Sun; the key -1 means every day.
+    blocked_weekdays: set[int] = field(default_factory=set)
+    earliest_start_by_day: dict[int, tuple[int, int]] = field(default_factory=dict)
+    latest_end_by_day: dict[int, tuple[int, int]] = field(default_factory=dict)
     memory_facts: list[dict[str, Any]] = field(default_factory=list)
 
     def memory_prompt_block(self) -> str:
@@ -70,6 +77,90 @@ _CAP_PATTERNS = (
     ("travel_week_max_meetings", re.compile(r"\b(\d+)\b[^.!?]{0,40}\btravel\b", re.I)),
 )
 
+_DAY_INDEX = {
+    "monday": 0, "mondays": 0, "tuesday": 1, "tuesdays": 1,
+    "wednesday": 2, "wednesdays": 2, "thursday": 3, "thursdays": 3,
+    "friday": 4, "fridays": 4, "saturday": 5, "saturdays": 5,
+    "sunday": 6, "sundays": 6,
+}
+_DAY_ALT = "|".join(_DAY_INDEX)
+
+# "no meetings on Fridays" / "keep Mondays clear" / "block off Wednesdays".
+_DAY_BLOCK_RE = re.compile(
+    rf"\b(?:no|zero|never)\s+(?:more\s+)?(?:meetings?|calls?|appointments?|scheduling|anything)\s+"
+    rf"(?:on\s+)?({_DAY_ALT})\b"
+    rf"|\bkeep\s+({_DAY_ALT})\s+(?:free|clear|open)\b"
+    rf"|\bblock\s+(?:off\s+)?({_DAY_ALT})\b",
+    re.IGNORECASE,
+)
+# "Friday is fine" / "Mondays are ok" — a guidance-level unblock.
+_DAY_UNBLOCK_RE = re.compile(
+    rf"\b({_DAY_ALT})\s+(?:is|are)\s+(?:fine|ok(?:ay)?|good|approved)\b",
+    re.IGNORECASE,
+)
+# "no meetings before 8:30 AM MT Tuesdays" / "nothing before 10" /
+# "don't schedule anything after 4 pm on Fridays".
+_TIME_BOUND_RE = re.compile(
+    rf"\b(?:no\s+(?:meetings?|calls?|appointments?|anything)\s+|nothing\s+"
+    rf"|don'?t\s+(?:schedule|book)\s+(?:anything\s+|meetings?\s+)?)"
+    rf"(before|after)\s+(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)?"
+    rf"(?:\s*(?:MT|mountain(?:\s+time)?))?"
+    rf"(?:\s+(?:on\s+)?({_DAY_ALT}))?",
+    re.IGNORECASE,
+)
+# "before 8 is fine (for this one)" — a guidance-level floor lift.
+_TIME_BOUND_LIFT_RE = re.compile(
+    r"\b(?:before|after)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+is\s+"
+    r"(?:fine|ok(?:ay)?|good|approved)\b"
+    r"|\b(?:early|late)\s+is\s+(?:fine|ok(?:ay)?|good|approved)\b",
+    re.IGNORECASE,
+)
+_DAYPART_NEARBY_RE = re.compile(r"\b(?:morning|afternoon|evening)s?\b", re.IGNORECASE)
+
+
+def _bound_hour(hour: int, minute: int, meridiem: str | None) -> tuple[int, int] | None:
+    if not 1 <= hour <= 12 and not (meridiem is None and 0 <= hour <= 23):
+        return None
+    mer = (meridiem or "").lower()
+    if mer == "pm" and hour < 12:
+        hour += 12
+    elif mer == "am" and hour == 12:
+        hour = 0
+    elif not mer and 1 <= hour <= 7:
+        hour += 12  # business-hours reading: a bare "after 4" is 4 PM
+    return (hour, minute)
+
+
+def _apply_day_rules(prefs: SchedulingPreferences, value: str) -> None:
+    """Enforceable day rules from a remembered sentence or Teams guidance."""
+    for match in _DAY_BLOCK_RE.finditer(value):
+        # "no meetings Friday afternoons" is a time rule, not a full-day block.
+        window = value[max(0, match.start() - 10):match.end() + 16]
+        if _DAYPART_NEARBY_RE.search(window):
+            continue
+        token = next(g for g in match.groups() if g)
+        prefs.blocked_weekdays.add(_DAY_INDEX[token.lower()])
+    for match in _DAY_UNBLOCK_RE.finditer(value):
+        prefs.blocked_weekdays.discard(_DAY_INDEX[match.group(1).lower()])
+    for match in _TIME_BOUND_RE.finditer(value):
+        kind, hour_s, minute_s, meridiem, day = match.groups()
+        bound = _bound_hour(int(hour_s), int(minute_s or 0), meridiem)
+        if bound is None:
+            continue
+        # "before 10" with no meridiem is a morning floor, not 10 PM.
+        if kind.lower() == "before" and not meridiem and 1 <= int(hour_s) <= 12:
+            bound = (int(hour_s), int(minute_s or 0))
+        day_key = _DAY_INDEX[day.lower()] if day else -1
+        target = (
+            prefs.earliest_start_by_day
+            if kind.lower() == "before"
+            else prefs.latest_end_by_day
+        )
+        target[day_key] = bound
+    if _TIME_BOUND_LIFT_RE.search(value):
+        prefs.earliest_start_by_day.clear()
+
+
 _SLOT_MIN_RELAX = re.compile(
     r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
     r"january|february|march|april|june|july|august|september|october|november|december|"
@@ -108,6 +199,8 @@ def _apply_freeform_fact(prefs: SchedulingPreferences, value: str) -> None:
         match = pattern.search(value)
         if match:
             setattr(prefs, attr, _parse_int(match.group(1), getattr(prefs, attr)))
+
+    _apply_day_rules(prefs, value)
 
 
 def load_scheduling_preferences(guidance: str = "") -> SchedulingPreferences:

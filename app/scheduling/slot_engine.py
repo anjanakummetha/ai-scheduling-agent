@@ -264,6 +264,28 @@ def find_valid_slots(
     else:
         time_window = infer_time_of_day_window(subject=subject, body=body)
     allowed_weekdays = infer_allowed_weekdays(subject=subject, body=body)
+
+    # Kory's per-proposal guidance overrides what the email asked for — he is
+    # redirecting the search ("try Thursday instead, make it 45 minutes,
+    # afternoon only"). The regex plan path used to honor none of these when
+    # the LLM planner was unavailable: the merged body still led with the
+    # sender's "30 minutes"/"next week" and silently out-voted him (I-2 class).
+    guidance = (plan.kory_guidance or "").strip() if plan else ""
+    if guidance:
+        from app.scheduling.scheduling_window import weekdays_from_guidance
+
+        g_days = weekdays_from_guidance(guidance)
+        if g_days:
+            allowed_weekdays = g_days
+        if not skip_time_of_day:
+            g_tod = infer_time_of_day_window(subject="", body=guidance)
+            if g_tod is not None:
+                time_window = g_tod
+        g_duration = parse_duration_from_text(guidance)
+        if g_duration:
+            tail_buffer = max(0, reserve_minutes - block_minutes)  # e.g. coffee's +30
+            block_minutes = g_duration
+            reserve_minutes = g_duration + tail_buffer
     east_coast = bool(
         re.search(r"\b(east coast|eastern|nyc|new york|boston|et)\b", f"{subject}\n{body}", re.I)
     )
@@ -459,6 +481,7 @@ def propose_meeting_slots(
     urgent: bool | None = None,
     plan: SchedulingPlan | None = None,
     min_options: int | None = None,
+    reference_now: datetime | None = None,
 ) -> SlotProposal:
     """Public entry — returns validated slots or empty list.
 
@@ -497,6 +520,7 @@ def propose_meeting_slots(
         meeting_format=meeting_format,
         urgent=urgent,
         plan=plan,
+        reference_now=reference_now,
     )
     if len(result.slots) >= required:
         result.diagnostics["status"] = "ok"
@@ -524,6 +548,7 @@ def propose_meeting_slots(
             meeting_format=meeting_format,
             urgent=urgent,
             plan=alt_plan,
+            reference_now=reference_now,
         )
         if len(alt.slots) >= required:
             alt.diagnostics["status"] = "ok"

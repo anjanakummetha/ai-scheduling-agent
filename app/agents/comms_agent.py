@@ -1020,7 +1020,26 @@ def _pre_send_slot_gate(proposal: dict[str, Any]) -> str | None:
     if not ok:
         return mismatch
 
+    from datetime import datetime, timezone
+
     from app.scheduling.busy_intervals import local_dt, parse_iso_datetime, slot_conflicts_busy
+
+    # A staged slot in the past can only mean a stale proposal or a misparsed
+    # date (audit B9: no send-side gate enforced "must be in the future") —
+    # sending it offers a meeting that cannot happen.
+    now_utc = datetime.now(timezone.utc)
+    stale = [
+        local_dt(start).strftime("%A, %B %-d at %-I:%M %p MT")
+        for slot in slots
+        if (start := parse_iso_datetime(str(slot.get("start") or ""))) and start <= now_utc
+    ]
+    if stale:
+        return (
+            f"NOT SENT — these offered times are already in the past: "
+            f"{'; '.join(stale)}. The staged offer is stale. Run "
+            "lexi_retry_scheduling for fresh times."
+        )
+
     from app.scheduling.calendar_context import load_scheduling_calendar_context
 
     context = load_scheduling_calendar_context(

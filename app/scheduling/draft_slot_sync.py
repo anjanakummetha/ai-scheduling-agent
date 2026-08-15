@@ -141,9 +141,16 @@ def verify_draft_slots(
         )
         return check
 
+    from datetime import timezone
+
+    now = reference or datetime.now(timezone.utc)
     for slot in parsed:
         start = parse_iso_datetime(slot["start"])
         label = _fmt(start) if start else str(slot.get("start"))
+        if start and start <= now:
+            check.ok = False
+            check.conflicts.append(f"{label} is in the past.")
+            continue
         if slot_conflicts_busy(slot, busy, reserve_minutes=meeting.calendar_block_minutes):
             clash = conflicting_event_subject(slot, busy)
             check.ok = False

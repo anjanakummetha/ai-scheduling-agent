@@ -1,12 +1,51 @@
-"""Parse which offered slot a recipient selected in their reply."""
+"""Parse which offered slot a recipient selected in their reply.
+
+Offer emails render every slot recipient-local first with MT in parentheses,
+so a reply naming a day or hour is in ONE of those two zones — never UTC.
+parse_iso_datetime normalizes to aware UTC, which means every weekday/hour
+token must be derived through an astimezone() into a rendered zone: a
+Monday 6 PM MT dinner slot is Tuesday in UTC, and matching raw UTC fields
+booked the wrong day. When the two zones disagree about which slot a reply
+means, the reply is treated as unparsed (Kory reviews) rather than guessed.
+"""
 
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.scheduling.busy_intervals import parse_iso_datetime
-from app.scheduling.email_format import format_slot_for_email
+
+
+def _rendering_zones(recipient_tz: str | None) -> list[ZoneInfo]:
+    """Zones the offer email showed times in: recipient-local first, then MT."""
+    from app.config import settings
+
+    mt = ZoneInfo(settings.scheduling_timezone)
+    zones: list[ZoneInfo] = []
+    if recipient_tz:
+        try:
+            zone = ZoneInfo(str(recipient_tz))
+        except Exception:  # noqa: BLE001 — a junk stored tz must not break parsing
+            zone = None
+        if zone is not None and str(zone) != str(mt):
+            zones.append(zone)
+    zones.append(mt)
+    return zones
+
+
+def _unique_slot(matches: list[dict[str, str]]) -> dict[str, str] | None:
+    """The single distinct slot in matches, or None when 0 or ambiguous."""
+    distinct: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for slot in matches:
+        key = str(slot.get("start") or id(slot))
+        if key not in seen:
+            seen.add(key)
+            distinct.append(slot)
+    return distinct[0] if len(distinct) == 1 else None
 
 
 def _reply_text_for_matching(body: str) -> str:
@@ -35,13 +74,21 @@ def match_recipient_slot_choice(
     proposed_slots: list[dict[str, str]],
     *,
     sender_email: str | None = None,
+    recipient_tz: str | None = None,
 ) -> dict[str, str] | None:
-    """Return the matching slot dict if the reply picks one of the offered times."""
+    """Return the matching slot dict if the reply picks one of the offered times.
+
+    recipient_tz is the zone the offer email rendered first (stored on the
+    proposal); day/hour tokens are matched in that zone AND in MT. A reply
+    whose tokens fit different slots in different zones is ambiguous → None.
+    """
     if not body or not proposed_slots:
         return None
     text = _reply_text_for_matching(body).lower()
     if not text:
         return None
+
+    zones = _rendering_zones(recipient_tz)
 
     for pattern, index in (
         (r"\boption\s*1\b", 0),
@@ -57,50 +104,91 @@ def match_recipient_slot_choice(
         if re.search(pattern, text) and index < len(proposed_slots):
             return proposed_slots[index]
 
+    text_dates = _month_days_in_text(text)
+    text_times = _clock_times_in_text(text)
+
+    # Zones are tried in the order the offer email rendered them: the
+    # recipient's own zone first, MT second. A reply hour is read in the
+    # first zone that resolves it — "Tuesday at 4" from an Eastern
+    # counterpart means 4 PM ET even if another slot sits at 4 PM MT.
+    for zone in zones:
+        zone_matches: list[dict[str, str]] = []
+        for slot in proposed_slots:
+            start = parse_iso_datetime(str(slot.get("start") or ""))
+            if not start:
+                continue
+            # An explicit "august 17" in the reply must be this slot's date —
+            # live H-4: "Monday, August 17 at 1:00 PM" nearly booked the
+            # Aug 10 slot the recipient had declined.
+            if text_dates and all(
+                (start.astimezone(z).month, start.astimezone(z).day) not in text_dates
+                for z in zones
+            ):
+                continue
+            local = start.astimezone(zone)
+            weekday = local.strftime("%A").lower()
+            if weekday not in text:
+                continue
+            hour_token = str(int(local.strftime("%I")))
+            minute_token = local.strftime("%M")
+            # The hour must be a clock mention, not a date digit ("August 10"):
+            # anchored by "at"/"@", or carrying :minutes or a meridiem.
+            if re.search(
+                rf"\b{re.escape(weekday)}\b[^\n]{{0,40}}?"
+                rf"(?:(?:\bat|@)\s*{hour_token}(?::{minute_token})?\b"
+                rf"|\b{hour_token}:{minute_token}\b"
+                rf"|\b{hour_token}(?::{minute_token})?\s*(?:am|pm)\b)",
+                text,
+            ) and not _time_contradicts_slot(text_times, start):
+                zone_matches.append(slot)
+        chosen = _unique_slot(zone_matches)
+        if chosen:
+            return chosen
+        if zone_matches:
+            return None  # day+hour fits several slots in ONE zone — ask Kory
     for slot in proposed_slots:
         start = parse_iso_datetime(str(slot.get("start") or ""))
         if not start:
             continue
-        weekday = start.strftime("%A").lower()
-        if weekday in text:
-            hour_token = str(int(start.strftime("%I")))
-            minute_token = start.strftime("%M")
-            if re.search(
-                rf"\b{re.escape(weekday)}\b[^\n]{{0,40}}\b{hour_token}(?::{minute_token})?\b",
-                text,
-            ):
-                return slot
-
-    text_dates = _month_days_in_text(text)
-    text_times = _clock_times_in_text(text)
-    for slot in proposed_slots:
-        formatted = format_slot_for_email(slot, recipient_tz=None).lower()
-        day_part = formatted.split(" at ", 1)[0] if " at " in formatted else ""
-        start = parse_iso_datetime(str(slot.get("start") or ""))
-        if day_part and day_part in text:
+        if any(
+            _day_phrase(start, zone) in text for zone in zones
+        ):
             # Even an exact "monday, august 10" mention is a pick only if any
             # stated clock time is consistent with this slot.
             if not _time_contradicts_slot(text_times, start):
                 return slot
             continue
-        if not start:
-            continue
-        weekday = start.strftime("%A").lower()
-        if re.search(rf"\b{re.escape(weekday)}\b", text) and len(proposed_slots) <= 3:
+        matched_zone = next(
+            (
+                zone
+                for zone in zones
+                if re.search(
+                    rf"\b{re.escape(start.astimezone(zone).strftime('%A').lower())}\b",
+                    text,
+                )
+            ),
+            None,
+        )
+        if matched_zone is not None and len(proposed_slots) <= 3:
             # Bare weekday ("Monday works") counts only when it cannot be wrong
             # (live H-4: "Monday, August 17 at 1:00 PM" matched the Aug 10 slot
             # and nearly booked a time the recipient explicitly declined):
-            # the weekday must be UNAMBIGUOUS among the offered slots, and any
-            # explicit date/time in the reply must agree with this slot.
+            # the weekday must be UNAMBIGUOUS among the offered slots — in the
+            # same zone the match was made in — and any explicit date/time in
+            # the reply must agree with this slot.
+            weekday = start.astimezone(matched_zone).strftime("%A").lower()
             same_day = [
                 s
                 for s in proposed_slots
                 if (ss := parse_iso_datetime(str(s.get("start") or "")))
-                and ss.strftime("%A").lower() == weekday
+                and ss.astimezone(matched_zone).strftime("%A").lower() == weekday
             ]
             if len(same_day) != 1 or same_day[0] is not slot:
                 continue
-            if text_dates and (start.month, start.day) not in text_dates:
+            if text_dates and all(
+                (start.astimezone(z).month, start.astimezone(z).day) not in text_dates
+                for z in zones
+            ):
                 continue
             if _time_contradicts_slot(text_times, start):
                 continue
@@ -109,26 +197,41 @@ def match_recipient_slot_choice(
     if re.search(r"\b(any|either|all)\b.*\bwork", text) and proposed_slots:
         return proposed_slots[0]
 
-    for slot in proposed_slots:
-        start = parse_iso_datetime(str(slot.get("start") or ""))
-        if not start:
-            continue
-        from app.config import settings
-        from zoneinfo import ZoneInfo
-
-        local = start.astimezone(ZoneInfo(settings.scheduling_timezone))
-        hour12 = int(local.strftime("%I"))
-        minute = local.strftime("%M")
-        hour_variants = {str(hour12), f"{hour12:02d}"}
-        for hour_token in hour_variants:
-            for pattern in (
-                rf"\b{hour_token}:{minute}\b[^\n]{{0,30}}\b(?:works|is fine|sounds good|good for me)\b",
-                rf"\b{hour_token}(?::{minute})?\s*(?:am|pm)\b[^\n]{{0,30}}\b(?:works|is fine|sounds good)\b",
-            ):
-                if re.search(pattern, text):
-                    return slot
-
+    for zone in zones:  # recipient-rendered zone first, MT second
+        hour_matches: list[dict[str, str]] = []
+        for slot in proposed_slots:
+            start = parse_iso_datetime(str(slot.get("start") or ""))
+            if not start:
+                continue
+            local = start.astimezone(zone)
+            hour12 = int(local.strftime("%I"))
+            minute = local.strftime("%M")
+            hour_variants = {str(hour12), f"{hour12:02d}"}
+            matched = False
+            for hour_token in hour_variants:
+                for pattern in (
+                    rf"\b{hour_token}:{minute}\b[^\n]{{0,30}}\b(?:works|is fine|sounds good|good for me)\b",
+                    rf"\b{hour_token}(?::{minute})?\s*(?:am|pm)\b[^\n]{{0,30}}\b(?:works|is fine|sounds good)\b",
+                ):
+                    if re.search(pattern, text):
+                        matched = True
+                        break
+                if matched:
+                    break
+            if matched:
+                hour_matches.append(slot)
+        chosen = _unique_slot(hour_matches)
+        if chosen:
+            return chosen
+        if hour_matches:
+            return None  # hour fits several slots in one zone — ask Kory
     return None
+
+
+def _day_phrase(start: datetime, zone: ZoneInfo) -> str:
+    """The email's day rendering ('monday, august 10') in the given zone."""
+    local = start.astimezone(zone)
+    return local.strftime("%A, %B %-d").lower()
 
 
 _MONTHS = {
