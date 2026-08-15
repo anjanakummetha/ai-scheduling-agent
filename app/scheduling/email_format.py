@@ -631,13 +631,32 @@ def _ensure_paragraph_spacing(text: str) -> str:
         if len(lines) <= 1:
             spaced.append(block)
             continue
+        # An LLM-composed offer writes the lead-in and its bullets in ONE block
+        # ("a few times that work:\n• Tue …\n• Wed …"). Bullets are short and
+        # never end in punctuation, so the merge loop used to fold them all
+        # onto the lead-in line — the received email showed every time on one
+        # line (live Kory feedback, 2026-08-11 test). A bullet line always
+        # stays its own line; a bullet run stays single-spaced.
         merged: list[str] = []
+        bullet_re = re.compile(r"^([•\-\*]|\d+[.)])\s+")
         for line in lines:
-            if merged and len(line) < 60 and not line.endswith((".", "!", "?")):
-                merged[-1] = f"{merged[-1]} {line}"
+            if bullet_re.match(line):
+                merged.append(("\n", line))
+                continue
+            if (
+                merged
+                and merged[-1][0] != "\n"
+                and len(line) < 60
+                and not line.endswith((".", "!", "?", ":"))
+            ):
+                sep, prev = merged[-1]
+                merged[-1] = (sep, f"{prev} {line}")
             else:
-                merged.append(line)
-        spaced.append("\n\n".join(merged))
+                merged.append(("\n\n", line))
+        rebuilt = ""
+        for index, (sep, line) in enumerate(merged):
+            rebuilt = line if index == 0 else f"{rebuilt}{sep}{line}"
+        spaced.append(rebuilt)
     return "\n\n".join(spaced)
 
 
