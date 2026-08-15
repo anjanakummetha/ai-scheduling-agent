@@ -408,14 +408,80 @@ are not backed up. Off-box backup is opt-in and defaults off.
 
 ## Recommended remediation order
 
-**Tier 1 — small, verified, do before handover (I can apply these safely):**
-1. B1 holds-released filter (2 lines) — stop reporting phantom holds.
-2. B2 cache invalidation on the prod hold path (1 line) — stop double-offers.
-3. A2 sender allowlist at the top of `handle_lexi_direct_mail`.
-4. A1 `LEXI_WEBHOOK_HOST=127.0.0.1` + webhook shared-secret check + `ufw`.
-5. E7 exclude `lexi.log` from logrotate.
-6. E4 delete `p0_8_deploy_and_posture.sh`.
-7. B6 live-test the delete return; fix the inversion if confirmed.
+### Tier 1 — DONE 2026-08-15 (deployed)
+1. ✅ **B1** — `_fetch_holds` + `place_offered_holds` now exclude `expires_at =
+   'released'`. A re-offered cold thread places real holds instead of
+   early-returning with the phantom count.
+2. ✅ **B2** — `named_calendars.create_event_on_calendar` invalidates the
+   scheduling cache on its production branch. A just-placed hold is visible to
+   the next slot search; no more offering the same slot twice.
+3. ✅ **A2** — hard `_is_from_kory(sender)` gate at the top of
+   `handle_lexi_direct_mail` (exact address match, no substring). A stranger's
+   mail to `lexi@` falls through to normal triage instead of writing memory.
+4. ✅ **A1 (partial)** — webhook now binds `127.0.0.1` by default (traefik is
+   host-network and reaches loopback, so ingestion is unaffected; direct public
+   `:8780` hits are gone) **and** a fail-open `LEXI_WEBHOOK_SECRET` check is in
+   the handler. **See the enablement step in Tier 2** — the secret is not yet
+   turned on because that needs re-registering the Composio trigger URL.
+5. ✅ **E7** — logrotate no longer manages `logs/lexi.log` (Python's
+   `RotatingFileHandler` owns it); it covers only `~/.hermes/logs/*.log`.
+6. ✅ **E4** — `scripts/p0_8_deploy_and_posture.sh` deleted.
+7. ✅ **B6** — live-tested: `delete_calendar_event` returns `None` on success,
+   so the cancel path was **latent, not broken** (matches RUN15). Hardened
+   anyway: `delete_calendar_event` now raises on a Composio `successful:false`
+   soft-failure, and the cancel/reschedule call sites treat "no exception" as
+   success (removing the latent return-value inversion).
+
+### Tier 2 — verified, need a test window + your decision (NOT yet applied)
+- **A1 enablement (finish the webhook lockdown).** Generate a random
+  `LEXI_WEBHOOK_SECRET`, set it in the box `.env`, **re-register the Composio
+  Outlook trigger** so it POSTs to `…/webhooks/composio?k=<secret>` (and update
+  `LEXI_WEBHOOK_PUBLIC_URL`), then restart. The handler already enforces it once
+  the secret is set. Needs care because it touches the live trigger
+  registration — verify a test email still ingests before walking away.
+- **D1 — WAL mode + get network calls out of the approval transaction.** The
+  single biggest reliability win (`database is locked` family). One-line PRAGMA
+  for WAL, but the transaction-restructuring in `comms_agent.execute_lexi_approval`
+  is the real work; needs a load test.
+- **D3 — atomic approval status-claim** (`UPDATE … WHERE status='pending_approval'`
+  + check rowcount) to stop the concurrent-double-send race.
+- **A3 / A4 — make the recipient allowlist apply in production**
+  (`recipient_allowlist.py:98-101`) and add a server-side (non-model) approval
+  token before any SEND/FORWARD/DELETE slug reaches `execute_tool`.
+- **B4 / B5 — all-day & multi-day event handling** (distinguish informational
+  vs unavailable; stop dropping ≥23h timed events) and make the confirm-time
+  E-6 re-check read the *named* calendars (Master + family), not just the
+  default one.
+- **B3 — fetch_events_chunked +6h window shift** (pass the aware ISO; don't
+  double-convert). Latent today, but fix before anyone enables same-day booking.
+- **C1 — an aged-non-terminal-proposal sweeper/detector** so `pending_invite` /
+  `pending_reoffer` / `needs_kory` can't strand holds on Kory's calendar forever.
+- **B7 / D3 — cross-proposal slot reservation** so two threads can't offer the
+  same free slot.
+- **B8 — check `successful:false` on the send path** (the delete path is now
+  done via B6); `send_draft` / `create_calendar_event` should surface it too.
+
+### Tier 3 — handover hygiene (mostly you/Kory; some I can do on request)
+- **E1 — capture the box's real systemd units + `~/.hermes/config.yaml` +
+  `~/.hermes/SOUL.md` into git**, then quarantine the `/opt/lexi` files in
+  `deploy/` (they target a path that doesn't exist and `install.sh` would
+  break every service). Add a `SOUL.md` copy step to the deploy script (E2).
+- **A6 / A7 — confirm `REQUIRE_AUTH=true` is live on the dashboard right now;
+  rotate the Composio + Anthropic keys in `.env.local`; `git rm --cached
+  data/teams_conversation.json` and gitignore + back it up.**
+- **E5 — out-of-band alerting** (external `/api/health` pinger + an email
+  fallback so a Teams outage is detectable), the **Composio re-auth runbook**
+  (for when Kory's Microsoft password rotates), and **transfer Composio /
+  Anthropic / Azure account ownership** off Anjana's personal accounts.
+- **E3 / E6 — deploy-script hardening** (`pip install` step, `set -e`, a
+  recorded previous-good SHA) and **boot assertions** (`LEXI_ENV=production` ⇒
+  Teams enabled + backup-poll > 0, refuse to start otherwise).
+- **E8 — rewrite `TECHNICAL_HANDOVER.md`** against the running box (topology,
+  paths, ports, test count, flag values are all stale).
+- **E9 / D4 — backups** (off-box copy, clear `-journal` on restore, include
+  `teams_conversation.json`/`config.yaml`/`.env`) and **pruning +
+  disk alarm** (`llm_cost_log` has no prune; `audit_log` stores full webhook
+  payloads; 38 rotating DB backups on a shared disk).
 
 **Tier 2 — verified, need a test window + your decision:**
 8. D1 WAL mode + move network calls out of the approval transaction.

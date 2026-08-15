@@ -150,8 +150,13 @@ def cancel_booked_meeting(
 
         from app.integrations.outlook_calendar import delete_calendar_event
 
+        # Success = no exception. delete_calendar_event returns a log_id (None on
+        # a real delete) and raises on a hard/soft failure; treating its truthy
+        # return as an error inverted the result — a successful cancel reported
+        # failure and skipped the DB update (audit 2026-08-15, B6).
         try:
-            delete_error = delete_calendar_event(event_id)
+            delete_calendar_event(event_id)
+            delete_error = None
         except Exception as exc:  # noqa: BLE001
             delete_error = f"{type(exc).__name__}: {exc}"
         if delete_error:
@@ -743,7 +748,8 @@ def execute_lexi_approval(
                                         delete_calendar_event,
                                     )
 
-                                    delete_error = delete_calendar_event(prior_invite)
+                                    delete_calendar_event(prior_invite)
+                                    delete_error = None
                                 except Exception as exc:  # noqa: BLE001
                                     delete_error = f"{type(exc).__name__}: {exc}"
                                 _insert_audit_log(
@@ -1047,11 +1053,17 @@ def _parse_recipient_selected_slot(proposal: dict[str, Any]) -> dict[str, Any] |
 
 
 def _fetch_holds(conn: sqlite3.Connection, proposal_id: int) -> list[dict[str, Any]]:
+    # Exclude released holds. expires_at is overloaded — an ISO timestamp for a
+    # live hold, or the literal 'released' once the calendar event is torn down.
+    # Counting released rows made the post-offer placement early-return ("already
+    # have N holds") on a re-offered cold thread, so it placed nothing while
+    # reporting the old count as confirmed (audit 2026-08-15, B1).
     rows = conn.execute(
         """
         SELECT id, event_id, slot_start, slot_end, created_at
         FROM holds
         WHERE proposal_id = ?
+          AND COALESCE(expires_at, '') != 'released'
         ORDER BY id ASC
         """,
         (proposal_id,),

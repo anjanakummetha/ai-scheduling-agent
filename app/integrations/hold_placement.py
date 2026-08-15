@@ -93,7 +93,9 @@ def place_offered_holds(
     already_held = {
         str(row[0])
         for row in conn.execute(
-            "SELECT slot_start FROM holds WHERE proposal_id = ?", (proposal_id,)
+            "SELECT slot_start FROM holds WHERE proposal_id = ? "
+            "AND COALESCE(expires_at, '') != 'released'",
+            (proposal_id,),
         )
     }
     placed = 0

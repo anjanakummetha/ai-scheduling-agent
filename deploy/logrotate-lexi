@@ -1,8 +1,13 @@
 # Lexi log rotation — install: cp deploy/logrotate-lexi /etc/logrotate.d/lexi
-# mcp-stderr.log reached 147MB unbounded (latency item 1c); the services hold
-# their log files open, so copytruncate is required — no restart, no data gap
-# beyond the copy window.
-/home/lexi/.hermes/logs/*.log /home/lexi/AI_Scheduling_Agent/logs/*.log {
+#
+# ONLY the Hermes logs. The app's own logs/lexi.log is rotated by Python's
+# RotatingFileHandler (app/utils/logging_setup.py, 20MB x5) — do NOT also
+# manage it here: copytruncate races the open file handle's offset tracking,
+# which shreds history and leaves a sparse file (audit 2026-08-15, E7).
+#
+# mcp-stderr.log reached 147MB unbounded; the services hold their log files
+# open, so copytruncate is required (no restart, no data gap beyond the copy).
+/home/lexi/.hermes/logs/*.log {
     weekly
     rotate 4
     maxsize 50M

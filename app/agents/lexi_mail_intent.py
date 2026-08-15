@@ -97,12 +97,40 @@ def parse_lexi_mail_intent(*, subject: str, body: str, sender: str = "") -> Lexi
     return LexiMailIntent("general", "lexi_direct_mail", instruction=combined[:500])
 
 
+def _kory_addresses() -> set[str]:
+    addrs = {a.lower() for a in settings.kory_sender_emails}
+    if settings.kory_cc_email:
+        addrs.add(settings.kory_cc_email.lower())
+    return addrs
+
+
+def _is_from_kory(sender: str) -> bool:
+    """Exact-address match against Kory's configured addresses.
+
+    lexi@ is world-writable — anyone can put it in a To line — and these
+    commands write kory_memory, which feeds the scheduling validator and the
+    system prompt. Without this gate a stranger could implant a standing
+    scheduling policy (audit 2026-08-15, A2; the plan doc pre-committed to this
+    allowlist as a prerequisite). Substring matching is deliberately avoided —
+    'kory' appears in 'hickory@' — so the sender's address is extracted and
+    compared exactly.
+    """
+    found = re.findall(r"[\w.+-]+@[\w.-]+\.\w+", (sender or "").lower())
+    return bool(set(found) & _kory_addresses())
+
+
 def handle_lexi_direct_mail(raw_email: dict[str, Any]) -> dict[str, Any]:
     """Handle mail addressed to lexi@ without scheduling triage."""
     subject = str(raw_email.get("subject") or "")
     body = str(raw_email.get("raw_body") or raw_email.get("body") or "")
     sender = str(raw_email.get("sender") or raw_email.get("sender_email") or "")
     thread_id = str(raw_email.get("thread_id") or raw_email.get("outlook_message_id") or "")
+
+    # HARD sender gate, before any parsing. These commands mutate Kory's stored
+    # preferences; only Kory may issue them. A non-Kory sender is not handled
+    # here — it falls through to normal triage as ordinary inbound mail.
+    if not _is_from_kory(sender):
+        return {"handled": False, "reason": "lexi_direct_mail_sender_not_kory"}
 
     intent = parse_lexi_mail_intent(subject=subject, body=body, sender=sender)
 

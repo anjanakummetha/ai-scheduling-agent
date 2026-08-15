@@ -87,7 +87,12 @@ def start_lexi_worker(
         interval = interval_seconds or int(os.getenv("LEXI_ORCHESTRATOR_INTERVAL", "30"))
 
         if use_webhook:
-            host = os.getenv("LEXI_WEBHOOK_HOST", "0.0.0.0").strip() or "0.0.0.0"
+            # Default to loopback (audit 2026-08-15, A1): the box's traefik runs
+            # host-network and forwards /webhooks to 127.0.0.1:8780, so binding
+            # loopback keeps ingestion working while removing the direct public
+            # 0.0.0.0:8780 attack surface. Override only if a proxy needs a
+            # non-loopback address.
+            host = os.getenv("LEXI_WEBHOOK_HOST", "127.0.0.1").strip() or "127.0.0.1"
             port = int(os.getenv("LEXI_WEBHOOK_PORT", "8780"))
             _webhook_server = WebhookServerThread(host=host, port=port)
             _webhook_server.start()

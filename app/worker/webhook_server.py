@@ -17,7 +17,38 @@ logger = logging.getLogger(__name__)
 WEBHOOK_PATH = "/webhooks/composio"
 
 
+def _webhook_secret() -> str:
+    import os
+
+    return os.getenv("LEXI_WEBHOOK_SECRET", "").strip()
+
+
+def _webhook_secret_ok(request: web.Request) -> bool:
+    """Shared-secret gate for the public webhook (audit 2026-08-15, A1).
+
+    The endpoint is reachable from the internet through traefik; the handler
+    otherwise authenticates nothing. Composio is registered with the secret as
+    the `k` query param (or it may send an `X-Lexi-Webhook-Secret` header).
+
+    FAIL-OPEN when unset: shipping this cannot break live ingestion. Enforcement
+    turns on the moment LEXI_WEBHOOK_SECRET is set AND Composio is re-registered
+    with the matching `?k=` — see the Tier-2 note in PRE_HANDOVER_AUDIT.md.
+    """
+    secret = _webhook_secret()
+    if not secret:
+        return True
+    import hmac
+
+    provided = request.query.get("k") or request.headers.get("X-Lexi-Webhook-Secret") or ""
+    return hmac.compare_digest(provided, secret)
+
+
 async def _composio_webhook_handler(request: web.Request) -> web.Response:
+    if not _webhook_secret_ok(request):
+        return web.json_response(
+            {"ok": False, "queued": False, "error": "unauthorized"},
+            status=401,
+        )
     try:
         payload = await request.json()
     except Exception as exc:

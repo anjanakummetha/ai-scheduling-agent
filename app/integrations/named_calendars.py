@@ -492,6 +492,14 @@ def create_event_on_calendar(
         payload,
         role=role,
     )
+    # Lexi's own write must be visible to her next slot search. The other create
+    # paths (outlook_calendar.create_calendar_event) invalidate, but this — the
+    # production path holds and invites actually take — returned without it, so a
+    # slot she just held stayed "free" in the 30-min context cache and could be
+    # offered again to a second counterpart (audit 2026-08-15, B2).
+    from app.integrations.outlook_calendar import _invalidate_scheduling_cache
+
+    _invalidate_scheduling_cache()
     data = _coerce_data(result.get("data"))
     event_id = data.get("id")
     if not event_id and isinstance(data.get("event"), dict):

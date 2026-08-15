@@ -257,6 +257,13 @@ def delete_calendar_event(event_id: str) -> str | None:
         },
     )
     _invalidate_scheduling_cache()
+    # Composio can answer 200 with successful=false and no error. Surface it as
+    # a raise so callers treat "no exception" as success — the old contract
+    # returned log_id (None on a real delete), which a soft-failure would also
+    # return, silently reporting a delete that never happened (audit
+    # 2026-08-15, B6/B8).
+    if result.get("successful") is False:
+        raise RuntimeError(f"Outlook refused to delete event {event_id}.")
     return result.get("log_id")
 
 
