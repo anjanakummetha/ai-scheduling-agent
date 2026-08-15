@@ -85,7 +85,7 @@ Country/Region Code, LinkedIn URL, State/Region, Country/Region, Job Title.
 **Credits: 10,000 per month, `0 of 10,000` used, resets Aug 30.** Cost was never
 the blocker. Unused credits do not roll over.
 
-### LinkedIn Sales Navigator — the one that fits this book
+### LinkedIn Sales Navigator — the only source that covers this book, but not the way we assumed
 
 **91% of contacts matched — 2,375 of 2,615. Accounts 98% — 1,961 of 1,996.**
 
@@ -97,15 +97,75 @@ That is precisely where HubSpot's enrichment failed.
 CRM sync is **connected** to HubSpot (Production), access level **read and
 write**, "You can export Sales Navigator data to your CRM."
 
+**The mechanism is "Next Generation CRM Data Validation."** LinkedIn's help
+documentation is explicit that this is the HubSpot variant: *"Sales Navigator
+Advanced Plus customers using HubSpot or Oracle Sales use the Next Generation
+CRM Data Validation feature"* — Salesforce and Dynamics get the older, weaker
+version. IFG has exactly the plan combination this requires.
+
+What it covers, in LinkedIn's own words: it validates *"more than just the
+account on the contact record; flagging when job title, account details and
+account location are out of date **or missing**."*
+
+**That "or missing" matters — it means Sales Navigator does address blank
+fields, not only stale ones.** An earlier draft of this document said the
+opposite. Correcting it changes the conclusion: this is a real backfill route
+for job title and company.
+
+**Three limits, all verified against LinkedIn's documentation:**
+
+1. **Three fields only — job title, company/account, account location.**
+   **Phone is not covered.** No tool available to IFG fills phone. That is the
+   single largest gap in the book (307 contacts) and it stays open.
+
+2. **It is not a background job. Every write is a human click.** A contact whose
+   data is missing or stale shows a *"Update CRM"* badge with a red exclamation
+   mark in search results, profile views and lead lists. The user opens it,
+   LinkedIn pre-fills the correct values, and the user clicks **Confirm
+   updates**. Nothing is written until someone confirms it.
+
+3. **"Bulk update contacts" is far narrower than the name suggests.** It is
+   scoped to a **Relationship Map** — a single saved account, with people added
+   to it manually by a rep. LinkedIn's admin help: *"enable updating lead
+   information in bulk from a Relationship Map."* There is **no book-wide bulk
+   backfill** across all accounts. With ~1,961 matched accounts, building a
+   Relationship Map per account is not a viable path.
+
+**So the realistic shape of the work is a manual pass, one contact at a time,
+over a filtered list** — not a job we can kick off and walk away from. See §6.
+
+**Two prerequisites that are easy to miss:**
+
+- **Kory must individually authenticate his own seat.** From the enablement
+  guide: *"Lead Creation, Contact Creation, and Activity Writeback requires
+  users to individually authenticate (user-auth) with the CRM. This is in
+  addition to admin-level authentication."* Kelley's admin connection is not
+  enough. If Kory has not done this, none of it works for him.
+- **He needs read and write permission on each record.** *"Sales Navigator
+  respects CRM permissions."* The 16 duplicate pairs owned by colleagues are
+  therefore out of reach for him anyway.
+
+**There is a sandbox, and it solves our testing problem.** The guide: *"You can
+connect to a CRM Sandbox environment to initially test CRM Sync with Sales
+Navigator and/or test new CRM features before releasing to all your users."*
+The field mapping can be proven there before anything touches Kory's real
+contacts.
+
+**It also works from inside HubSpot.** *"Create new or update existing CRM
+contacts using Sales Navigator data both from Sales Navigator into your CRM and
+from the Embedded Experience into your CRM."* The Embedded Experience is the
+Sales Navigator panel on the HubSpot contact record — likely the least
+disruptive place for Kory to work, since he never leaves the CRM.
+
 Under **Exported to CRM → Update contacts → Customize**:
 
-- ✅ **Bulk update contacts — ON.** This is the bulk mechanism.
+- ✅ **Bulk update contacts — ON** (Relationship-Map-scoped, per above)
 - ⚠️ **Require email address when updating contacts — OFF.** See §3.
 
-Data Validation exists for HubSpot (confirmed in LinkedIn's own integration
-description), but note what it does: *"Identify when CRM Contacts are
-out-of-date and no longer with their company."* **It flags stale records; it
-does not fill blank ones.** Valuable for accuracy over time, not a backfill.
+Note: the badges themselves are *"automatically enabled for all customers that
+have established their CRM Sync connection"* — which is why there is no
+"Data Validation" page to find in the settings UI. It surfaces as badges in the
+Sales Navigator interface, not as a toggle.
 
 **Sales Navigator admin is `kelley.johnson@iconicfounders.com`** — not Kory.
 
@@ -133,18 +193,30 @@ human. It can be loosened later if coverage disappoints.
 
 ## 4. Still unknown
 
-1. **What fields does "Update contacts" actually write?** The Customize dialog
-   showed matching behaviour, not a field list. Until this is answered we do not
-   know whether it fills job title and company.
-2. **What does "Create contacts" → Customize map?** If new contacts arrive from
+1. **Has Kory individually authenticated his Sales Navigator seat to HubSpot?**
+   This is the first thing to check — admin-level connection is not enough, and
+   without it nothing in §6 works for him. Cheapest possible test: open one of
+   his contacts in Sales Navigator and look for an **Update CRM** badge.
+2. **How many of his 177 title/company gaps actually show a badge?** 91% of
+   contacts are matched, but matched is not the same as flagged. Checking twenty
+   contacts by hand would turn the estimate below into a real number.
+3. **What does "Create contacts" → Customize map?** If new contacts arrive from
    Sales Navigator with a thin field mapping, that is the *source* of the whole
    problem, and fixing it stops new gaps appearing.
-3. **What does the Companies tab of the HubSpot enrichment mapping cover?**
+4. **What does the Companies tab of the HubSpot enrichment mapping cover?**
    HubSpot will not fill a contact's company field, but it can enrich Company
    *records* — and Lexi's best source is already the contact→company
    association. Enriching companies could improve that lookup.
-4. **Did the other enrichment attempts also skip?** Only one Activity entry was
+5. **Did the other enrichment attempts also skip?** Only one Activity entry was
    opened. If all say skipped, HubSpot enrichment is not worth pursuing here.
+
+One documented tension, recorded honestly: the enablement guide summarises Data
+Validation as *"identify when CRM contacts are out-of-date"* with no mention of
+missing values, while the dedicated help article says *"out of date or
+missing."* The help article is more specific and describes the newer
+HubSpot-specific version, so it is the one relied on above — but item 2 is what
+actually settles it, and it should be checked before anyone commits to this
+plan.
 
 ---
 
@@ -152,29 +224,54 @@ human. It can be loosened later if coverage disappoints.
 
 | # | Decision | Owner | Note |
 |---|---|---|---|
-| 1 | Turn ON "Require email address when updating contacts" | Kelley / Sales Nav admin | Safety. Recommended. |
-| 2 | Confirm and set the field mapping for **Update contacts** | Kelley | Decides whether this works at all |
-| 3 | Review the field mapping for **Create contacts** | Kelley | Stops new gaps at source |
-| 4 | Run a bulk update from Sales Navigator | Kory / Heidi | The actual fix, once 1–3 are settled |
-| 5 | Turn ON "Automatically enrich recently engaged contact" in HubSpot | Heidi | Free; helps going forward, not the backlog |
-| 6 | Apply Lexi's 39 staged fills (`hs-8c09e003f9b8`) | Kory | Free, reversible, already verified |
-| 7 | Decide whether to merge any of the 11 duplicate pairs Kory owns | Kory | **Permanent.** The other 16 are colleagues' records |
+| 1 | Confirm Kory has completed Sales Navigator **user-auth** to HubSpot | Kory | Prerequisite for everything below |
+| 2 | Turn ON "Require email address when updating contacts" | Kelley / Sales Nav admin | Safety. Recommended. |
+| 3 | Spot-check 20 contacts for an **Update CRM** badge | Kory / Anjana | Turns the estimate into a number before committing |
+| 4 | Review the field mapping for **Create contacts** | Kelley | Stops new gaps at source |
+| 5 | Decide who does the manual Sales Navigator pass, and over which contacts | Kory / Heidi | ~177 records; not a background job — see §6 |
+| 6 | Turn ON "Automatically enrich recently engaged contact" in HubSpot | Heidi | Free; helps going forward, not the backlog |
+| 7 | Apply Lexi's 39 staged fills (`hs-8c09e003f9b8`) | Kory | Free, reversible, already verified |
+| 8 | Decide whether to merge any of the 11 duplicate pairs Kory owns | Kory | **Permanent.** The other 16 are colleagues' records |
+| 9 | Decide whether phone numbers are wanted for the whole book or just active contacts | Kory | Nothing automated fills phone — see §6.3 |
 
 ---
 
 ## 6. Recommended sequence
 
-1. **Sales Navigator first** — it is the only source that covers this book, it is
-   already paid for, and the bulk mechanism is already on. Settle the field
-   mapping and the email-match setting, then run it.
-2. **Then re-run Lexi's scan.** She only fills blanks and re-checks at apply
+1. **Prove the route on twenty contacts before planning the work.** Check
+   user-auth, open twenty of the 177 gap contacts in Sales Navigator, and count
+   how many show an **Update CRM** badge. If it is most of them, this works and
+   the size of the job is known. If it is few, the plan changes and almost no
+   effort has been spent. This costs under an hour and removes the only real
+   uncertainty left.
+
+2. **Then the manual pass — and it should be a worklist, not a hunt.** There is
+   no book-wide bulk update, so someone clicks through roughly 177 contacts.
+   That is tedious but bounded, and it does not have to be Kory: it needs a
+   Sales Navigator seat with write permission, not judgement about the
+   relationships. **Lexi can generate the exact worklist** — the specific
+   contacts missing title or company, with their LinkedIn URLs (741 of Kory's
+   contacts already carry one) — so whoever does the pass works a list instead
+   of searching. Doing it from the **Embedded Experience inside HubSpot** keeps
+   it in one window.
+
+3. **Then re-run Lexi's scan.** She only fills blanks and re-checks at apply
    time, so she naturally mops up whatever LinkedIn leaves — including the ~30
-   placeholder contacts, which *neither* HubSpot enrichment nor a bulk update
-   will touch, because those fields are not empty.
-3. **Phone stays open.** No source available fills it: HubSpot does not offer it,
-   Sales Navigator does not carry it. Lexi's 16 signature-derived numbers are the
-   only automated coverage. Worth asking whether Kory needs phone numbers for all
-   1,023 contacts or only the ~100 he actually deals with.
+   placeholder contacts, which *neither* HubSpot enrichment nor Sales Navigator
+   will reliably touch, because those fields are not empty.
+
+4. **Phone stays open, and there is no route to close it.** HubSpot enrichment
+   does not offer phone as a property; Sales Navigator validates only title,
+   account and location. Lexi's 16 signature-derived numbers are the only
+   automated coverage that exists. This is worth stating plainly to Kory rather
+   than leaving as an open action, because the honest answer is that 307 missing
+   phone numbers will not be filled by any tool IFG currently owns — the choice
+   is manual effort, a different vendor, or accepting the gap for contacts he
+   does not actively work.
+
+**Test in the sandbox first if there is any doubt about the field mapping.**
+LinkedIn supports connecting Sales Navigator to a HubSpot sandbox precisely so
+this can be validated without touching production.
 
 ---
 
@@ -188,5 +285,24 @@ covers that nothing else does:
 - **Meeting notes**, and **duplicate proposals labelled with the record owner**
 - **Evidence, ownership guard and full undo** on everything she writes
 - New contacts as they arrive, so the gap does not reopen
+- **The worklist for the Sales Navigator pass** — this turned out to be her most
+  valuable contribution to the cleanup. She cannot fill these fields, but she
+  can say exactly which contacts need attention and hand over a list, which is
+  the difference between a bounded afternoon and an open-ended chore
 
 See `SESSION_HANDOFF.md` for the engineering detail.
+
+---
+
+## Sources
+
+Everything about Sales Navigator's capabilities above is from LinkedIn's own
+documentation, not inference:
+
+- [Next Generation CRM Data Validation in Sales Navigator](https://www.linkedin.com/help/sales-navigator/answer/a738351) — the HubSpot-specific feature; "out of date or missing"; job title, account, account location
+- [Update Leads and Contacts](https://www.linkedin.com/help/sales-navigator/answer/a594009) — the Update CRM badge, and "Confirm updates" as a human action
+- [Sales Navigator Admin Settings for CRM](https://www.linkedin.com/help/sales-navigator/answer/a107066) — bulk update is "from a Relationship Map"; the email-address requirement
+- [Relationship Maps in Sales Navigator Account Pages](https://www.linkedin.com/help/sales-navigator/answer/a456397) — per-account scope, leads added manually
+- [Sales Navigator CRM Sync Permissions](https://www.linkedin.com/help/sales-navigator/answer/a158016) — read and write permission per record
+- [CRM Sync for HubSpot Enablement Guide](https://business.linkedin.com/sales-solutions/sales-navigator-customer-hub/resources/crm-sync-hubspot-enablement-guide) (PDF) — user-auth requirement, sandbox support, Embedded Experience
+- [HubSpot: Connect HubSpot and LinkedIn CRM sync](https://knowledge.hubspot.com/integrations/connect-hubspot-and-linkedin-crm-sync) — plan requirements (Sales Hub Pro/Enterprise + Advanced Plus)
