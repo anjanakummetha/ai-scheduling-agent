@@ -1,11 +1,66 @@
-# Lexi — Session Handoff (updated 2026-08-15, scheduling-fix session)
+# Lexi — Session Handoff (updated 2026-08-15, deep-audit session)
 
-**Resume phrase:** *"Scheduling fixes are deployed and live-verified. Anjana's
-final Teams pass is the only thing left before Kory."*
+**Resume phrase:** *"The Aug-11 fixes plus a full pre-handover audit (Tier 1 +
+Tier 2) are deployed. Tier 2 is LIVE-UNTESTED. Scheduling changes + testing are
+next."*
+
+Box at `61ccf82`, **1,117 tests green.** Laptop / GitHub / box in sync.
 
 ---
 
-## THIS SESSION (2026-08-15): every defect from Kory's Aug-11 test, fixed and live-verified
+## THIS SESSION (2026-08-15, later): pre-handover deep audit — Tier 1 + Tier 2 applied
+
+Five-dimension code audit (security, scheduling correctness, DB/concurrency,
+reliability, ops) with every CRITICAL/HIGH verified against the running box.
+**Full report + remaining items: `docs/PRE_HANDOVER_AUDIT.md`** — read that first
+next session.
+
+**Tier 1 (deployed, some live-verified):** phantom-holds filter (a re-offered
+cold thread was reporting 3 holds and placing 0), double-offer cache
+invalidation, a **hard sender allowlist on the `lexi@` command handler** (a
+stranger could implant scheduling policy via memory), webhook bound to
+`127.0.0.1` + a fail-open secret check, `delete_calendar_event` soft-failure
+hardening, logrotate no longer double-managing `lexi.log`, and the
+`p0_8_deploy_and_posture.sh` footgun deleted. A `logger` NameError I'd
+introduced in `comms_agent` was also fixed.
+
+**Tier 2 (deployed, LIVE-UNTESTED — the next session tests these):**
+- **B3** the +6h conflict-calendar window shift (verified gone),
+- **B4/B5** all-day/multi-day unavailability now blocks (OOO/PTO/board/travel/
+  `oof`) while location markers don't, and the confirm-time re-check reads the
+  named calendars (Master+family), fail-closed,
+- **B8** send paths raise on Composio `successful:false`,
+- **C1** an aged-stuck-proposal sweeper (`app/jobs/stuck_proposals.py`),
+- **D3** atomic approval claim (stops concurrent double-send),
+- **B7** cross-proposal slot reservation,
+- **D1** `journal_mode=WAL` (verified active on the box — readers/API no longer
+  block on an approval write),
+- **A4** removed `OUTLOOK_FORWARD_MESSAGE` from the model-callable allowlist.
+
+**What is NOT done (deliberate, in the audit doc):**
+- **A1 enablement** — the webhook secret code is in and inert. To turn it on:
+  set `LEXI_WEBHOOK_SECRET`, re-register the Composio Outlook trigger with
+  `…/webhooks/composio?k=<secret>`, restart, and **confirm a test email still
+  ingests**. Left for a moment when someone can watch ingestion — enabling it
+  wrong silently drops all inbound mail.
+- **A3/A4 full** (server-side send authorization) and **D1
+  send-externalization** — need a design pass + load test, not a hot patch. The
+  real send protection today remains the write-enable flags + approval gate.
+- **Tier 3** (handover hygiene: git-capture the box config, rotate the
+  dashboard `.env.local` keys, out-of-band alerting, Composio re-auth runbook,
+  backups/pruning) — mostly Anjana/Kory; listed in the audit doc.
+
+**Everything Tier 2 changed touches scheduling/calendar/send behavior, so the
+scheduling test next session doubles as the Tier-2 live check.** Watch
+specifically: an all-day OOO/travel day should now block offers; the
+confirm-time check should catch a Master/family conflict added after the offer;
+and re-offered cold threads should place real holds. Composio spend this whole
+session on Kory's key was negligible (~270 calls); the audits ran on Claude
+Code, not his API key.
+
+---
+
+## THIS SESSION (2026-08-15, earlier): every defect from Kory's Aug-11 test, fixed and live-verified
 
 Deployed to the box at `d3a6bce`. **1,088 tests green** (was 1,041). Full live
 E2E ran against the real pipeline (proposal 9809, `[TEST] … LT-R16` to
