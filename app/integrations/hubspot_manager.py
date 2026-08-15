@@ -1349,14 +1349,17 @@ def propose_field_enrichment(
         # single slow batch starves the contacts this tier exists to serve.
         on_record = bool(str(contact.get("hs_linkedin_url") or "").strip())
         affordable = on_record or searches_done < PERSON_SEARCH_MAX_PER_BATCH
-        if not on_record:
-            searches_done += 1
-        if (
-            use_person_lookup
-            and unresolved
-            and affordable
-            and time.monotonic() - started <= time_budget_seconds
-        ):
+        wants_lookup = bool(use_person_lookup and unresolved)
+        # Rationed or out of time is *not* the same as looked at and found
+        # nothing. Recording it as checked would advance the sweep past someone
+        # nobody ever tried — the mirror image of the bug where the sweep spun
+        # on the same nineteen contacts for nine rounds.
+        deferred = wants_lookup and not (
+            affordable and time.monotonic() - started <= time_budget_seconds
+        )
+        if wants_lookup and not deferred:
+            if not on_record:
+                searches_done += 1
             try:
                 person = person_lookup.resolve_person(contact, known_company=known_company)
             except Exception:
@@ -1401,6 +1404,13 @@ def propose_field_enrichment(
                 # Saying "I could not establish anything" about a distribution
                 # address invites someone to go and find a title for it.
                 checked_ids.append(str(contact.get("id") or ""))
+                continue
+            if deferred:
+                # Nothing found and the one tier that might have found something
+                # never ran. Leave it for the next batch instead of reporting it
+                # as a dead end.
+                remaining += 1
+                ran_out_of_time = True
                 continue
             no_source.append(
                 {

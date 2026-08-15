@@ -357,6 +357,66 @@ def test_the_profile_tier_can_be_turned_off(mock_search, _sig, _cfg, db):
 @patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
 @patch("app.integrations.hubspot_manager._signature_fields_for", return_value=({}, {}))
 @patch("app.integrations.hubspot_manager.search_contacts")
+def test_a_contact_rationed_out_of_the_lookup_is_not_recorded_as_checked(
+    mock_search, _sig, _cfg, db, monkeypatch
+):
+    """Rationed is not the same as looked at and found nothing.
+
+    Marking one as checked advances the sweep past somebody nobody ever tried —
+    the mirror image of the bug where a sweep spun on the same nineteen contacts
+    for nine rounds. Both leave gaps unclosed while reporting progress.
+    """
+    monkeypatch.setattr(hs, "PERSON_SEARCH_MAX_PER_BATCH", 1)
+    contacts = [
+        {
+            "id": str(i), "email": f"p{i}@realco{i}.com", "name": f"Person {i}",
+            "jobtitle": "", "company": f"Real Co {i}", "hubspot_owner_id": KORY,
+        }
+        for i in range(4)
+    ]
+    mock_search.return_value = {"total": 4, "count": 4, "contacts": contacts}
+    import app.integrations.hubspot_person_lookup as pl
+
+    with patch.object(pl, "resolve_person", return_value=None) as lookup:
+        out = hs.propose_field_enrichment(limit=10, use_website=False)
+
+    # Only one was affordable, so only one was actually attempted...
+    assert lookup.call_count == 1
+    # ...and only that one is claimed as a dead end.
+    assert out["no_source_count"] == 1
+    # The other three are still owed a look.
+    assert out["remaining"] == 3
+
+    second = hs.propose_field_enrichment(limit=10, use_website=False)
+    assert second["skipped_recently_checked"] == 1
+
+
+@patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
+@patch("app.integrations.hubspot_manager._signature_fields_for", return_value=({}, {}))
+@patch("app.integrations.hubspot_manager.search_contacts")
+def test_a_contact_with_a_url_on_record_is_never_rationed(mock_search, _sig, _cfg, db, monkeypatch):
+    """That path is one fetch, and it serves the placeholder records nothing
+    else can reach."""
+    monkeypatch.setattr(hs, "PERSON_SEARCH_MAX_PER_BATCH", 0)
+    contacts = [
+        {
+            "id": str(i), "email": f"p{i}@gmail.com", "name": f"Person {i}",
+            "jobtitle": "", "company": "Prefer No Connection to Company",
+            "hs_linkedin_url": f"https://linkedin.com/in/p{i}", "hubspot_owner_id": KORY,
+        }
+        for i in range(3)
+    ]
+    mock_search.return_value = {"total": 3, "count": 3, "contacts": contacts}
+    import app.integrations.hubspot_person_lookup as pl
+
+    with patch.object(pl, "resolve_person", return_value=None) as lookup:
+        hs.propose_field_enrichment(limit=10, use_website=False)
+    assert lookup.call_count == 3
+
+
+@patch("app.integrations.hubspot_manager.hubspot_configured", return_value=True)
+@patch("app.integrations.hubspot_manager._signature_fields_for", return_value=({}, {}))
+@patch("app.integrations.hubspot_manager.search_contacts")
 def test_a_placeholder_company_is_not_passed_off_as_a_known_employer(mock_search, _sig, _cfg, db):
     """Corroborating against "Prefer No Connection to Company" would match
     nothing and quietly disable the only guard that matters."""
