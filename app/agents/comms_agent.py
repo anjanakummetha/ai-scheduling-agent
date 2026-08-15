@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import logging
 import re
 import sqlite3
 import traceback
@@ -18,6 +19,8 @@ from app.integrations.outlook_email import (
     send_reply_in_thread,
 )
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 from app.storage.lexi_db import get_lexi_connection
 from app.utils.teams_cards import generate_approval_card
 
