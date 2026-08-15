@@ -276,6 +276,20 @@ def test_stripping_a_suffix_never_leaves_a_stub_that_matches_anything():
     assert pl.employer_matches("Acme Widgets", domain="co.com") == ""
 
 
+def test_a_promotion_beats_the_older_role_at_the_same_employer():
+    """Two open-ended entries at one company is a promotion, not a tie. The
+    order the index happens to return them in must not decide it."""
+    entity = _entity(
+        "Aaron Collins",
+        [
+            ("Account Executive", "Holmes Murphy", {"from": "2016-01-01"}),
+            ("Vice President", "Holmes Murphy", {"from": "2023-06-01"}),
+        ],
+    )
+    role = pl.role_at_known_employer(entity, known_company="Holmes Murphy")
+    assert role["title"] == "Vice President"
+
+
 def test_free_mail_never_corroborates():
     """Otherwise every gmail contact corroborates against any company whose
     name happens to contain "gmail"-ish characters."""

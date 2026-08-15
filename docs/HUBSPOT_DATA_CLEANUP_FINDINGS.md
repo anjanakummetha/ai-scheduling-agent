@@ -292,7 +292,7 @@ plan.
 | 4 | Review the field mapping for **Create contacts** | Kelley | Stops new gaps at source |
 | 5 | Decide who does the manual Sales Navigator pass, and over which contacts | Kory / Heidi | ~177 records; not a background job — see §6 |
 | 6 | Turn ON "Automatically enrich recently engaged contact" in HubSpot | Heidi | Free; helps going forward, not the backlog |
-| 7 | Apply Lexi's 39 staged fills (`hs-8c09e003f9b8`) | Kory | Free, reversible, already verified |
+| 7 | Apply Lexi's fills — she generates a fresh batch on request in Teams | Kory | Free, reversible, evidence on every value |
 | 8 | Decide whether to merge any of the 11 duplicate pairs Kory owns | Kory | **Permanent.** The other 16 are colleagues' records |
 | 9 | Decide whether phone numbers are wanted for the whole book or just active contacts | Kory | Nothing automated fills phone — see §6.3 |
 

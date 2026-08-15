@@ -436,9 +436,17 @@ def role_at_known_employer(
             "corroboration": corroboration,
             "ended": ended.isoformat() if ended else "",
             "current": ended is None or ended >= today,
+            "started": str((work.get("dates") or {}).get("from") or ""),
         }
-        # A role they still hold beats one they have left.
-        if best is None or (candidate["current"] and not best["current"]):
+        # A role they still hold beats one they have left; between two they
+        # still hold at the same employer, the one they started later is the
+        # promotion. Rich Halvas has four entries across two companies, so the
+        # order the index happens to return them in is not a tie-break.
+        if best is None:
+            best = candidate
+        elif candidate["current"] and not best["current"]:
+            best = candidate
+        elif candidate["current"] == best["current"] and candidate["started"] > best["started"]:
             best = candidate
     return best
 
