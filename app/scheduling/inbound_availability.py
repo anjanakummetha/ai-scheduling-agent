@@ -75,6 +75,13 @@ _QUOTE_CUT_MARKERS = (
     ),
     re.compile(r"^-{2,}\s*original message\s*-{2,}", re.I | re.M),
     re.compile(r"^\s*from:\s.+$", re.I | re.M),
+    # Outlook's HTML→text conversion can glue the reply header mid-line
+    # ("...mobile deviceFrom: Matt Maley <matt@...>"), defeating the
+    # line-anchored marker — the header's own "August 7 at 6:42 AM" then
+    # parsed as a proposed time (live corpus 2026-08-16). An email in angle
+    # brackets right after "From:"/"Date: <weekday>," is unambiguous.
+    re.compile(r"\bfrom:\s*[^\n<]{0,80}<[^>\s]+@[^>\s]+>", re.I),
+    re.compile(r"\bdate:\s*(?:mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)[a-z]*day,\s", re.I),
     re.compile(r"^_{5,}\s*$", re.M),
     re.compile(r"^\s*>", re.M),
     re.compile(r"^\s*sent from my \w+", re.I | re.M),
@@ -112,8 +119,10 @@ _SHARED_MERIDIEM_RANGE_RE = re.compile(
 # send gate refused a correct ET-first offer draft as a slot mismatch).
 # Propagate the trailing label onto the start time.
 _RANGE_TZ_LABEL_RE = re.compile(
-    r"\b(\d{1,2}:\d{2}\s*(?:am|pm))\s*[–—\-]\s*"
-    r"(\d{1,2}:\d{2}\s*(?:am|pm))\s+"
+    # Minutes optional on either side: real EAs write "1pm-3pm ET" (live
+    # corpus 2026-08-16, Garnett Station) as often as "1:00 PM–3:00 PM ET".
+    r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*[–—\-]\s*"
+    r"(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s+"
     r"(et|est|edt|eastern|ct|cst|cdt|central|mt|mst|mdt|mountain"
     r"|pt|pst|pdt|pacific)\b",
     re.I,
@@ -248,6 +257,9 @@ def extract_inbound_time_candidates(
                 # Monday is the call that already HAPPENED; parsing it made
                 # next Monday 3pm a bookable candidate (audit B9).
                 continue
+            if _in_negative_context(text, match.start(), match.end()):
+                # "Oct 13-14 ... would be tough" is a blackout, not an offer.
+                continue
             slot = _match_to_slot(match, now=now, kind=kind,
                                   prefer_next_week=prefer_next_week, tod_hour=tod_hour,
                                   date_only_default=date_only_default, zone=zone)
@@ -294,7 +306,31 @@ def _refers_to_past_meeting(text: str, pos: int) -> bool:
     return bool(_PAST_REFERENCE_RE.search(text[max(0, pos - 45):pos]))
 
 
+# "Oct 13-14 ... anything else around then would be tough" — a stated
+# BLACKOUT, not availability (live corpus 2026-08-16, Alpine board thread).
+_NEGATIVE_CONTEXT_RE = re.compile(
+    r"\b(?:would be tough|will be tough|is tough|too tough|doesn'?t work"
+    r"|won'?t work|not work|hard for|difficult|blackout|fully booked"
+    r"|i'?m (?:out|traveling|away)|we'?re (?:out|traveling|away)"
+    r"|unavailable|can'?t (?:do|make)|cannot (?:do|make)|avoid)\b",
+    re.I,
+)
+
+
+def _in_negative_context(text: str, start_pos: int, end_pos: int) -> bool:
+    """True when the date/time's own sentence says it does NOT work."""
+    left = text.rfind(".", 0, start_pos)
+    right = text.find(".", end_pos)
+    sentence = text[left + 1 : right if right != -1 else len(text)]
+    return bool(_NEGATIVE_CONTEXT_RE.search(sentence))
+
+
 _CONTINUATION_RE = re.compile(
+    # Optional leading range-end ("-10am") first: an EA offering windows
+    # writes "9am-10am or 12pm-1pm ET", and the range end blocked the or-
+    # continuation so the second window was silently dropped (live corpus
+    # 2026-08-16 — the dropped window was the one the human EA then picked).
+    r"\s*(?:[–—\-]\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?)?"
     r"\s*(?:m[sd]?t|mountain(?:\s+time)?|e[sd]?t|eastern|c[sd]?t|central"
     r"|p[sd]?t|pacific)?\.?\s*(?:,\s*)?(?:and|or|,)\s+(?:at\s+)?"
     r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)"
