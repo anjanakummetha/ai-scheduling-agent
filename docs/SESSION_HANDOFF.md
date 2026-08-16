@@ -1,10 +1,58 @@
-# Lexi — Session Handoff (updated 2026-08-15, deep-audit session)
+# Lexi — Session Handoff (updated 2026-08-16, scheduling-hardening session)
 
-**Resume phrase:** *"The Aug-11 fixes plus a full pre-handover audit (Tier 1 +
-Tier 2) are deployed. Tier 2 is LIVE-UNTESTED. Scheduling changes + testing are
-next."*
+**Resume phrase:** *"Scheduling is hardened, deployed at `8a2b429`, live-verified
+10/10 on the box, Hermes session cleared. Anjana's final Teams pass is the only
+thing left before scheduling signs off."*
 
-Box at `61ccf82`, **1,117 tests green.** Laptop / GitHub / box in sync.
+Box at `8a2b429`, **1,187 tests green (verified ON the box).** Laptop / GitHub /
+box in sync.
+
+---
+
+## THIS SESSION (2026-08-15→16): full scheduling-flow hardening for Kory's real workflow
+
+Everything ran below the model or in Claude Code — **$0 Claude API on Kory's
+key, ~30 Composio calls.** Two commits:
+
+**`9068bd5` — scheduling hardening.** Reply parsing in the recipient's
+timezone (unlabeled "Thursday at 2" from an ET sender = 2 PM ET; explicit
+labels win); slot-choice matching in the zones the offer email rendered, never
+raw UTC; audit-B9 parser gaps closed (bare "at 2", "next Tuesday", "1/2 hour",
+past-meeting references, wrapped Gmail attributions); **remembered rules now
+ENFORCED in the validator** (day blocks / floors / caps from Kory's verbatim
+words, liftable per-run by guidance — closes live K-3); **multi-change guidance
+honored end-to-end** (weekday incl. negations, duration incl. the gate's
+expectation, time-of-day incl. inversion, and week directives that beat the
+sender's phrasing in the merged body); past-time refusal at edit and send.
+New pinned suites: recipient-tz parsing, remembered day rules, multi-change
+guidance, **Teams-guidance replay through the real retry chain**, **delegation
+replay below the model** (Kory's "Looping in Lexi" reply → counterpart
+resolution → Lexi-voice engine offer → pending_approval, deduped), and the
+**model-facing tool contract** (tool registrations + steering docstrings +
+SOUL.md honesty section — the Teams-parity guard).
+
+**`8a2b429` — 10 defects an adversarial review confirmed in the first batch,
+fixed + pinned** (`tests/test_adversarial_review_fixes.py`): wrong-slot booking
+on a labeled-hour reply, continuation-zone inheritance, "around 5 minutes"/"10
+people" phantom times, hyphenated "1/2-hour"→Jan 2, lift-direction flip that
+deleted standing rules, "after 8"→8 AM cap, "can't do Friday" restricting TO
+Friday, "Thanks for reaching out, Tuesday…" swallowed, possessive "today's"
+collapsing the window, sender's own "On Monday…" line eaten by quote stripping.
+**Lesson: adversarially review every parser/regex change with concrete repros
+before deploying — the review paid for itself ten times over.**
+
+**Deployed + live-verified:** box fast-forwarded to `8a2b429`, Hermes session
+cleared (remember-tool docstring changed), both services restarted, health ok,
+co-tenants untouched. `scripts/live_scheduling_verify.py` (new, reusable) ran
+10/10 on the box: engine vs the real calendar (no conflicts, future-only,
+**B4 all-day blocking live-verified** — real blocked days Sep 6–7 avoided),
+remember round-trip, and a HOLD create/read/delete round-trip verified against
+the destination with zero residue.
+
+**Next: Anjana's final Teams pass.** The session store was cleared, so the
+first message starts fresh with the new tool list. Suggested order: delegation
+reply → offer card wording → "change the times" multi-edit → remember a rule →
+counter-proposal reply → reschedule → cancel.
 
 ---
 
