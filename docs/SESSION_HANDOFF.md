@@ -1,15 +1,98 @@
-# Lexi — Session Handoff (updated 2026-08-16, scheduling-hardening session)
+# Lexi — Session Handoff (updated 2026-08-16, final scheduling production pass)
 
-**Resume phrase:** *"Scheduling is hardened, deployed at `8a2b429`, live-verified
-10/10 on the box, Hermes session cleared. Anjana's final Teams pass is the only
-thing left before scheduling signs off."*
+**Resume phrase:** *"Scheduling is PRODUCTION-READY at `75cd2a2` — real-thread
+replays, 12/12 model-layer battery on the production gateway model, full-flow
+live E2E (proposal 9868) all green. Anjana's Teams pass is the only remaining
+gate; the Hermes session is cleared and waiting for her first message."*
 
-Box at `8a2b429`, **1,187 tests green (verified ON the box).** Laptop / GitHub /
-box in sync.
+Box at `75cd2a2`, **1,203 tests green (verified ON the box).** Laptop / GitHub /
+box in sync. Health ok, co-tenants untouched, zero test residue anywhere.
 
 ---
 
-## THIS SESSION (2026-08-15→16): full scheduling-flow hardening for Kory's real workflow
+## THIS SESSION (2026-08-16, latest): final production checks — three layers, all verified
+
+Anjana's directive: finalize Lexi for production; always accurate, never false
+info, asks with options when unclear; ≤$5 Claude API. **Actual spend: ~$0.09
+Claude API** (model battery only — everything else ran below the model or in
+Claude Code), ~460 Composio calls, budget flat at ~18%.
+
+**1. Her two provided real threads replay to the human outcome (`81b1573`).**
+The Curtis multi-round negotiation and the Steve/Heidi multi-party thread
+exposed six parser gaps, all fixed + pinned in
+`tests/test_user_provided_threads.py`:
+- "Thursday or Friday August 13th or 14th" parsed as the NEAREST bare
+  Thursday — three weeks early, inside the sender's stated blackout. Ordinal
+  dates ("the 13th") now resolve to the right calendar day; either/or date
+  pairs parse both days AND widen the scheduling window so the gate accepts
+  the second day.
+- "Anything the following week?" now reads as a week-shift rejection.
+- "Monday is pretty packed. Could something Tuesday work?" → {Tuesday} only
+  (post-negation).
+- Kory's shorthand works: "Either day works at 9 mountain" retimes the
+  sender's proposed days to his hour; "the 20th 12-3MT" (glued meridiem-less
+  range) parses.
+- "shoot me some days/times" is recognized as ask-us-to-propose; the Kory
+  ping says so and offers the retry command.
+Also this session (`d5cac3d`): 72 real mailbox threads extracted read-only
+(`scripts/extract_scheduling_threads.py` — `top` up to 1000 IS honored on
+OUTLOOK_LIST_MESSAGES; `search`/`filter` are decorative) exposed 4 more gaps
+(EA or-windows dropped, minute-less range tz labels, stated blackouts parsed
+as availability, Outlook's GLUED mid-line reply headers), fixed + pinned in
+`tests/test_real_thread_patterns.py`.
+
+**2. Model-layer battery on the PRODUCTION model (`9da8cff`).**
+`scripts/model_layer_battery.py` runs 12 Kory-style turns against the exact
+gateway model (**claude-sonnet-4-6**, from `~/.hermes/config.yaml`) with the
+real `deploy/SOUL.md` and tool schemas extracted from `hermes_mcp_server.py`.
+First run 11/12 — **it caught a real Aug-11-class bug live**: given
+`holds_confirmed: 0`, the model relayed "Offer sent! ✅" without the
+disclosure (the earlier code fix covered only the Teams-text path, not the
+model-called approve tools). Fix: `_execute_lexi_approval_payload` now ships
+a ready `kory_message` stating the hold truth, and the approve docstrings
+demand verbatim relay. Re-run **12/12**. Re-run this battery (~$0.05) after
+ANY prompt/docstring/SOUL change, before testing in Teams:
+`ANTHROPIC_API_KEY=... .venv/bin/python scripts/model_layer_battery.py`
+
+**3. Full-flow live E2E on the box (`75cd2a2`, proposal 9868).**
+`scripts/live_full_flow_e2e.py` (Teams pushes muted, [TEST] subject, sends
+only to anjanakummetha@gmail.com): inbound day-pair ask → engine offer →
+"9 mountain" guidance → approve → REAL email sent → hold verified ON the
+calendar (destination, not reply) → counterpart's "Thursday the 20 at 9
+works" parsed as the correct pick → pending_invite → holds deleted and
+verified GONE, all DB rows removed. All steps passed. Note: Friday 9:00 was
+genuinely busy on the live calendar and the engine correctly staged only the
+free day — accuracy over compliance, exactly the required behavior. (Two
+fixture lessons inside the driver: the outbound send branch reads the
+recipient from `email_threads.sender` and needs a real address in it;
+`recipient_selected_slot` is stored as a JSON slot dict.)
+
+**Models in play:** gateway = claude-sonnet-4-6 · scheduler/drafting =
+claude-sonnet-5 · triage = claude-haiku-4-5. A model battery is only
+meaningful on the gateway model.
+
+---
+
+## NEXT SESSION: Anjana's Teams pass (the only remaining gate)
+
+Session store cleared — her first message starts fresh with the new tool
+list. Suggested order:
+1. Delegation: reply to a scheduling email CC'ing lexi@ ("Looping in Lexi to
+   find us a time") → offer card.
+2. Guidance: multi-change ("Thursday only, 45 minutes, afternoon") and
+   shorthand ("either day at 9 mountain").
+3. Remember: "no meetings on Fridays" → ask for times → no Friday →
+   "forget that".
+4. Reply handling from her gmail (Reply-All): ET-phrased counter-time, then
+   "none work, following week?" → re-offer.
+5. Watch throughout: every "sent" claim must name the holds placed (or say
+   none were); refusals must name the clash. If Teams behavior diverges,
+   grep `~/.hermes/logs/agent.log` for `tool <name> completed` — a missing
+   tool line means the model never called it.
+
+---
+
+## THIS SESSION (2026-08-15→16, earlier): full scheduling-flow hardening for Kory's real workflow
 
 Everything ran below the model or in Claude Code — **$0 Claude API on Kory's
 key, ~30 Composio calls.** Two commits:
