@@ -390,6 +390,28 @@ def schedule_from_context(
     )
 
 
+def _bare_clock_from_guidance(guidance: str) -> tuple[int, int] | None:
+    """A single dateless clock time in Kory's directive ('either day at 9
+    mountain', 'let's do 2 pm'). None when absent or ambiguous (2+ times)."""
+    import re as _re
+
+    from app.scheduling.inbound_availability import (
+        _infer_bare_hour_meridiem,
+        _normalize_shared_meridiem_ranges,
+    )
+
+    text = _infer_bare_hour_meridiem(_normalize_shared_meridiem_ranges(guidance))
+    times = _re.findall(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text, _re.I)
+    if len(times) != 1:
+        return None
+    hour, minute, meridiem = int(times[0][0]), int(times[0][1] or 0), times[0][2].lower()
+    if meridiem == "pm" and hour < 12:
+        hour += 12
+    elif meridiem == "am" and hour == 12:
+        hour = 0
+    return (hour, minute) if 6 <= hour <= 21 else None
+
+
 def _try_inbound_slots(
     body: str,
     *,
@@ -406,19 +428,55 @@ def _try_inbound_slots(
     )
 
     # Sender candidates come from the sender's text alone. Kory's guidance
-    # contributes a candidate ONLY when he names an explicit clock time
-    # ("offer Monday 10:30 only" — live H-4); constraint-only guidance
-    # ("Tuesday or Wednesday, 45 minutes, afternoon") used to be parsed out
-    # of the merged body as if the SENDER had proposed those times, staging a
-    # phantom 9 AM default instead of running the engine with constraints.
+    # contributes a candidate when he names an explicit clock time ("offer
+    # Monday 10:30 only" — live H-4) OR an explicit calendar DATE ("Most of
+    # the 19th is open" — real Curtis thread). Weekday-only guidance
+    # ("Tuesday or Wednesday, 45 minutes") stays a CONSTRAINT, not a
+    # candidate — it used to stage a phantom 9 AM default instead of running
+    # the engine with constraints (adversarial-review concern).
     candidates = extract_inbound_time_candidates(body, default_tz=default_tz)
     if guidance.strip():
         seen = {c["start"] for c in candidates}
-        for cand in extract_inbound_time_candidates(
+        guidance_cands = extract_inbound_time_candidates(
             guidance, include_flags=True  # Kory writes MT — no sender tz here
-        ):
-            if cand.pop("explicit_time", False) and cand["start"] not in seen:
+        )
+        for cand in guidance_cands:
+            explicit = cand.pop("explicit_time", False)
+            kind = cand.pop("kind", "")
+            if (explicit or kind in ("month", "ordinal", "mdy")) and cand[
+                "start"
+            ] not in seen:
                 candidates.append(cand)
+        if not guidance_cands and candidates:
+            # "Either day works at 9 [mountain]" (real Curtis thread): a bare
+            # clock with no date applies to the days already under
+            # discussion — retime each sender-proposed day to Kory's hour.
+            bare = _bare_clock_from_guidance(guidance)
+            if bare is not None:
+                from datetime import datetime as _dt
+
+                hour, minute = bare
+                retimed = []
+                seen_days = set()
+                for cand in candidates:
+                    try:
+                        start = _dt.fromisoformat(cand["start"])
+                    except ValueError:
+                        continue
+                    if start.date() in seen_days:
+                        continue
+                    seen_days.add(start.date())
+                    end = _dt.fromisoformat(cand["end"])
+                    new_start = start.replace(hour=hour, minute=minute)
+                    retimed.append(
+                        {
+                            "start": new_start.isoformat(),
+                            "end": (new_start + (end - start)).isoformat(),
+                            "source": "kory_guidance_clock",
+                        }
+                    )
+                if retimed:
+                    candidates = retimed
         # "make it 45 minutes" must resize the candidate slots too, or the
         # gate (which honors guided duration) refuses the sizes this path
         # staged (review concern: safe-side deadlock).

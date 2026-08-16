@@ -333,6 +333,9 @@ _REJECTION_PATTERNS = (
     r"\b(?:look at|do|try|move (?:it|this|to)|push (?:it|this)? ?to|how about|"
     r"switch to|go with)\s+(?:the\s+)?(?:following|next|another|a different)\s+week\b",
     r"\b(?:following|another|a different) week instead\b",
+    # "Anything the following week?" — Kory's own real counter-phrasing
+    # (Curtis thread): a week-shift ask with no leading verb.
+    r"\banything\s+(?:in\s+)?(?:the\s+)?(?:following|next)\s+week\b",
     r"\bthat (?:whole )?week\b[^.\n]{0,50}\b(?:messy|full|busy|bad|tough|"
     r"doesn'?t work|won'?t work|not (?:great|good|ideal))\b",
 )

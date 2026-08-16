@@ -129,6 +129,16 @@ _RANGE_TZ_LABEL_RE = re.compile(
 )
 
 
+# "12-3MT" / "12-3 MT" — Kory's own shorthand (real Curtis thread: "the 20th
+# 12-3MT"): a bare-hour range glued to a zone label, no meridiems at all.
+# Business-hours reading: 8-11 start = am, else pm.
+_BARE_RANGE_TZ_RE = re.compile(
+    r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s*"
+    r"(mt|mst|mdt|et|est|edt|ct|cst|cdt|pt|pst|pdt)\b",
+    re.I,
+)
+
+
 def _normalize_shared_meridiem_ranges(text: str) -> str:
     def _fix(match: re.Match[str]) -> str:
         h1, m1, h2, m2, meridiem = match.groups()
@@ -140,6 +150,13 @@ def _normalize_shared_meridiem_ranges(text: str) -> str:
             f"{h1}:{m1 or '00'} {start_mer} – {h2}:{m2 or '00'} {mer}"
         )
 
+    def _fix_bare(match: re.Match[str]) -> str:
+        h1, h2, label = match.groups()
+        start_mer = "am" if 8 <= int(h1) <= 11 else "pm"
+        end_mer = "am" if 8 <= int(h2) <= 11 else "pm"
+        return f"{h1}:00 {start_mer} {label} – {h2}:00 {end_mer} {label}"
+
+    text = _BARE_RANGE_TZ_RE.sub(_fix_bare, text)
     text = _SHARED_MERIDIEM_RANGE_RE.sub(_fix, text)
     return _RANGE_TZ_LABEL_RE.sub(r"\1 \3 – \2 \3", text)
 
@@ -231,16 +248,35 @@ def extract_inbound_time_candidates(
         ("month", re.compile(
             rf"\b({month_alt})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?"
             rf"(?:[^.\n]{{0,25}}?{time_re})?", re.I)),
-        # Weekday: "Wednesday at 2pm", "Tue 9". Skip when an explicit date follows
-        # ("Wednesday, 8/5" / "Wednesday August 5") so the explicit date wins.
+        # Bare ordinal date: "Thursday the 13th", "the 19th", "anytime after
+        # 12pm MST on Thursday the 13th" (real Curtis thread). Resolves to the
+        # nearest future day-of-month. A leading clause time ("12pm MST on")
+        # binds to the date; a trailing one ("the 20th 12-3MT") also works.
+        ("ordinal", re.compile(
+            rf"(?:{time_re}\s+(?:[a-z.]{{2,9}}\s+)?on\s+)?"
+            r"(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday"
+            r"|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\s+)?"
+            r"the\s+(\d{1,2})(?:st|nd|rd|th)\b"
+            rf"(?![^.\n]{{0,12}}\bof\b)"  # "the 13th of August" → month kind
+            # Trailing time must not cross a comma — it swallowed the NEXT
+            # clause's time ("...the 13th, or anytime after 10:30am on...").
+            rf"(?:[^.,\n]{{0,20}}?{time_re})?", re.I)),
+        # Weekday: "Wednesday at 2pm", "Tue 9". Skip when an explicit date
+        # follows nearby — "Wednesday, 8/5", "Thursday the 13th", "Thursday or
+        # Friday August 13th" — so the explicit date wins; the bare-weekday
+        # reading put the Curtis ask a full three weeks early (real thread).
         ("weekday", re.compile(
             r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\b"
-            rf"(?!\s*,?\s*(?:\d{{1,2}}/\d{{1,2}}|(?:{month_alt})\.?\s+\d))"
+            rf"(?!\s*,?\s*(?:\d{{1,2}}/\d{{1,2}}|(?:{month_alt})\.?\s+\d|the\s+\d{{1,2}}(?:st|nd|rd|th)))"
+            rf"(?!\s+or\s+\w+day\b[^.\n]{{0,20}}(?:(?:{month_alt})\.?\s+\d|the\s+\d{{1,2}}(?:st|nd|rd|th)))"
             rf"(?:[^.\n]{{0,40}}?{time_re})?", re.I)),
         # Time first, day second: "3pm on Wednesday" / "2 PM next Tuesday".
+        # A trailing "the 14th" means the ordinal pattern owns it — the bare
+        # weekday reading was three weeks early (real Curtis thread).
         ("time_weekday", re.compile(
             rf"{time_re}\s+(?:on\s+|this\s+|next\s+)?"
-            r"(Monday|Tuesday|Wednesday|Thursday|Friday|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\b",
+            r"(Monday|Tuesday|Wednesday|Thursday|Friday|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\b"
+            r"(?!\s+the\s+\d{1,2}(?:st|nd|rd|th))",
             re.I)),
         # Numeric date: "8/25 at 9am". "1/2 hour call" / "1/2-hour call" is a
         # duration fraction, not January 2 (audit B9 + review defect 4) — the
@@ -275,6 +311,11 @@ def extract_inbound_time_candidates(
                 first_zone = _tz_label_after(match) or zone
                 for cont in _continuation_times(text[match.end():match.end() + 60]):
                     _add(_slot_at_same_day(slot, cont, zone=first_zone))
+                if kind in ("month", "ordinal"):
+                    # Date continuation: "August 13th or 14th" is TWO dates —
+                    # the second was silently dropped (real Curtis thread).
+                    for day_num in _continuation_dates(text[match.end():match.end() + 30]):
+                        _add(_slot_on_day_of_month(slot, day_num))
             if len(candidates) >= 5:
                 break
     # "That Monday doesn't work, but Tuesday at 3:30 PM ET?" — the bare
@@ -285,6 +326,7 @@ def extract_inbound_time_candidates(
     if not include_flags:
         for c in chosen:
             c.pop("explicit_time", None)
+            c.pop("kind", None)
     return chosen[:5]
 
 
@@ -360,6 +402,54 @@ def _continuation_times(tail: str) -> list[tuple[int, int, str | None]]:
     return out
 
 
+_DATE_CONTINUATION_RE = re.compile(
+    r"^\s*(?:,\s*)?(?:or|and|,)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b(?!\s*(?:am|pm|:))",
+    re.I,
+)
+
+
+def _continuation_dates(tail: str) -> list[int]:
+    """Day-of-month list from 'or 14th' continuations at tail start."""
+    out: list[int] = []
+    rest = tail
+    while True:
+        m = _DATE_CONTINUATION_RE.match(rest)
+        if not m:
+            break
+        day = int(m.group(1))
+        if 1 <= day <= 31:
+            out.append(day)
+        rest = rest[m.end():]
+    return out
+
+
+def _slot_on_day_of_month(slot: dict[str, str], day_num: int) -> dict[str, str] | None:
+    """The same time as `slot` on another day-of-month in the same month
+    (rolling forward a month if that day already passed relative to slot)."""
+    try:
+        start = datetime.fromisoformat(slot["start"])
+        end = datetime.fromisoformat(slot["end"])
+    except (KeyError, ValueError):
+        return None
+    duration = end - start
+    year, month = start.year, start.month
+    if day_num < start.day:
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+    try:
+        new_start = start.replace(year=year, month=month, day=day_num)
+    except ValueError:
+        return None
+    return {
+        "start": new_start.isoformat(),
+        "end": (new_start + duration).isoformat(),
+        "source": slot.get("source", "inbound_availability"),
+        "explicit_time": bool(slot.get("explicit_time")),
+        "kind": slot.get("kind", "month"),
+    }
+
+
 def _slot_at_same_day(
     slot: dict[str, str],
     clock: tuple[int, int, str | None],
@@ -388,6 +478,7 @@ def _slot_at_same_day(
         "end": (new_start + duration).isoformat(),
         "source": slot.get("source", "inbound_availability"),
         "explicit_time": True,
+        "kind": slot.get("kind", "weekday"),
     }
 
 
@@ -471,6 +562,32 @@ def _match_to_slot(
             start = datetime(year, month, day_num, hour, minute, tzinfo=wall_zone)
             if start < now - timedelta(hours=12):
                 start = start.replace(year=year + 1)
+        elif kind == "ordinal":
+            # Groups: 1-3 leading time, 4 day-of-month, 5-7 trailing time.
+            day_num = int(match.group(4))
+            if not 1 <= day_num <= 31:
+                return None
+            hm = _clock(match, 1, 2, 3, None, None) or _clock(
+                match, 5, 6, 7, tod_hour, date_only_default
+            )
+            if hm is None:
+                return None
+            hour, minute = hm
+            # Nearest future occurrence of that day-of-month.
+            year, month = now.year, now.month
+            if day_num < now.day or (
+                day_num == now.day
+            ):  # "the 13th" said on/after the 13th means next month's
+                month += 1
+                if month > 12:
+                    month, year = 1, year + 1
+            try:
+                start = datetime(year, month, day_num, hour, minute, tzinfo=wall_zone)
+            except ValueError:  # e.g. "the 31st" in a 30-day month
+                month += 1
+                if month > 12:
+                    month, year = 1, year + 1
+                start = datetime(year, month, day_num, hour, minute, tzinfo=wall_zone)
         else:  # mdy
             month = int(match.group(1))
             day_num = int(match.group(2))
@@ -502,6 +619,7 @@ def _match_to_slot(
             "end": end.isoformat(),
             "source": "inbound_availability",
             "explicit_time": explicit,
+            "kind": kind,
         }
     except (TypeError, ValueError):
         return None

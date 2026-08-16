@@ -154,6 +154,23 @@ def _infer_calendar_date_window(combined: str, today: date) -> SchedulingWindow 
                 label=f"week of {start.strftime('%B')} {start.day}",
             )
 
+    # An either/or date pair: "August 13th or 14th", "Thursday or Friday
+    # September 10th or 11th" (real Curtis thread) — the window must span BOTH
+    # days, or the gate refuses the second day the sender explicitly offered.
+    match = re.search(
+        rf"\b({_MONTH_RE})\.?\s+(\d{{1,2}}){_ORDINAL}\s*"
+        rf"(?:,\s*)?(?:or|and)\s+(?:the\s+)?(\d{{1,2}}){_ORDINAL}\b",
+        combined,
+    )
+    if match:
+        month_name, first_day, second_day = match.groups()
+        start = _resolve_month_day(_MONTHS[month_name], int(first_day), today)
+        end = _resolve_month_day(_MONTHS[month_name], int(second_day), today)
+        if start and end and end >= start:
+            return SchedulingWindow(
+                start=start, end=end, source="body", label=_range_label(start, end)
+            )
+
     # A single named date: "August 12", "on Aug 12th"
     match = re.search(rf"\b({_MONTH_RE})\.?\s+(\d{{1,2}}){_ORDINAL}\b", combined)
     if match:
@@ -539,6 +556,14 @@ _GUIDANCE_DAY_NEGATION_RE = re.compile(
     r"|instead of|rather than|drop|forget)\s+(?:on\s+|a\s+)?$",
     re.I,
 )
+# The negation can FOLLOW the day: "Monday is pretty packed" (Kory's real
+# phrasing, Steve thread) meant "not Monday" — it read as a Monday pick.
+_DAY_POST_NEGATION_RE = re.compile(
+    r"\s+is\s+(?:pretty\s+|really\s+|very\s+|totally\s+)?"
+    r"(?:packed|full|busy|booked|slammed|tough|crazy|out|shot|a no.?go|no good)\b"
+    r"|\s+(?:doesn'?t|does not|won'?t|will not)\s+work\b",
+    re.I,
+)
 
 
 def weekdays_from_guidance(guidance: str) -> set[int] | None:
@@ -564,7 +589,10 @@ def weekdays_from_guidance(guidance: str) -> set[int] | None:
     for match in _GUIDANCE_DAY_RE.finditer(text):
         day = _WEEKDAY_INDEX[match.group(1).lower()]
         preceding = text[max(0, match.start() - 22):match.start()]
-        if _GUIDANCE_DAY_NEGATION_RE.search(preceding):
+        following = text[match.end():match.end() + 30]
+        if _GUIDANCE_DAY_NEGATION_RE.search(preceding) or _DAY_POST_NEGATION_RE.match(
+            following
+        ):
             negatives.add(day)
         else:
             positives.add(day)

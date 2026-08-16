@@ -246,6 +246,18 @@ def _body_preview(body: str, limit: int = 120) -> str:
     return _truncate_at_word((body or "").strip(), limit)
 
 
+# "How about you shoot me some days/times that work for you" (real Curtis
+# thread) — the counterpart is asking KORY's side to propose. This must not
+# read as an unparseable mystery: the right next step is a fresh offer.
+_ASK_US_TO_PROPOSE_RE = re.compile(
+    r"(?i)\b(?:shoot|send|give|throw)\s+(?:me|us|over)\s+(?:some\s+)?"
+    r"(?:days?|times?|dates?|options|availability|windows)\b"
+    r"|\bdays?/times?\s+that\s+work\s+for\s+you\b"
+    r"|\bwhat\s+(?:days?|times?)\s+works?\s+(?:best\s+)?for\s+you\b"
+    r"|\byour\s+availability\b|\bwhat(?:'s| is)\s+your\s+(?:calendar|schedule)\s+look"
+)
+
+
 def _handle_unparsed_followup(
     raw_email: dict[str, Any],
     proposal: dict[str, Any],
@@ -256,11 +268,20 @@ def _handle_unparsed_followup(
     sender = str(proposal.get("sender") or "them")
     subject = str(proposal.get("subject") or "(no subject)")
     preview = _body_preview(body)
-    summary = (
-        f"**{subject}** — {sender} replied and I couldn't auto-parse it:\n"
-        f"\"{preview}\"\n\n"
-        f"Should I draft a follow-up or confirm a time?"
-    )
+    proposal_id = int(proposal["proposal_id"])
+    if _ASK_US_TO_PROPOSE_RE.search(_body_preview(body, limit=400)):
+        summary = (
+            f"**{subject}** — {sender} asked US to propose times:\n"
+            f"\"{preview}\"\n\n"
+            f"Want me to send fresh options? Say **retry scheduling for "
+            f"#{proposal_id}** (add any days/times to steer it)."
+        )
+    else:
+        summary = (
+            f"**{subject}** — {sender} replied and I couldn't auto-parse it:\n"
+            f"\"{preview}\"\n\n"
+            f"Should I draft a follow-up or confirm a time?"
+        )
     _notify_kory_followup(int(proposal["proposal_id"]), summary=summary, kind="unparsed_reply")
     return {
         **prior,
