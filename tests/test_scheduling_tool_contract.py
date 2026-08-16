@@ -135,3 +135,14 @@ def test_soul_dates_rule_present():
     # The model's internal date sense is wrong on the box; every relative-date
     # answer must go through lexi_today.
     assert "lexi_today" in SOUL
+
+
+def test_approval_payload_carries_hold_truth_message():
+    # The model composes Kory's reply from the raw approve payload; the live
+    # battery (2026-08-16) showed it can relay "Sent!" while ignoring
+    # holds_confirmed=0. The payload must ship a ready kory_message and the
+    # docstrings must demand verbatim relay.
+    assert "kory_message" in SERVER_SRC
+    assert "NO calendar holds were placed" in SERVER_SRC
+    for tool in ("approve_decision", "execute_lexi_approval_tool"):
+        assert "relay it VERBATIM" in DOCS[tool], tool

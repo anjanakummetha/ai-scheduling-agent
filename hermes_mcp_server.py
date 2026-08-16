@@ -1931,6 +1931,23 @@ def _execute_lexi_approval_payload(
         )
         body = result.to_dict()
         body["ok"] = result.ok
+        # The model composes Kory's reply from this payload, and the live
+        # battery (2026-08-16) showed it can relay "Sent!" while ignoring
+        # holds_confirmed=0 — the exact Aug-11 false-positive. Ship a ready
+        # sentence that states the hold truth; the tool description tells the
+        # model to relay it verbatim.
+        if result.ok and result.email_sent and result.holds_placed_times is not None:
+            if result.holds_placed_times:
+                body["kory_message"] = (
+                    "Sent. Holds now on the calendar: "
+                    + "; ".join(result.holds_placed_times)
+                    + "."
+                )
+            else:
+                body["kory_message"] = (
+                    "Sent — but NO calendar holds were placed. Tell Kory "
+                    "exactly that."
+                )
         return json.dumps(body, default=str)
     except ValidationError as exc:
         return _error(f"Invalid tool input: {exc}", code="validation_error")
@@ -1951,7 +1968,12 @@ def execute_lexi_approval_tool(
     authorized_by: str,
     modification_notes: str = "",
 ) -> str:
-    """Approve, modify-approve, or reject an inbound-email Lexi proposal."""
+    """Approve, modify-approve, or reject an inbound-email Lexi proposal.
+
+    The result's `kory_message` states exactly what happened to calendar
+    holds — relay it VERBATIM. Never say holds exist unless
+    holds_placed_times lists them; an empty list means NO holds were placed
+    and Kory must be told that."""
     return _execute_lexi_approval_payload(
         proposal_id=proposal_id,
         decision=decision,
@@ -1967,7 +1989,12 @@ def approve_decision(
     selected_slot: str = "",
     authorized_by: str = "kory",
 ) -> str:
-    """Approve a pending inbound proposal (auto-picks first slot if omitted)."""
+    """Approve a pending inbound proposal (auto-picks first slot if omitted).
+
+    The result's `kory_message` states exactly what happened to calendar
+    holds — relay it VERBATIM. Never say holds exist unless
+    holds_placed_times lists them; an empty list means NO holds were placed
+    and Kory must be told that."""
     slot_value = selected_slot.strip()
     if not slot_value:
         for item in get_lexi_pending_queue():
