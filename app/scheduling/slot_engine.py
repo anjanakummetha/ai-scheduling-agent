@@ -278,7 +278,23 @@ def find_valid_slots(
         if g_days:
             allowed_weekdays = g_days
         if not skip_time_of_day:
-            g_tod = infer_time_of_day_window(subject="", body=guidance)
+            negated = re.search(
+                # "avoid mornings" means the OPPOSITE of a mornings window —
+                # the inference has no negation handling (review concern).
+                r"\b(?:avoid|not?|except|skip|no more)\b[^.!?\n]{0,15}"
+                r"\b(morning|afternoon|evening)s?\b",
+                guidance,
+                re.I,
+            )
+            if negated:
+                complement = {
+                    "morning": "afternoon",
+                    "afternoon": "morning",
+                    "evening": "afternoon",
+                }[negated.group(1).lower()]
+                g_tod = infer_time_of_day_window(subject="", body=complement)
+            else:
+                g_tod = infer_time_of_day_window(subject="", body=guidance)
             if g_tod is not None:
                 time_window = g_tod
         g_duration = parse_duration_from_text(guidance)

@@ -73,7 +73,17 @@ def apply_guidance_window(plan: "SchedulingPlan", guidance: str) -> "SchedulingP
     plan.kory_guidance = guidance
     if not guidance:
         return plan
-    window = infer_scheduling_window(subject="", body=guidance)
+    # "redo it, today's draft was too stiff" is about the DRAFT — possessive
+    # day words carry no window (review defect 9: it collapsed the search to
+    # today, a Saturday).
+    window_text = re.sub(
+        r"\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday"
+        r"|saturday|sunday)'s\b",
+        " ",
+        guidance,
+        flags=re.IGNORECASE,
+    )
+    window = infer_scheduling_window(subject="", body=window_text)
     if window is not None:
         plan.window = SchedulingWindow(
             start=window.start,

@@ -203,6 +203,11 @@ def match_recipient_slot_choice(
             start = parse_iso_datetime(str(slot.get("start") or ""))
             if not start:
                 continue
+            # "4:00 PM MT works" carries its own zone — a slot whose labeled
+            # reading contradicts every stated time is not this pick, even if
+            # the bare hour happens to fit in another zone (review defect 1).
+            if _time_contradicts_slot(text_times, start):
+                continue
             local = start.astimezone(zone)
             hour12 = int(local.strftime("%I"))
             minute = local.strftime("%M")

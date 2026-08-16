@@ -534,7 +534,9 @@ _GUIDANCE_DAY_RE = re.compile(
     re.I,
 )
 _GUIDANCE_DAY_NEGATION_RE = re.compile(
-    r"\b(?:avoid|not|no|except|skip|besides|other than|anything but)\s+(?:on\s+)?$",
+    r"\b(?:avoid|not|no|except|skip|besides|other than|anything but"
+    r"|can'?t (?:do|make)|cannot (?:do|make)|won'?t work on?"
+    r"|instead of|rather than|drop|forget)\s+(?:on\s+|a\s+)?$",
     re.I,
 )
 
@@ -549,15 +551,26 @@ def weekdays_from_guidance(guidance: str) -> set[int] | None:
     text = (guidance or "").strip()
     if not text:
         return None
+    # "Monday's draft was stiff" is about the draft, not the day — possessive
+    # day mentions carry no scheduling constraint (review defect 9 family).
+    text = re.sub(
+        r"\b(?:monday|tuesday|wednesday|thursday|friday|today|tomorrow)'s\b",
+        " ",
+        text,
+        flags=re.I,
+    )
     positives: set[int] = set()
     negatives: set[int] = set()
     for match in _GUIDANCE_DAY_RE.finditer(text):
         day = _WEEKDAY_INDEX[match.group(1).lower()]
-        preceding = text[max(0, match.start() - 14):match.start()]
+        preceding = text[max(0, match.start() - 22):match.start()]
         if _GUIDANCE_DAY_NEGATION_RE.search(preceding):
             negatives.add(day)
         else:
             positives.add(day)
+    # A day both named and negated ("try Thursday instead of Friday") is a
+    # negation — review defect 7 kept Friday in the allowed set.
+    positives -= negatives
     if positives:
         return positives
     if negatives:

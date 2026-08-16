@@ -1722,7 +1722,14 @@ def lexi_get_thread_context(conversation_id: str, exclude_message_id: str = "") 
 
 @_tool
 def lexi_remember_kory_fact(fact_key: str, fact_value: str) -> str:
-    """Save an explicit long-term preference Kory stated (not chat thread memory)."""
+    """Save an explicit long-term preference Kory stated (not chat thread memory).
+
+    Store `fact_value` as KORY'S OWN WORDS, verbatim — scheduling rules he
+    states ("no meetings on Fridays", "nothing before 8:30 AM Tuesdays",
+    "I'm fine with lunch meetings", "max 1 happy hour a week") are parsed
+    from that sentence and ENFORCED by the slot engine, and a paraphrase may
+    not parse. After saving a scheduling rule, tell Kory it now constrains
+    slot searches; he can undo it anytime with "forget that"."""
     return _wrap(
         "lexi_remember_kory_fact",
         lexi.remember_kory_fact_action,

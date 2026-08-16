@@ -419,6 +419,21 @@ def _try_inbound_slots(
         ):
             if cand.pop("explicit_time", False) and cand["start"] not in seen:
                 candidates.append(cand)
+        # "make it 45 minutes" must resize the candidate slots too, or the
+        # gate (which honors guided duration) refuses the sizes this path
+        # staged (review concern: safe-side deadlock).
+        from datetime import datetime, timedelta
+
+        from app.scheduling.calendar_intelligence import parse_duration_from_text
+
+        g_dur = parse_duration_from_text(guidance)
+        if g_dur:
+            for cand in candidates:
+                try:
+                    start_dt = datetime.fromisoformat(cand["start"])
+                except (KeyError, ValueError):
+                    continue
+                cand["end"] = (start_dt + timedelta(minutes=g_dur)).isoformat()
     if not candidates:
         return None
 

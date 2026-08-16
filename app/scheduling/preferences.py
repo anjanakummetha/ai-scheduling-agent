@@ -108,14 +108,29 @@ _TIME_BOUND_RE = re.compile(
     rf"(?:\s+(?:on\s+)?({_DAY_ALT}))?",
     re.IGNORECASE,
 )
-# "before 8 is fine (for this one)" — a guidance-level floor lift.
-_TIME_BOUND_LIFT_RE = re.compile(
-    r"\b(?:before|after)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+is\s+"
+# "before 8 is fine (for this one)" lifts the FLOOR; "after 4 is fine" lifts
+# the CAP — clearing floors for both silently deleted a standing rule Kory
+# never mentioned (review defect 5).
+_FLOOR_LIFT_RE = re.compile(
+    r"\bbefore\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+is\s+"
     r"(?:fine|ok(?:ay)?|good|approved)\b"
-    r"|\b(?:early|late)\s+is\s+(?:fine|ok(?:ay)?|good|approved)\b",
+    r"|\bearly\s+is\s+(?:fine|ok(?:ay)?|good|approved)\b",
+    re.IGNORECASE,
+)
+_CAP_LIFT_RE = re.compile(
+    r"\bafter\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+is\s+"
+    r"(?:fine|ok(?:ay)?|good|approved)\b"
+    r"|\blate\s+is\s+(?:fine|ok(?:ay)?|good|approved)\b",
     re.IGNORECASE,
 )
 _DAYPART_NEARBY_RE = re.compile(r"\b(?:morning|afternoon|evening)s?\b", re.IGNORECASE)
+# "no meetings Friday this week" is a one-week ask, not a standing rule — a
+# permanent weekday block from it would outlive the week it was about.
+_TEMPORAL_SCOPE_RE = re.compile(
+    r"\b(?:this|next|the coming)\s+(?:week|monday|tuesday|wednesday|thursday|"
+    r"friday)\b|\btomorrow\b|\btoday\b|\bthis one\b",
+    re.IGNORECASE,
+)
 
 
 def _bound_hour(hour: int, minute: int, meridiem: str | None) -> tuple[int, int] | None:
@@ -134,9 +149,10 @@ def _bound_hour(hour: int, minute: int, meridiem: str | None) -> tuple[int, int]
 def _apply_day_rules(prefs: SchedulingPreferences, value: str) -> None:
     """Enforceable day rules from a remembered sentence or Teams guidance."""
     for match in _DAY_BLOCK_RE.finditer(value):
-        # "no meetings Friday afternoons" is a time rule, not a full-day block.
+        # "no meetings Friday afternoons" is a time rule, not a full-day block,
+        # and "no meetings Friday this week" is one week, not a standing rule.
         window = value[max(0, match.start() - 10):match.end() + 16]
-        if _DAYPART_NEARBY_RE.search(window):
+        if _DAYPART_NEARBY_RE.search(window) or _TEMPORAL_SCOPE_RE.search(window):
             continue
         token = next(g for g in match.groups() if g)
         prefs.blocked_weekdays.add(_DAY_INDEX[token.lower()])
@@ -147,9 +163,15 @@ def _apply_day_rules(prefs: SchedulingPreferences, value: str) -> None:
         bound = _bound_hour(int(hour_s), int(minute_s or 0), meridiem)
         if bound is None:
             continue
-        # "before 10" with no meridiem is a morning floor, not 10 PM.
-        if kind.lower() == "before" and not meridiem and 1 <= int(hour_s) <= 12:
-            bound = (int(hour_s), int(minute_s or 0))
+        hour_raw = int(hour_s)
+        if not meridiem:
+            if kind.lower() == "before" and 1 <= hour_raw <= 12:
+                # "before 10" with no meridiem is a morning floor, not 10 PM.
+                bound = (hour_raw, int(minute_s or 0))
+            elif kind.lower() == "after" and 1 <= hour_raw <= 11:
+                # "nothing after 8" means 8 PM — an 8 AM cap would reject
+                # every working hour of every day (review defect 6).
+                bound = (hour_raw + 12, int(minute_s or 0))
         day_key = _DAY_INDEX[day.lower()] if day else -1
         target = (
             prefs.earliest_start_by_day
@@ -157,8 +179,10 @@ def _apply_day_rules(prefs: SchedulingPreferences, value: str) -> None:
             else prefs.latest_end_by_day
         )
         target[day_key] = bound
-    if _TIME_BOUND_LIFT_RE.search(value):
+    if _FLOOR_LIFT_RE.search(value):
         prefs.earliest_start_by_day.clear()
+    if _CAP_LIFT_RE.search(value):
+        prefs.latest_end_by_day.clear()
 
 
 _SLOT_MIN_RELAX = re.compile(

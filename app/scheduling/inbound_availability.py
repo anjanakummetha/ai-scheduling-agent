@@ -65,7 +65,14 @@ _QUOTE_CUT_MARKERS = (
     # Gmail wraps long attributions across two lines ("On Thu, Jul 24 ... Lexi
     # Knightly\n<lexi@...> wrote:") — the one-line pattern missed them and the
     # attribution's own date/time was mined as the sender's proposal (B9).
-    re.compile(r"^\s*on\b[^\n]{0,200}\n[^\n]{0,120}\bwrote:\s*$", re.I | re.M),
+    # Line 1 must actually look like an attribution (a year or "at h:mm"),
+    # or a sender's own "On Monday I can do 2 pm" line above a real one-line
+    # attribution gets eaten as line 1 of this pattern (review defect 10).
+    re.compile(
+        r"^\s*on\b[^\n]{0,200}?(?:\b\d{4}\b|\bat \d{1,2}:\d{2}\s*(?:am|pm)?)"
+        r"[^\n]{0,120}\n[^\n]{0,120}\bwrote:\s*$",
+        re.I | re.M,
+    ),
     re.compile(r"^-{2,}\s*original message\s*-{2,}", re.I | re.M),
     re.compile(r"^\s*from:\s.+$", re.I | re.M),
     re.compile(r"^_{5,}\s*$", re.M),
@@ -140,9 +147,15 @@ def _writing_zone(default_tz: str | None) -> ZoneInfo:
 
 # "at 2" / "around 3:30" — a clock time with no meridiem. Only trusted when
 # anchored by at/around (bare numbers are usually counts, suite numbers, or
-# fractions), and never when a slash/colon/digit follows (dates, scores).
+# fractions), and never when a slash/colon/digit follows (dates, scores) or a
+# unit/count noun follows ("around 5 minutes", "around 10 people" — review
+# defect 3: those became explicit 5 PM / 10 AM candidates).
 _BARE_HOUR_RE = re.compile(
-    r"\b(at|around)\s+(\d{1,2})(:\d{2})?\b(?!\s*(?:am|pm|a\.m|p\.m|[:./\d-]))",
+    r"\b(at|around)\s+(\d{1,2})(:\d{2})?\b"
+    r"(?!\s*(?:am|pm|a\.m|p\.m|[:./\d-]"
+    r"|minutes?\b|mins?\b|hours?\b|hrs?\b|days?\b|weeks?\b|months?\b"
+    r"|people\b|folks\b|guests\b|attendees\b|of\b|or\b|percent\b|%"
+    r"|miles?\b|blocks?\b|slots?\b|options?\b|times?\b))",
     re.I,
 )
 
@@ -220,10 +233,11 @@ def extract_inbound_time_candidates(
             rf"{time_re}\s+(?:on\s+|this\s+|next\s+)?"
             r"(Monday|Tuesday|Wednesday|Thursday|Friday|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\b",
             re.I)),
-        # Numeric date: "8/25 at 9am". "1/2 hour call at 3pm" is a duration
-        # fraction, not January 2 (audit B9) — the lookahead refuses it.
+        # Numeric date: "8/25 at 9am". "1/2 hour call" / "1/2-hour call" is a
+        # duration fraction, not January 2 (audit B9 + review defect 4) — the
+        # lookahead refuses it, hyphenated or not.
         ("mdy", re.compile(
-            rf"\b(\d{{1,2}})/(\d{{1,2}})(?!\s*(?:hour|hr)s?\b)"
+            rf"\b(\d{{1,2}})/(\d{{1,2}})(?!\s*[-–]?\s*(?:hour|hr)s?\b)"
             rf"(?:/(\d{{2,4}}))?(?:[^.\n]{{0,20}}?{time_re})?", re.I)),
     ]
 
@@ -241,9 +255,14 @@ def extract_inbound_time_candidates(
             if slot:
                 # Continuation times share the named day: "Monday August 17 at
                 # 10:30 AM MT and 3:30 PM MT" is TWO candidates (live H-4 —
-                # the second time was silently dropped).
+                # the second time was silently dropped). An unlabeled
+                # continuation shares the FIRST time's zone — "10:30 AM MT or
+                # 3:30 PM" is 3:30 MT even from an Eastern sender (review
+                # defect 2); the sender's stored zone applies only when the
+                # first time was unlabeled too.
+                first_zone = _tz_label_after(match) or zone
                 for cont in _continuation_times(text[match.end():match.end() + 60]):
-                    _add(_slot_at_same_day(slot, cont, zone=zone))
+                    _add(_slot_at_same_day(slot, cont, zone=first_zone))
             if len(candidates) >= 5:
                 break
     # "That Monday doesn't work, but Tuesday at 3:30 PM ET?" — the bare
@@ -257,12 +276,15 @@ def extract_inbound_time_candidates(
     return chosen[:5]
 
 
+# A comma/dash ends the backward-looking clause: "Thanks for reaching out,
+# Tuesday at 3 works" is a live proposal (review defect 8) — only a time
+# INSIDE the thanks/talking clause itself is a past reference.
 _PAST_REFERENCE_RE = re.compile(
     r"(?:great|good|nice|enjoyed|loved)\s+(?:talking|chatting|catching up|"
-    r"speaking|meeting|call|conversation)[^.!?\n]{0,25}$"
-    r"|(?:thanks?|thank you)\s+for[^.!?\n]{0,30}$"
-    r"|\b(?:we|you and i)\s+(?:spoke|talked|met|chatted)[^.!?\n]{0,20}$"
-    r"|\bsince\s+(?:we|our)[^.!?\n]{0,20}$",
+    r"speaking|meeting|call|conversation)[^.!?,;\n—–-]{0,25}$"
+    r"|(?:thanks?|thank you)\s+for[^.!?,;\n—–-]{0,30}$"
+    r"|\b(?:we|you and i)\s+(?:spoke|talked|met|chatted)[^.!?,;\n—–-]{0,20}$"
+    r"|\bsince\s+(?:we|our)[^.!?,;\n—–-]{0,20}$",
     re.I,
 )
 

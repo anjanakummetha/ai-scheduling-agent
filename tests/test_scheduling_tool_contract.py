@@ -112,6 +112,12 @@ def test_escalation_targets_kory_only():
     assert "ONLY escalation target" in doc
 
 
+def test_remember_docstring_demands_verbatim_words():
+    doc = DOCS["lexi_remember_kory_fact"]
+    assert "verbatim" in doc.lower()
+    assert "ENFORCED" in doc
+
+
 def test_soul_keeps_the_scheduling_honesty_section():
     assert "times are tool output" in SOUL
     for phrase in (
