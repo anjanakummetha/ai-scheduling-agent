@@ -650,6 +650,11 @@ _TRAILING_WEEKDAY_RE = re.compile(
     r"|Mon|Tues|Tue|Thurs|Thur|Thu|Wed|Fri|Sat|Sun)\b\.?,?\s*(?:the\s+)?$",
     re.I,
 )
+_ANY_WEEKDAY_RE = re.compile(
+    r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday"
+    r"|Mon|Tues|Tue|Thurs|Thur|Thu|Wed|Fri|Sat|Sun)\b",
+    re.I,
+)
 
 
 def _stated_weekday_for(match: re.Match, kind: str, text: str) -> int | None:
@@ -671,6 +676,16 @@ def _stated_weekday_for(match: re.Match, kind: str, text: str) -> int | None:
     found = _TRAILING_WEEKDAY_RE.search(head)
     if not found:
         return None
+
+    # "Thursday or Friday September 10th or 11th" (real Curtis thread) pairs a
+    # LIST of weekdays with a LIST of dates, positionally — the nearest weekday
+    # does not belong to the nearest date, so comparing them invents a
+    # contradiction and drops a perfectly good candidate. Only a single,
+    # unambiguous weekday can be checked against a single date.
+    wider = text[max(0, match.start() - 40) : match.start()]
+    if len(_ANY_WEEKDAY_RE.findall(wider)) > 1:
+        return None
+
     token = found.group(1).lower()
     return _WEEKDAYS.get(token[:3], _WEEKDAYS.get(token))
 

@@ -141,3 +141,44 @@ def test_a_stale_month_day_rolling_into_next_year_is_caught():
         calendar_context=_CTX_FREE,
     )
     assert not check.ok, "a slot 11 months out must not pass the send gate silently"
+
+
+@freeze_time(_TODAY)
+def test_a_weekday_LIST_paired_with_a_date_list_is_not_a_contradiction():
+    """"Thursday or Friday September 10th or 11th" — the real Curtis thread.
+
+    The weekdays pair with the dates positionally, so the nearest weekday does
+    not belong to the nearest date. An early version of this check compared
+    "Friday" against the 10th, called it a contradiction, and dropped a
+    perfectly good candidate — turning a false positive into a lost meeting.
+    """
+    text = "Could we schedule a call for Thursday or Friday September 10th or 11th?"
+    cands = extract_inbound_time_candidates(text)
+    assert cands, "the ask must still parse"
+    assert not any(c.get("weekday_mismatch") for c in cands), (
+        "an either/or weekday list must never be read as a contradiction"
+    )
+
+
+@freeze_time(_TODAY)
+def test_contradictory_ask_reaches_kory_as_a_question_instead_of_an_offer():
+    """Nothing is proposed off a contradictory time; Kory is asked which was meant."""
+    from unittest.mock import patch
+
+    from app.scheduling.schedule_from_context import schedule_from_context
+
+    d = _next(2)
+    with patch(
+        "app.scheduling.calendar_context.load_scheduling_calendar_context",
+        return_value={"status": "available", "horizon_days": 45, "busy_events": []},
+    ):
+        r = schedule_from_context(
+            subject="[TEST] intro",
+            body=f"Can we meet {_wrong_name(d)}, {d:%B} {d.day} at 2:00 PM?",
+            intent="referral_or_intro",
+            sender_email="curtis@example.com",
+            use_llm_plan=False,
+        )
+    note = " ".join(r.inbound_notes) + " " + r.failure_message
+    assert _name(d) in note and _wrong_name(d) in note
+    assert "Which did they mean?" in note

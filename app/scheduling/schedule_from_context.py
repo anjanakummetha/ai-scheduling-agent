@@ -435,6 +435,25 @@ def _try_inbound_slots(
     # candidate — it used to stage a phantom 9 AM default instead of running
     # the engine with constraints (adversarial-review concern).
     candidates = extract_inbound_time_candidates(body, default_tz=default_tz)
+
+    # A weekday that disagrees with its date ("Wednesday, September 10" when the
+    # 10th is a Thursday) is a contradiction we must not resolve by picking one.
+    # Drop those candidates so nothing is proposed off them, and hand Kory the
+    # specific question — he can see the thread and we cannot.
+    contradiction_notes: list[str] = []
+    kept: list[dict] = []
+    for cand in candidates:
+        mismatch = cand.get("weekday_mismatch")
+        if mismatch:
+            contradiction_notes.append(
+                f'They wrote "{mismatch["text"]}", but {mismatch["date"]} is a '
+                f'{mismatch["actual"]}, not a {mismatch["stated"]}. '
+                f"Which did they mean?"
+            )
+        else:
+            kept.append(cand)
+    candidates = kept
+
     if guidance.strip():
         seen = {c["start"] for c in candidates}
         guidance_cands = extract_inbound_time_candidates(
@@ -492,6 +511,17 @@ def _try_inbound_slots(
                 except (KeyError, ValueError):
                     continue
                 cand["end"] = (start_dt + timedelta(minutes=g_dur)).isoformat()
+    if not candidates and contradiction_notes:
+        # Every time they named was self-contradictory. Do not fall through to
+        # the engine and quietly invent times they never asked for — say what is
+        # wrong and let Kory answer it.
+        return ScheduleFromContextResult(
+            ok=False,
+            path="inbound_availability",
+            status="weekday_date_contradiction",
+            inbound_notes=contradiction_notes,
+            failure_message=" ".join(contradiction_notes),
+        )
     if not candidates:
         return None
 
@@ -502,6 +532,7 @@ def _try_inbound_slots(
         subject=subject,
         body=body,
     )
+    notes = contradiction_notes + list(notes)
     if valid:
         slots = valid[:MAX_SLOT_OPTIONS]
         # plan carries kory_guidance — without it the gate's 2-slot minimum
