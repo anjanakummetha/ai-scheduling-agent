@@ -85,7 +85,12 @@ def extract_offer_times_from_draft(
         end = parse_iso_datetime(str(cand.get("end") or ""))
         if not end or end <= start:
             end = start + timedelta(minutes=duration_minutes)
-        slots.append({"start": start.isoformat(), "end": end.isoformat()})
+        slot = {"start": start.isoformat(), "end": end.isoformat()}
+        # Carry the contradiction forward. Rebuilding the dict from scratch here
+        # silently dropped it, so the send gate saw a clean slot.
+        if cand.get("weekday_mismatch"):
+            slot["weekday_mismatch"] = cand["weekday_mismatch"]
+        slots.append(slot)
     return slots
 
 
@@ -147,6 +152,18 @@ def verify_draft_slots(
     for slot in parsed:
         start = parse_iso_datetime(slot["start"])
         label = _fmt(start) if start else str(slot.get("start"))
+        mismatch = slot.get("weekday_mismatch")
+        if mismatch:
+            # "Tuesday, August 18" where the 18th is a Wednesday. We cannot know
+            # whether the weekday or the date is the typo, and guessing books the
+            # wrong day silently — so refuse and make someone say which.
+            check.ok = False
+            check.conflicts.append(
+                f'"{mismatch["text"]}" does not agree with the calendar — '
+                f'{mismatch["date"]} is a {mismatch["actual"]}, not a '
+                f'{mismatch["stated"]}. Confirm which one is right before sending.'
+            )
+            continue
         if start and start <= now:
             check.ok = False
             check.conflicts.append(f"{label} is in the past.")

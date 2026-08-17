@@ -5,21 +5,44 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import app.agents.inbound_reply as ir
 
+_MT = ZoneInfo("America/Denver")
+
+# Generated from today, not pinned. The pinned "Tuesday, August 18" stopped
+# being a Tuesday — and stopped being this year — once the calendar passed it,
+# which silently inverted the refusal these tests exist to prove.
+
+
+def _weekday_two_weeks_out(weekday: int) -> date:
+    today = date.today()
+    monday = today - timedelta(days=today.weekday()) + timedelta(days=14)
+    return monday + timedelta(days=weekday)
+
+
+def _mt(d: date, hour: int, minute: int = 0) -> str:
+    return datetime(d.year, d.month, d.day, hour, minute, tzinfo=_MT).isoformat()
+
+
+_D1 = _weekday_two_weeks_out(1)   # Tuesday
+_D2 = _weekday_two_weeks_out(8)   # the following Tuesday
+_STAGED_DAY = _weekday_two_weeks_out(0)  # Monday — what is already staged
+
 _DRAFT = (
     "Hi Heidi,\n\nHere are a few times:\n\n"
-    "• Tuesday, August 18 at 1:00–1:30 PM MT\n"
-    "• Tuesday, August 25 at 9:00–9:30 AM MT\n\n"
+    f"• {_D1:%A}, {_D1:%B} {_D1.day} at 1:00–1:30 PM MT\n"
+    f"• {_D2:%A}, {_D2:%B} {_D2.day} at 9:00–9:30 AM MT\n\n"
     "Let me know!\n"
 )
 
 _ALEJANDRA = {
     "subject": "Coffee: Alejandra Harvey <> Kory Mitchell | 9 am (copy)",
-    "start": {"dateTime": "2026-08-25T09:00:00-06:00"},
-    "end": {"dateTime": "2026-08-25T10:00:00-06:00"},
+    "start": {"dateTime": _mt(_D2, 9)},
+    "end": {"dateTime": _mt(_D2, 10)},
 }
 
 
@@ -47,7 +70,7 @@ def _db() -> sqlite3.Connection:
         "INSERT INTO proposals (id, thread_id, status, intent_classification, "
         "drafted_reply, proposed_slots) VALUES (9187, 't1', 'pending_approval', "
         "'internal_sync', 'old draft', ?)",
-        (json.dumps([{"start": "2026-08-24T10:00:00-06:00", "end": "2026-08-24T10:30:00-06:00"}]),),
+        (json.dumps([{"start": _mt(_STAGED_DAY, 10), "end": _mt(_STAGED_DAY, 10, 30)}]),),
     )
     conn.commit()
     return conn
@@ -72,7 +95,7 @@ def test_edit_with_booked_time_is_refused_and_nothing_changes():
     assert any("Alejandra Harvey" in c for c in out["conflicts"])
     row = conn.execute("SELECT drafted_reply, proposed_slots FROM proposals WHERE id=9187").fetchone()
     assert row["drafted_reply"] == "old draft"
-    assert "2026-08-24" in row["proposed_slots"]
+    assert _STAGED_DAY.isoformat() in row["proposed_slots"]
 
 
 def test_edit_with_free_times_updates_draft_and_syncs_slots():
@@ -84,7 +107,7 @@ def test_edit_with_free_times_updates_draft_and_syncs_slots():
     assert len(out["staged_slots"]) == 2
     assert "no holds exist yet" in out["note"].lower() or "No holds exist yet" in out["note"]
     row = conn.execute("SELECT drafted_reply, proposed_slots FROM proposals WHERE id=9187").fetchone()
-    assert "August 18" in row["drafted_reply"]
+    assert f"{_D1:%B} {_D1.day}" in row["drafted_reply"]
     slots = json.loads(row["proposed_slots"])
     assert len(slots) == 2
     # Slots now match the draft — holds will land on the offered times.
@@ -99,4 +122,4 @@ def test_textual_edit_without_times_keeps_slots():
         out = ir.update_proposal_draft(9187, "Hi Heidi,\n\nP.S. congrats on the award!\n")
     assert out["ok"] is True
     row = conn.execute("SELECT proposed_slots FROM proposals WHERE id=9187").fetchone()
-    assert "2026-08-24" in row["proposed_slots"]
+    assert _STAGED_DAY.isoformat() in row["proposed_slots"]

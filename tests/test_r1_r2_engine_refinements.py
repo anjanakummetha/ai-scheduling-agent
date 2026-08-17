@@ -8,10 +8,13 @@ inbound offers carry "no availability for <window> — offering <dates> instead"
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.agents.outbound_agent import _outbound_disclosure_note
 from app.scheduling.scheduling_window import infer_time_of_day_window
+
+_MT = ZoneInfo("America/Denver")
 
 
 def _day_in_week_after_next(weekday: int) -> date:
@@ -25,6 +28,19 @@ def _day_in_week_after_next(weekday: int) -> date:
     today = date.today()
     this_monday = today - timedelta(days=today.weekday())
     return this_monday + timedelta(days=14 + weekday)
+
+
+def _slot(day: date, hour: int = 9, minutes: int = 30, length_minutes: int = 60) -> dict[str, str]:
+    """A slot on `day` in Kory's real zone — the UTC offset follows DST rather
+    than a pinned -06:00, so these stay correct across the March/November flips."""
+    start = datetime(day.year, day.month, day.day, hour, minutes, tzinfo=_MT)
+    end = start + timedelta(minutes=length_minutes)
+    return {"start": start.isoformat(), "end": end.isoformat()}
+
+
+def _long_date(day: date) -> str:
+    """How the disclosure note renders a date: "August 26", no zero padding."""
+    return f"{day.strftime('%B')} {day.day}"
 
 
 def test_mornings_her_time_shifts_to_recipient_zone():
@@ -61,28 +77,32 @@ def test_pacific_shift_goes_the_other_way():
 
 
 def test_outbound_note_discloses_out_of_window_offers():
+    # Anchored to the week after next so the slots stay OUTSIDE a "next week"
+    # ask on whatever day the suite runs. Hardcoded dates made this test pass
+    # only until the calendar caught up with them — on 2026-08-17 the pinned
+    # August 26 fell *inside* next week and the assertion inverted.
+    wednesday = _day_in_week_after_next(2)
+    monday = _day_in_week_after_next(7)  # the following Monday
     note = _outbound_disclosure_note(
         subject="[TEST] intro call",
         body="Outbound delegation by kory. next week",
         intent="meeting",
-        slots=[
-            {"start": "2026-08-26T09:30:00-06:00", "end": "2026-08-26T10:30:00-06:00"},
-            {"start": "2026-09-02T09:30:00-06:00", "end": "2026-09-02T10:30:00-06:00"},
-        ],
+        slots=[_slot(wednesday), _slot(monday)],
         calendar_context={"status": "available", "busy_events": []},
     )
     assert "No availability for next week" in note
-    assert "August 26" in note and "September 2" in note
+    assert _long_date(wednesday) in note and _long_date(monday) in note
 
 
 def test_outbound_note_quiet_when_slots_fit_the_window():
+    # The ask names the slot's own week explicitly, so nothing is out of window.
+    wednesday = _day_in_week_after_next(2)
+    week_start = wednesday - timedelta(days=wednesday.weekday())
     note = _outbound_disclosure_note(
         subject="[TEST] intro call",
-        body="Outbound delegation by kory. week of August 24",
+        body=f"Outbound delegation by kory. week of {_long_date(week_start)}",
         intent="meeting",
-        slots=[
-            {"start": "2026-08-26T09:30:00-06:00", "end": "2026-08-26T10:30:00-06:00"},
-        ],
+        slots=[_slot(wednesday)],
         calendar_context={"status": "available", "busy_events": []},
     )
     assert "No availability" not in note

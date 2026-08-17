@@ -70,6 +70,36 @@ init_lexi_db(_DB)
 
 import pytest  # noqa: E402
 
+# --- 4. Opt-in frozen clock, to run the suite *as if* it were another day -----
+# Scheduling tests are unusually exposed to the calendar: a fixture pinned to a
+# real date drifts in and out of "next week" as time passes, and a suite that
+# means something different each morning cannot certify anything. On 2026-08-17
+# test_outbound_note_discloses_out_of_window_offers inverted for exactly that
+# reason — August 26 had quietly become "next week" — and three send-gate tests
+# in test_draft_slot_sync.py were asserting refusals they no longer got.
+#
+# Started HERE, at conftest import, rather than in a fixture: test modules
+# compute date fixtures at module scope, which runs during collection. A
+# per-test freeze activates too late and reports false failures against
+# constants that were built from the real clock.
+#
+#     LEXI_TEST_FAKE_TODAY=2026-11-02 .venv/bin/python -m pytest -q \
+#         --ignore=tests/test_api_v1.py
+#
+# Pick dates crossing a DST flip, a month end and a year end. test_api_v1 is
+# excluded because freezegun breaks pydantic.v1's import, which is a limitation
+# of the audit tool and not a finding. tick=True keeps the clock moving so
+# nothing waiting on elapsed time can hang.
+_FAKE_TODAY = os.getenv("LEXI_TEST_FAKE_TODAY", "").strip()
+if _FAKE_TODAY:
+    from freezegun import freeze_time  # noqa: E402
+
+    _FREEZER = freeze_time(_FAKE_TODAY, tick=True)
+    _FREEZER.start()
+
+    def pytest_unconfigure(config: pytest.Config) -> None:
+        _FREEZER.stop()
+
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(

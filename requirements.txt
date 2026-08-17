@@ -17,3 +17,4 @@ aiohttp==3.13.5
 
 # Test-only (also installed explicitly in CI; harmless in prod):
 pytest==9.1.1
+freezegun>=1.5

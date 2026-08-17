@@ -298,7 +298,8 @@ def extract_inbound_time_candidates(
                 continue
             slot = _match_to_slot(match, now=now, kind=kind,
                                   prefer_next_week=prefer_next_week, tod_hour=tod_hour,
-                                  date_only_default=date_only_default, zone=zone)
+                                  date_only_default=date_only_default, zone=zone,
+                                  full_text=text)
             _add(slot)
             if slot:
                 # Continuation times share the named day: "Monday August 17 at
@@ -511,6 +512,7 @@ def _match_to_slot(
     tod_hour: int | None = None,
     date_only_default: int | None = None,
     zone: ZoneInfo = MT,
+    full_text: str = "",
 ) -> dict[str, str] | None:
     try:
         # The wall time is written in the sender's zone (an explicit label
@@ -614,15 +616,63 @@ def _match_to_slot(
             for i in range(1, (match.lastindex or 0) + 1)
             if str(match.group(i) or "").lower().replace(".", "") in {"am", "pm"}
         )
-        return {
+        slot = {
             "start": start.isoformat(),
             "end": end.isoformat(),
             "source": "inbound_availability",
             "explicit_time": explicit,
             "kind": kind,
         }
+        # A named weekday that disagrees with the named date is a contradiction
+        # we must NOT silently resolve — see _stated_weekday_for.
+        stated = _stated_weekday_for(match, kind, full_text)
+        if stated is not None and kind in ("month", "ordinal", "mdy"):
+            if start.weekday() != stated:
+                slot["weekday_mismatch"] = {
+                    "stated": _WEEKDAY_NAMES[stated],
+                    "actual": _WEEKDAY_NAMES[start.weekday()],
+                    "date": start.strftime("%B %-d"),
+                    "text": match.group(0).strip(),
+                }
+        return slot
     except (TypeError, ValueError):
         return None
+
+
+_WEEKDAY_NAMES = [
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+]
+
+# A weekday token sitting immediately before a date: "Wednesday, September 10",
+# "Thurs Aug 7". Anchored to the END of the window we hand it.
+_TRAILING_WEEKDAY_RE = re.compile(
+    r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday"
+    r"|Mon|Tues|Tue|Thurs|Thur|Thu|Wed|Fri|Sat|Sun)\b\.?,?\s*(?:the\s+)?$",
+    re.I,
+)
+
+
+def _stated_weekday_for(match: re.Match, kind: str, text: str) -> int | None:
+    """The weekday the writer NAMED alongside an explicit date, if any.
+
+    People get these pairs wrong constantly — "Wednesday, September 10" when the
+    10th is a Thursday. The parser used to keep the date and throw the weekday
+    away without a word, so a counterpart who meant Wednesday got booked on
+    Thursday and nobody found out until the meeting. We cannot know which half
+    they meant, so the only honest move is to notice the contradiction and ask.
+
+    For the ordinal pattern the weekday sits inside the match ("Thursday the
+    13th"); for month/mdy it sits just before it.
+    """
+    if kind == "ordinal":
+        head = match.group(0)[: match.group(0).lower().find("the ")] or match.group(0)
+    else:
+        head = text[max(0, match.start() - 14) : match.start()]
+    found = _TRAILING_WEEKDAY_RE.search(head)
+    if not found:
+        return None
+    token = found.group(1).lower()
+    return _WEEKDAYS.get(token[:3], _WEEKDAYS.get(token))
 
 
 _TZ_LABEL_AFTER_RE = re.compile(

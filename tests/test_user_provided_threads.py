@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+from freezegun import freeze_time
+
 from app.scheduling.inbound_availability import (
     body_looks_like_inbound_availability,
     extract_inbound_time_candidates,
@@ -79,9 +81,17 @@ def test_kory_shorthand_ordinal_and_glued_range():
     assert "2026-08-20T12:00:00-06:00" in _starts(cands)
 
 
+@freeze_time("2026-08-14")
 def test_curtis_full_flow_kory_time_on_curtis_days():
     """Kory: 'Either day works at 9 mountain' → offer stages exactly the
-    sender's two days at 9:00, replicating what Kory did by hand."""
+    sender's two days at 9:00, replicating what Kory did by hand.
+
+    Clock pinned to just before the real thread ran. This is a historical
+    replay, so the dates in the ask are the point and must not be made
+    relative — but schedule_from_context reads the live clock, so without the
+    pin September 10th silently became a past date and the run fell through to
+    the slot engine instead of the inbound-availability path.
+    """
     with patch(
         "app.scheduling.calendar_context.load_scheduling_calendar_context",
         side_effect=_fake_calendar,
