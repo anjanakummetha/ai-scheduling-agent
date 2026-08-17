@@ -120,15 +120,19 @@ def format_pending_list(
         lines.append("")
     if items:
         lines.append("**Drafts ready**\n")
-        for item in items[:15]:
+        for position, item in enumerate(items[:15], start=1):
+            # The number Kory types is the position in this list, not the raw
+            # proposal id — "approve draft 1" beats "approve #9868". Falls back
+            # to the position so the list is never rendered with a raw id.
+            ref = getattr(item, "draft_number", None) or position
             lines.append(
-                f"• **#{item.proposal_id} — {display_subject(item.subject)}** — "
+                f"• **draft {ref} — {display_subject(item.subject)}** — "
                 f"from {display_sender(item.sender)}"
             )
         if len(items) > 15:
             lines.append(f"_…and {len(items) - 15} more._")
     lines.append(
-        "\nSay **show draft #N**, **approve #N**, or **reject #N — reason**."
+        "\nSay **show draft N**, **approve draft N**, or **reject draft N — reason**."
     )
     return "\n".join(lines)
 
@@ -295,7 +299,7 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
             return {
                 "action": "unresolved",
                 "message": (
-                    f"More than one draft is waiting ({ids}) — say **approve #N** "
+                    f"More than one draft is waiting ({ids}) — say **approve draft N** "
                     "for the one you mean, or **pending** to review them."
                 ),
             }
@@ -318,14 +322,14 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
     if show_draft:
         return {
             "action": "show_draft",
-            "proposal_id": int(show_draft.group(1)),
+            "proposal_id": resolve_pending_ref(int(show_draft.group(1))),
         }
 
     approve = _APPROVE_RE.match(normalized)
     if approve:
         return {
             "action": "approve",
-            "proposal_id": int(approve.group(1)),
+            "proposal_id": resolve_pending_ref(int(approve.group(1))),
             "option": int(approve.group(2)) if approve.group(2) else 1,
         }
 
@@ -333,7 +337,7 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
     if reject:
         return {
             "action": "reject",
-            "proposal_id": int(reject.group(1)),
+            "proposal_id": resolve_pending_ref(int(reject.group(1))),
             "reason": (reject.group(2) or "").strip(),
         }
 
@@ -369,6 +373,30 @@ def find_pending_item(proposal_id: int) -> LexiQueueItem | None:
     return None
 
 
+def resolve_pending_ref(number: int) -> int:
+    """Map what Kory typed to a proposal id.
+
+    He types "approve draft 1" — a position in the pending queue, renumbered as
+    items clear. Raw proposal ids still resolve, because a Teams message from
+    last week may quote one and re-typing it must not silently hit the wrong
+    draft.
+
+    The two can never collide: a draft number is bounded by the queue length
+    (single digits in practice) and proposal ids are four digits and up. When
+    the number is inside the queue it is a draft number; otherwise it is an id
+    and is returned untouched for the caller to look up as before.
+    """
+    if number < 1:
+        return number
+    try:
+        queue = get_lexi_pending_queue()
+    except Exception:  # a DB hiccup must not swallow the command
+        return number
+    if number <= len(queue):
+        return queue[number - 1].proposal_id
+    return number
+
+
 def find_pending_item_by_label(*, subject: str, sender: str) -> LexiQueueItem | None:
     from app.bot.teams_labels import resolve_proposal_id
 
@@ -392,7 +420,8 @@ TEAMS_HELP_TEXT = """**Lexi**
 - `today` — today's calendar
 - `prebrief` — pre-meeting briefs (who introduced + context)
 - `brief` — points you to the dashboard (the dashboard owns the morning briefing)
-- `approve #N` / `reject #N — reason` / `show draft #N` — typed commands are the approval surface
+- `approve draft N` / `reject draft N — reason` / `show draft N` — typed commands are the approval surface
+- Draft numbers are the small numbers in `pending` (1, 2, 3…) and renumber as drafts clear
 - Approve only when you want it sent — nothing sends without it
 
 Notifications: when you CC Lexi, when someone replies on a Lexi thread, or important scheduling mail."""

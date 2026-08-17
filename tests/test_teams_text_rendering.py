@@ -111,8 +111,10 @@ class TestApprovalTextCarriesGateContext:
             sender = "anjana@example.com"
 
         text = format_pending_list([_Item()])
-        assert "#6450" in text
-        assert "approve #N" in text
+        # Kory types a small position number, not the raw proposal id.
+        assert "draft 1" in text
+        assert "approve draft N" in text
+        assert "#6450" not in text, "the raw id is noise in the list"
         assert "card buttons" not in text.lower()
 
     def test_pending_list_shows_invite_queue(self):
@@ -134,7 +136,8 @@ class TestApprovalTextCarriesGateContext:
         assert "#6835" in text
         assert "accepted" in text
         assert "approve #6835" in text
-        assert "#6450" in text
+        # The drafts section renumbers; the invite section keeps its own id.
+        assert "draft 1" in text
 
         invites_only = format_pending_list([], invite_items=[_Invite()])
         assert "#6835" in invites_only

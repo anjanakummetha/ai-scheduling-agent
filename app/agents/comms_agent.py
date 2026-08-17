@@ -55,6 +55,11 @@ class LexiQueueItem:
     # following week"). The card renders these in Attention color; the text-only
     # path must carry them too or Kory approves without seeing the caveat.
     scheduling_note: str | None = None
+    # What Kory types: "approve draft 1", not "approve #9868". Position in this
+    # queue, 1-based, renumbered every time the queue is built — so the numbers
+    # stay small as items clear. The raw proposal_id still resolves, because an
+    # older Teams message may quote it.
+    draft_number: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -484,6 +489,11 @@ def get_lexi_pending_queue() -> list[LexiQueueItem]:
                     scheduling_note=row["scheduling_note"],
                 )
             )
+        # Numbered after the ORDER BY above, so the numbering matches the order
+        # Kory reads them in. Assigned here rather than in the query because the
+        # ordering is a CASE expression, not a column.
+        for position, item in enumerate(items, start=1):
+            item.draft_number = position
         return items
 
 

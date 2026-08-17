@@ -51,7 +51,7 @@ def _status_hint(status: str, proposal_id: int) -> str:
     if status in {"needs_kory", "needs_scheduling_guidance"}:
         return f"waiting on your guidance — reply here, or **reject #{proposal_id} — reason** to drop it"
     if status == "pending_approval":
-        return f"a draft is waiting — **show draft #{proposal_id}**, then **approve #{proposal_id}** or **reject #{proposal_id}**"
+        return "a draft is waiting — say **pending** to see it, then **approve draft N** or **reject draft N**"
     return f"a new ask is waiting — **show #{proposal_id}**"
 
 

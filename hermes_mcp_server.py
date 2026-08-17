@@ -1123,10 +1123,18 @@ def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     own memory or a calendar read: the queue and proposal state live in Lexi's
     database and this tool is the only authority. If the result has handled=true,
     relay its message; only if handled=false may you respond conversationally.
-    Examples that MUST route here: 'reject #6487 — test complete',
-    'approve #6481', 'pending', 'show draft #6449', 'send',
+    Examples that MUST route here: 'reject draft 2 — test complete',
+    'approve draft 1', 'pending', 'show draft 1', 'send',
     'cancel meeting #6481 — recipient request' (cancels a BOOKED meeting —
     executed proposals included; never tell Kory to cancel manually).
+
+    Kory approves by DRAFT NUMBER — the small position number shown by
+    'pending' (1, 2, 3…), which renumbers as drafts clear. Pass his message
+    through verbatim; this tool resolves the number. Never invent or guess a
+    number, and never substitute a raw proposal id you saw earlier in the chat:
+    if you are unsure which draft he means, call this tool with 'pending' and
+    ask him which one. Raw ids still resolve, so an older quoted '#6481' is
+    safe to pass through unchanged.
 
     If an approve call TIMES OUT or errors without a clear result, the send may
     still be executing in the background. NEVER tell Kory to approve again — a
