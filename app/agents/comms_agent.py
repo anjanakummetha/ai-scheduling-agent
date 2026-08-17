@@ -234,7 +234,10 @@ def get_lexi_invite_queue() -> list[LexiQueueItem]:
         ).fetchall()
 
         items: list[LexiQueueItem] = []
-        for row in rows:
+        # Numbered as we build, in the ORDER BY order Kory reads them in. Set at
+        # construction because LexiQueueItem is frozen — assigning afterwards
+        # raised at runtime while every unit test still passed.
+        for position, row in enumerate(rows, start=1):
             proposal_id = int(row["proposal_id"])
             holds = _fetch_holds(conn, proposal_id)
             proposal_record = {
@@ -449,7 +452,11 @@ def get_lexi_pending_queue() -> list[LexiQueueItem]:
         ).fetchall()
 
         items: list[LexiQueueItem] = []
-        for row in rows:
+        # Numbered as we build, in the ORDER BY order Kory reads them in. Set at
+        # construction because LexiQueueItem is frozen — assigning afterwards
+        # raised at runtime while every unit test still passed, which is exactly
+        # what the Teams-parity harness exists to catch.
+        for position, row in enumerate(rows, start=1):
             proposal_id = int(row["proposal_id"])
             holds = _fetch_holds(conn, proposal_id)
             proposal_record = {
@@ -487,13 +494,9 @@ def get_lexi_pending_queue() -> list[LexiQueueItem]:
                     holds=holds,
                     approval_card=approval_card,
                     scheduling_note=row["scheduling_note"],
+                    draft_number=position,
                 )
             )
-        # Numbered after the ORDER BY above, so the numbering matches the order
-        # Kory reads them in. Assigned here rather than in the query because the
-        # ordering is a CASE expression, not a column.
-        for position, item in enumerate(items, start=1):
-            item.draft_number = position
         return items
 
 
