@@ -151,24 +151,58 @@ def test_the_rule_is_stored_as_korys_own_words(friday_rule):
     assert stored[0]["fact_value"] == "No meetings on Fridays"
 
 
-def test_a_weaker_zone_signal_falls_back_to_MT_rather_than_guessing():
-    """Documents a real trade-off, so a future change is a decision not an accident.
+def test_a_city_and_state_signature_gets_their_zone_quoted_first():
+    """Kory's rule applies to city+state signatures, which are very common.
 
-    "I'm based in San Francisco, CA." resolves to America/Los_Angeles, but at
-    confidence "inferred" (read off the state abbreviation) rather than "known".
-    email_format.py:198 renders MT-only for any external recipient below
-    "known", so this counterpart is quoted Mountain Time with a note.
+    "San Francisco, CA" is a direct statement of where someone is — as reliable
+    as "I'm on Pacific time" in the body, which has always scored "known". It
+    used to score "inferred" purely because a different function produced it,
+    and email_format renders MT-only for anything below "known". So a prospect
+    signing off with their city got Mountain Time and a "couldn't identify your
+    time zone" note, while the signal sat right there in the signature.
 
-    That is the SAFE direction — a wrong zone in an outbound email is worse than
-    an honest MT fallback — but it does mean Kory's "always quote their zone
-    first" rule silently does not apply to city+state signatures, which are
-    common. Raising `inferred` to `known` for an unambiguous US city+state is a
-    deliberate change to every outbound email and wants its own verification
-    pass; it is NOT a bug to be quietly patched.
+    Confidence now describes the SIGNAL rather than its source — see
+    _SIGNATURE_CITY_PATTERNS. The safety property this replaced is still pinned
+    by the two tests below.
     """
-    result = _offer("I'm based in San Francisco, CA. Can we meet next week?")
+    result = _offer(
+        "Can we meet next week?\n\n--\nDana Reyes\nFounder, Northbeam\n"
+        "San Francisco, CA"
+    )
     assert result.recipient_timezone == "America/Los_Angeles"
-    assert result.recipient_timezone_confidence == "inferred"
+    assert result.recipient_timezone_confidence == "known"
+    assert result.formatted_slots, result.failure_message
+    for line in result.formatted_slots:
+        assert "PT" in line, line
+        assert "MT)" in line, line
+        assert line.index("PT") < line.index("MT)"), (
+            f"their zone must come first, MT in parentheses: {line}"
+        )
+
+
+def test_a_bare_city_mention_still_falls_back_to_MT():
+    """The safety property, kept where it belongs.
+
+    A city name with no state or country is not a statement of residence — "I'll
+    be in London next week" matches the same pattern. A wrong zone in an
+    outbound email is worse than an honest MT fallback, so weak signals still
+    get MT only.
+    """
+    result = _offer("Can we meet next week? I'll be in London for a few days.")
+    assert result.recipient_timezone_confidence != "known"
     for line in result.formatted_slots:
         assert "MT" in line
-        assert "PT" not in line, "either quote PT confidently or not at all"
+        assert "GMT" not in line and "BST" not in line, (
+            "either quote their zone confidently or not at all"
+        )
+
+
+def test_a_phone_area_code_still_falls_back_to_MT():
+    """An area code travels with the person, not with where they live."""
+    result = _offer(
+        "Can we meet next week?\n\n--\nDana Reyes\nm: (415) 555-0142"
+    )
+    assert result.recipient_timezone_confidence != "known"
+    for line in result.formatted_slots:
+        assert "MT" in line
+        assert "PT" not in line, "an area code is a proxy, not a location"

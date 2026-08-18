@@ -438,20 +438,32 @@ def _timezone_from_domain(sender_email: str | None) -> RecipientTimezoneResult |
     return None
 
 
-_SIGNATURE_CITY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\b(?:new york|nyc|manhattan|brooklyn|boston),?\s*(?:ny|ma)\b", re.I), "America/New_York"),
-    (re.compile(r"\b(?:chicago|naperville),?\s*il\b", re.I), "America/Chicago"),
-    (re.compile(r"\b(?:dallas|houston|austin|san antonio|fort worth),?\s*tx\b", re.I), "America/Chicago"),
-    (re.compile(r"\b(?:denver|boulder|colorado springs),?\s*co\b", re.I), "America/Denver"),
-    (re.compile(r"\b(?:los angeles|san francisco|seattle|portland),?\s*(?:ca|wa|or)\b", re.I), "America/Los_Angeles"),
-    (re.compile(r"\b(?:miami|atlanta|charlotte|washington),?\s*(?:fl|ga|nc|dc)\b", re.I), "America/New_York"),
-    (re.compile(r"\b(?:london|manchester|edinburgh),?\s*(?:uk|england)?\b", re.I), "Europe/London"),
-    (re.compile(r"\baustin,?\s*tx\s+area\b", re.I), "America/Chicago"),
-    (re.compile(r"\b\d{5}\s+(?:il|illinois)\b", re.I), "America/Chicago"),
-    (re.compile(r"\b\d{5}\s+(?:ny|new york)\b", re.I), "America/New_York"),
-    (re.compile(r"\b\d{5}\s+(?:tx|texas)\b", re.I), "America/Chicago"),
-    (re.compile(r"\b\d{5}\s+(?:co|colorado)\b", re.I), "America/Denver"),
-    (re.compile(r"\b\d{5}\s+(?:ca|california)\b", re.I), "America/Los_Angeles"),
+# Each pattern carries its own confidence, because how much a signal is worth
+# depends on the signal — not on which function happened to produce it.
+#
+# A named city WITH its state or ZIP is a direct statement of where someone is,
+# every bit as reliable as "I'm on Pacific time" in the body (which scores
+# "known"). Scoring these "inferred" meant Kory's quote-their-zone-first rule
+# silently did not apply to city+state signatures, which are extremely common:
+# a prospect signing off "San Francisco, CA" got Mountain Time only.
+#
+# A bare city name with an optional country is NOT that. "I'll be in London next
+# week" would match, so it stays inferred and keeps the MT-only rendering.
+_SIGNATURE_CITY_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
+    (re.compile(r"\b(?:new york|nyc|manhattan|brooklyn|boston),?\s*(?:ny|ma)\b", re.I), "America/New_York", "known"),
+    (re.compile(r"\b(?:chicago|naperville),?\s*il\b", re.I), "America/Chicago", "known"),
+    (re.compile(r"\b(?:dallas|houston|austin|san antonio|fort worth),?\s*tx\b", re.I), "America/Chicago", "known"),
+    (re.compile(r"\b(?:denver|boulder|colorado springs),?\s*co\b", re.I), "America/Denver", "known"),
+    (re.compile(r"\b(?:los angeles|san francisco|seattle|portland),?\s*(?:ca|wa|or)\b", re.I), "America/Los_Angeles", "known"),
+    (re.compile(r"\b(?:miami|atlanta|charlotte|washington),?\s*(?:fl|ga|nc|dc)\b", re.I), "America/New_York", "known"),
+    # Optional country suffix, so a passing mention of the city matches too.
+    (re.compile(r"\b(?:london|manchester|edinburgh),?\s*(?:uk|england)?\b", re.I), "Europe/London", "inferred"),
+    (re.compile(r"\baustin,?\s*tx\s+area\b", re.I), "America/Chicago", "known"),
+    (re.compile(r"\b\d{5}\s+(?:il|illinois)\b", re.I), "America/Chicago", "known"),
+    (re.compile(r"\b\d{5}\s+(?:ny|new york)\b", re.I), "America/New_York", "known"),
+    (re.compile(r"\b\d{5}\s+(?:tx|texas)\b", re.I), "America/Chicago", "known"),
+    (re.compile(r"\b\d{5}\s+(?:co|colorado)\b", re.I), "America/Denver", "known"),
+    (re.compile(r"\b\d{5}\s+(?:ca|california)\b", re.I), "America/Los_Angeles", "known"),
 ]
 
 
@@ -475,12 +487,12 @@ def _timezone_from_signature(body: str) -> RecipientTimezoneResult | None:
     if not body.strip():
         return None
     tail = "\n".join(body.strip().splitlines()[-12:])
-    for pattern, tz_name in _SIGNATURE_CITY_PATTERNS:
+    for pattern, tz_name, confidence in _SIGNATURE_CITY_PATTERNS:
         if pattern.search(tail):
             try:
                 return RecipientTimezoneResult(
                     timezone=ZoneInfo(tz_name),
-                    confidence="inferred",
+                    confidence=confidence,
                     source="signature",
                     detail=f"Signature region matched: {pattern.pattern[:40]}",
                 )

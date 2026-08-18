@@ -155,21 +155,19 @@ def _try_inbound_time_suggestion(
         return None
 
     subject = str(proposal.get("subject") or raw_email.get("subject") or "")
-    try:
-        calendar_context = load_scheduling_calendar_context(subject=subject, body=body)
-    except Exception:
-        return None
 
-    if calendar_context.get("status") != "available":
-        return None
-
-    # A time WE offered cannot be a conflict when they accept it. We validated
-    # it before offering, and we are holding it for them — so our own HOLD event
-    # sits on the calendar at exactly that time. Re-validating against a calendar
-    # containing our own hold made Lexi refuse the acceptance as "already
-    # booked", leaving the meeting unbooked and the hold in place. Live E2E
-    # 2026-08-18; it was masked earlier by the calendar cache still holding a
-    # pre-hold read, which is why it looked intermittent.
+    # ACCEPTANCE FIRST — before any calendar read.
+    #
+    # A time WE offered cannot be a conflict when they accept it. We validated it
+    # against the calendar before offering, and we are still holding it for them
+    # — our own HOLD event sits on the calendar at exactly that time.
+    #
+    # This check used to live BELOW the calendar read, so a read that was slow or
+    # unavailable dropped the acceptance entirely: nothing recorded, holds left
+    # in place, meeting never booked. That is the "acceptance did not persist"
+    # failure the live end-to-end runs hit, and it was always the first run after
+    # a restart — a cold per-process calendar cache. Accepting an offered time
+    # needs no calendar at all, so it must not be gated behind one.
     slot = _accepted_offered_slot(proposal, candidates)
     if slot:
         from app.agents.comms_agent import mark_recipient_slot_choice
@@ -191,6 +189,16 @@ def _try_inbound_time_suggestion(
             ),
             "selected_slot": slot,
         }
+
+    # Anything else is a NEW time they are proposing, which does need the
+    # calendar: we have never checked it and are not holding it.
+    try:
+        calendar_context = load_scheduling_calendar_context(subject=subject, body=body)
+    except Exception:
+        return None
+
+    if calendar_context.get("status") != "available":
+        return None
 
     intent = str(proposal.get("intent_classification") or "")
     validated, invalid, notes = validate_inbound_candidates(
