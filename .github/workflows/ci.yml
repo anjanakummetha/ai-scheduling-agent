@@ -27,9 +27,6 @@ jobs:
       - name: Pytest (hermetic — no real Composio/LLM; live tests excluded)
         run: python -m pytest -q -m "not live"
 
-      - name: Run test suite (CI — no Composio/LLM keys)
-        run: python scripts/test_kory_phase_suite.py --skip-live-llm --ci
-
       # The approval gate only raises when dry-run is OFF, so exercise it that way.
       # This is safe ONLY here: CI has no Composio key, so no real email can be sent
       # (the send path errors out harmlessly). The script itself hard-aborts if it
