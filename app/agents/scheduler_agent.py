@@ -98,6 +98,20 @@ class ScheduleResult:
     plan: Any = None
 
 
+# An offer already in someone's inbox, or a thread that is finished. Re-staging
+# any of these rewrites a draft that no longer matches reality.
+TERMINAL_OR_SENT_STATUSES = frozenset(
+    {
+        "offer_sent",
+        "pending_invite",
+        "executed",
+        "cancelled",
+        "rejected",
+        "no_reply_needed",
+    }
+)
+
+
 def process_proposal_schedule(proposal_id: int) -> bool:
     """Advance one proposal to pending_approval (from awaiting_reply_prompt or pending_triage)."""
     with get_lexi_connection() as conn:
@@ -108,7 +122,34 @@ def process_proposal_schedule(proposal_id: int) -> bool:
             "SELECT status FROM proposals WHERE id = ?",
             (proposal_id,),
         ).fetchone()
-        if status_row and status_row["status"] in {"awaiting_reply_prompt", "pending_reoffer"}:
+        current = str(status_row["status"]) if status_row else ""
+        # Never re-stage a proposal whose offer has already left, or one that is
+        # finished. _advance_proposal rewrites the draft and sets the status back
+        # to pending_approval, so an offer_sent proposal reappeared in `pending`
+        # looking unsent — while the email was already in the recipient's inbox
+        # and the holds were on the calendar. Approving it then sent the SAME
+        # person a second offer and placed a second set of holds.
+        #
+        # The batch path (process_pending_schedules) was always safe: it selects
+        # WHERE status = pending_triage. This single-proposal entry point had no
+        # equivalent guard, and it is the one a retry, a redelivered webhook or a
+        # follow-up reaches.
+        if current in TERMINAL_OR_SENT_STATUSES:
+            _insert_audit_log(
+                conn,
+                step_name="scheduler_engine",
+                reference_id=str(proposal_id),
+                log_level="INFO",
+                message=(
+                    f"Refused to re-stage proposal {proposal_id}: status is "
+                    f"{current}. Its offer has already been sent or the thread "
+                    "is closed."
+                ),
+                payload={"status": current},
+            )
+            conn.commit()
+            return False
+        if current in {"awaiting_reply_prompt", "pending_reoffer"}:
             conn.execute(
                 "UPDATE proposals SET status = ?, updated_at = datetime('now') WHERE id = ?",
                 (PENDING_TRIAGE, proposal_id),
