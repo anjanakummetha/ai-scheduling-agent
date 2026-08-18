@@ -125,9 +125,46 @@ def start_lexi_worker(
             file=sys.stderr,
             flush=True,
         )
+        _start_cache_warmup()
         status = _worker_status("started")
         status["ingress"] = ingress
         return status
+
+
+def _start_cache_warmup() -> None:
+    """Pre-fetch the reads Kory's first scheduling request needs.
+
+    Measured on the box 2026-08-18, through the gateway's own tool path:
+
+        availability (7 days)   first call 17.5s   then  7ms
+        today's calendar        first call  1.1s   then 774ms
+        pending                 first call  1.3s   then  1.6ms
+
+    The cost is per-process: Composio's tool schema is fetched before every
+    execute until it is cached, and the calendar context caches after its first
+    read. Every deploy restarts the service and clears the Hermes session, so
+    Kory's FIRST message of the day reliably paid the full ~20s while every
+    message after it was instant. That is the shape of "she's slow" — it was
+    never the engine, which runs in 2-3ms.
+
+    Runs on a daemon thread so a slow or failing Composio never delays or
+    blocks startup; a failure here costs nothing but the old latency.
+    """
+    import threading
+
+    def _warm() -> None:
+        try:
+            from app.integrations.named_calendars import list_all_calendars
+            from app.scheduling.calendar_context import load_scheduling_calendar_context
+
+            list_all_calendars()
+            load_scheduling_calendar_context(subject="", body="next week")
+            logger.info("cache warmup complete")
+        except Exception:  # noqa: BLE001 — warmup is best-effort by design
+            logger.warning("cache warmup skipped", exc_info=True)
+
+    if os.getenv("LEXI_CACHE_WARMUP", "true").strip().lower() in {"1", "true", "yes"}:
+        threading.Thread(target=_warm, name="lexi-cache-warmup", daemon=True).start()
 
 
 def stop_lexi_worker() -> None:
