@@ -813,13 +813,19 @@ def execute_lexi_approval(
                         result.errors.extend(hold_errors)
                         result.calendar_event_id = confirmed_id
                         result.holds_confirmed = 1 if confirmed_id else 0
-                        released = _release_unused_holds(
-                            conn,
-                            proposal_id,
-                            keep_event_id=confirmed_id,
-                            result=result,
-                        )
-                        result.holds_released = released
+                        # Releasing holds is destructive and irreversible: they
+                        # are the only thing still protecting this slot. Do it
+                        # ONLY once the meeting genuinely exists. Releasing them
+                        # on a failed confirm handed the time away and left the
+                        # counterpart expecting a meeting nobody holds.
+                        if confirmed_id:
+                            released = _release_unused_holds(
+                                conn,
+                                proposal_id,
+                                keep_event_id=confirmed_id,
+                                result=result,
+                            )
+                            result.holds_released = released
                         if confirmed_id:
                             prior_invite = str(
                                 proposal.get("invite_event_id") or ""
@@ -865,19 +871,45 @@ def execute_lexi_approval(
 
                     if confirmed_id:
                         record_fact(conn, proposal_id, FACT_INVITE_SENT_AT)
-                    transition(
-                        conn,
-                        proposal_id,
-                        to=STATUS_EXECUTED,
-                        reason=(
-                            "Calendar invite dispatched; meeting booked."
-                            if confirmed_id
-                            else "Invite phase completed without a confirmed event."
-                        ),
-                        actor=authorized_by or "kory",
-                    )
-                    result.status = STATUS_EXECUTED
-                    result.ok = bool(confirmed_id)
+                        transition(
+                            conn,
+                            proposal_id,
+                            to=STATUS_EXECUTED,
+                            reason="Calendar invite dispatched; meeting booked.",
+                            actor=authorized_by or "kory",
+                        )
+                        result.status = STATUS_EXECUTED
+                        result.ok = True
+                    else:
+                        # The calendar write did not produce an event, so no
+                        # meeting exists. Marking this executed anyway said
+                        # "booked" while nothing was booked, dropped it out of
+                        # every queue, and left no way back — executed cannot
+                        # legally return to pending_invite. It stays where it
+                        # is, holds intact, so `send invite #N` can be retried
+                        # and the stuck sweeper will chase it.
+                        result.status = str(proposal.get("status") or STATUS_PENDING_INVITE)
+                        result.ok = False
+                        if not result.errors:
+                            result.errors.append(
+                                "The calendar invite was not created. Nothing was "
+                                "booked and the held times are untouched — say "
+                                f"**send invite #{proposal_id}** to try again."
+                            )
+                        _insert_audit_log(
+                            conn,
+                            step_name="invite_dispatch_failed",
+                            reference_id=str(proposal_id),
+                            log_level="ERROR",
+                            message=(
+                                "Invite dispatch produced no calendar event; "
+                                "proposal left awaiting invite with holds intact."
+                            ),
+                            payload={
+                                "proposal_id": proposal_id,
+                                "errors": list(result.errors),
+                            },
+                        )
                     if result.errors and not result.ok:
                         result.warnings = list(result.errors)
 
@@ -901,11 +933,10 @@ def execute_lexi_approval(
             )
             conn.execute("RELEASE SAVEPOINT lexi_execution")
             conn.commit()
-            if (
-                phase == "send_offer"
-                and normalized_decision in {"approved", "modified"}
-                and not result.email_sent
-            ):
+            send_failed = (
+                not result.email_sent if phase == "send_offer" else not result.ok
+            )
+            if normalized_decision in {"approved", "modified"} and send_failed:
                 # Deliberately NOT conditioned on result.errors. A send that
                 # failed without leaving one behind is precisely the case Kory
                 # most needs told about, and it was the case that stayed silent.
@@ -915,7 +946,11 @@ def execute_lexi_approval(
                     proposal_id,
                     failure_error="; ".join(result.errors)
                     or "The send returned no confirmation and no error.",
-                    reason="Offer email send failed after Kory approval.",
+                    reason=(
+                        "Offer email send failed after Kory approval."
+                        if phase == "send_offer"
+                        else "Calendar invite dispatch failed after Kory approval."
+                    ),
                 )
                 result.warnings = (result.warnings or []) + [
                     esc.get("kory_message")

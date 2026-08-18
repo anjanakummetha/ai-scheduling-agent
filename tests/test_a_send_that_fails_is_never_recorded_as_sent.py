@@ -209,3 +209,127 @@ def test_the_lexi_voice_path_reports_its_failure_too(staged):
     assert result.errors, "the Lexi-voice path failed with nothing to say"
     assert _state(pid)["offer_sent_at"] is None
     assert escalate.called
+
+
+# ---------------------------------------------------------------------------
+# The invite half
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def picked(staged):
+    """The counterpart has chosen a time and Kory is about to send the invite."""
+    pid, slot = staged
+    with get_lexi_connection() as conn:
+        conn.execute(
+            "UPDATE proposals SET status = ?, recipient_selected_slot = ? WHERE id = ?",
+            (ProposalStatus.OFFER_SENT, json.dumps(slot), pid),
+        )
+        conn.execute(
+            "UPDATE proposals SET status = ? WHERE id = ?",
+            (ProposalStatus.PENDING_INVITE, pid),
+        )
+        conn.execute(
+            "INSERT INTO holds (proposal_id, event_id, slot_start, slot_end, expires_at)"
+            " VALUES (?,?,?,?,?)",
+            (pid, "evt-hold", slot["start"], slot["end"],
+             (datetime.now(MT) + timedelta(days=2)).isoformat()),
+        )
+        conn.commit()
+    return pid, slot
+
+
+def _send_invite(pid: int, slot: dict[str, str], confirmed: str | None):
+    from app.agents.comms_agent import execute_lexi_approval
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("app.agents.comms_agent._confirm_time_conflict", return_value=None)
+        )
+        stack.enter_context(
+            patch(
+                "app.agents.comms_agent._confirm_selected_hold",
+                return_value=(confirmed, [] if confirmed else ["Outlook rejected the event."]),
+            )
+        )
+        escalate = stack.enter_context(
+            patch("app.scheduling.kory_escalation.escalate_to_kory", return_value={})
+        )
+        result = execute_lexi_approval(
+            pid, "approved", slot["start"], "kory",
+            decision_source="test", execution_phase="send_invite",
+        )
+    return result, escalate
+
+
+def _holds(pid: int) -> int:
+    with get_lexi_connection() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM holds WHERE proposal_id = ?", (pid,)
+        ).fetchone()["n"]
+
+
+def test_a_failed_invite_does_not_mark_the_meeting_booked(picked):
+    """The worst version of the record disagreeing with the world.
+
+    The calendar write fails, so no meeting exists. Marking the proposal
+    executed said "booked", dropped it out of every queue, and left no way back
+    — executed cannot legally return to pending_invite. Kory would need DB
+    surgery, and the counterpart is expecting a meeting nobody holds.
+    """
+    pid, slot = picked
+    result, escalate = _send_invite(pid, slot, confirmed=None)
+
+    with get_lexi_connection() as conn:
+        row = conn.execute(
+            "SELECT status, invite_sent_at FROM proposals WHERE id = ?", (pid,)
+        ).fetchone()
+
+    assert result.ok is False
+    assert row["status"] == ProposalStatus.PENDING_INVITE, (
+        "a failed invite marked the proposal executed"
+    )
+    assert row["invite_sent_at"] is None, "a meeting that does not exist was recorded as booked"
+    assert escalate.called, "Kory was never told the invite failed"
+
+
+def test_a_failed_invite_keeps_the_holds(picked):
+    """The holds are the only thing still protecting that time."""
+    pid, slot = picked
+    assert _holds(pid) == 1
+    _send_invite(pid, slot, confirmed=None)
+    assert _holds(pid) == 1, "the held time was handed away after a failed invite"
+
+
+def test_a_failed_invite_can_be_retried(picked):
+    """Because it stayed in pending_invite, `send invite #N` still works."""
+    pid, slot = picked
+    _send_invite(pid, slot, confirmed=None)
+    result, _ = _send_invite(pid, slot, confirmed="evt-booked")
+
+    with get_lexi_connection() as conn:
+        row = conn.execute(
+            "SELECT status, invite_sent_at FROM proposals WHERE id = ?", (pid,)
+        ).fetchone()
+    assert result.ok is True, result.errors
+    assert row["status"] == ProposalStatus.EXECUTED
+    assert row["invite_sent_at"], "the successful retry did not record the booking"
+
+
+def test_a_successful_invite_still_releases_the_other_holds(picked):
+    """The guard must not leave stale holds behind on the happy path."""
+    pid, slot = picked
+    with get_lexi_connection() as conn:
+        conn.execute(
+            "INSERT INTO holds (proposal_id, event_id, slot_start, slot_end, expires_at)"
+            " VALUES (?,?,?,?,?)",
+            (pid, "evt-other", slot["start"], slot["end"],
+             (datetime.now(MT) + timedelta(days=2)).isoformat()),
+        )
+        conn.commit()
+    assert _holds(pid) == 2
+
+    with patch("app.agents.comms_agent.delete_calendar_event"):
+        result, _ = _send_invite(pid, slot, confirmed="evt-hold")
+    assert result.ok is True, result.errors
+    assert _holds(pid) == 1, "the unused hold was left on Kory's calendar"
