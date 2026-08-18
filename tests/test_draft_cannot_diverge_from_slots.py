@@ -71,6 +71,33 @@ def _model_available():
         object.__setattr__(settings, "llm_api_key", previous)
 
 
+def _why_rejected(draft: str, slots: list[dict[str, str]]) -> str:
+    """Which of the three composition checks turned this draft away.
+
+    Without this a failure just says "template_fallback", which is the same
+    answer for a divergent draft, a mangled slot block and a parser that read
+    the times back differently — and those want very different fixes.
+    """
+    from app.scheduling.draft_slot_sync import (
+        draft_matches_slots,
+        extract_offer_times_from_draft,
+    )
+    from app.scheduling.email_format import format_offer_slot_block
+    from app.scheduling.hermes_compose import _draft_includes_slot_block
+
+    block = format_offer_slot_block(slots, recipient_tz=MT)
+    parsed = extract_offer_times_from_draft(draft)
+    ok, mismatch = draft_matches_slots(draft_body=draft, proposed_slots=slots)
+    return (
+        f"\n  includes_slot_block={_draft_includes_slot_block(draft, block, slots)}"
+        f"\n  matches_slots={ok} {mismatch}"
+        f"\n  canonical block={block!r}"
+        f"\n  draft={draft!r}"
+        f"\n  staged={[s['start'] for s in slots]}"
+        f"\n  parsed back={[p['start'] for p in parsed]}"
+    )
+
+
 def _compose(model_draft: str, slots: list[dict[str, str]]) -> tuple[str, str]:
     with (
         _model_available(),
@@ -98,8 +125,11 @@ def test_a_clean_draft_from_the_model_is_kept():
         f"• {datetime.fromisoformat(s['start']).strftime('%A, %B %-d at %-I:%M %p')}"
         for s in slots
     )
-    draft, source = _compose(f"Hi Dana,\n\nA couple of options:\n\n{block}\n\nLet's Win,\nLexi", slots)
-    assert source == "hermes", "a draft that agrees with the slots must survive"
+    model_output = f"Hi Dana,\n\nA couple of options:\n\n{block}\n\nLet's Win,\nLexi"
+    draft, source = _compose(model_output, slots)
+    assert source == "hermes", (
+        "a draft that agrees with the slots must survive" + _why_rejected(draft, slots)
+    )
 
 
 def test_a_weekend_offered_in_prose_never_reaches_the_draft():
@@ -221,4 +251,5 @@ def test_a_normal_model_draft_is_not_mistaken_for_a_divergent_one(shape: str):
     assert source == "hermes", (
         f"a perfectly good draft ({shape}) was replaced by the template; the "
         "check is too strict and every email would read as boilerplate"
+        + _why_rejected(draft, slots)
     )
