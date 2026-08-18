@@ -905,13 +905,16 @@ def execute_lexi_approval(
                 phase == "send_offer"
                 and normalized_decision in {"approved", "modified"}
                 and not result.email_sent
-                and result.errors
             ):
+                # Deliberately NOT conditioned on result.errors. A send that
+                # failed without leaving one behind is precisely the case Kory
+                # most needs told about, and it was the case that stayed silent.
                 from app.scheduling.kory_escalation import escalate_to_kory
 
                 esc = escalate_to_kory(
                     proposal_id,
-                    failure_error="; ".join(result.errors),
+                    failure_error="; ".join(result.errors)
+                    or "The send returned no confirmation and no error.",
                     reason="Offer email send failed after Kory approval.",
                 )
                 result.warnings = (result.warnings or []) + [
@@ -1863,6 +1866,10 @@ def _send_drafted_reply(
                 return False, "Email dispatch failed: outbound send returned no message id."
             return True, None
 
+        # Every failure below returns a REASON. A bare (False, None) reported the
+        # send as failed with nothing to say: no error text for Kory, and the
+        # escalation that would have told him fires off result.errors, so a
+        # silent send failure looked exactly like Lexi doing nothing at all.
         if settings.sandbox_email_loopback and settings.lexi_write_mode == "sandbox":
             message_id, _log = send_pilot_reply_for_proposal(
                 original_subject=proposal.get("subject"),
@@ -1870,7 +1877,9 @@ def _send_drafted_reply(
                 intended_recipient=intended,
                 send_channel=send_channel,  # type: ignore[arg-type]
             )
-            return bool(message_id), None
+            if not message_id:
+                return False, "Email dispatch failed: the sandbox reply returned no message id."
+            return True, None
 
         if send_channel == "lexi":
             message_id, _log = send_reply_in_thread(
@@ -1881,12 +1890,24 @@ def _send_drafted_reply(
                 conversation_id=str(proposal.get("conversation_id") or "").strip() or None,
                 intended_recipient=intended,
             )
-            return bool(message_id), None
+            if not message_id:
+                return False, "Email dispatch failed: the reply returned no message id."
+            return True, None
 
         draft_id, _draft_log = create_draft_reply(thread_id, body, send_channel="kory")
         if not draft_id:
             return False, "Composio created no draft message id for reply."
-        send_draft(draft_id, send_channel="kory")
+        # send_draft's answer was discarded. It raises on an explicit refusal,
+        # but a response carrying neither a success flag nor a log id returned
+        # quietly — and this reported the offer as SENT. Everything downstream
+        # trusts that: the world fact gets stamped, holds go on the calendar, the
+        # proposal moves to offer_sent, and the counterpart never heard from us.
+        sent_log = send_draft(draft_id, send_channel="kory")
+        if not sent_log:
+            return False, (
+                "Email dispatch failed: Outlook acknowledged the send without "
+                "confirming it. Nothing is recorded as sent — approve again to retry."
+            )
         return True, None
     except Exception as exc:
         return False, f"Email dispatch failed: {type(exc).__name__}: {exc}"
