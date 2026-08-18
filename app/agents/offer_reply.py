@@ -14,6 +14,12 @@ from app.agents.comms_agent import (
 )
 from app.config import settings
 from app.scheduling.recipient_slot import match_recipient_slot_choice, recipient_times_rejected
+from app.scheduling.thread_matching import (
+    extract_email as _extract_email,
+    find_proposal_for_inbound,
+    is_internal_sender,
+    same_person as _same_person,
+)
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
@@ -128,65 +134,19 @@ def _find_offer_sent_proposal(
     *,
     subject: str = "",
 ) -> dict[str, Any] | None:
+    """The sent offer this reply is answering.
+
+    Uses the shared resolver so the ordering and the subject normalisation match
+    every other lookup. The old local copy ordered purely by id, and normalised
+    subjects with a SQL replace that stripped "Re: " from anywhere in the string.
+    """
     with get_lexi_connection() as conn:
-        if conversation_id:
-            row = conn.execute(
-                """
-                SELECT
-                    p.id AS proposal_id,
-                    p.proposed_slots,
-                    p.recipient_timezone,
-                    p.intent_classification,
-                    e.sender,
-                    e.subject
-                FROM proposals AS p
-                INNER JOIN email_threads AS e ON e.thread_id = p.thread_id
-                WHERE p.status = ?
-                  AND e.conversation_id = ?
-                ORDER BY p.id DESC
-                LIMIT 1
-                """,
-                (STATUS_OFFER_SENT, conversation_id),
-            ).fetchone()
-            if row:
-                return dict(row)
-
-        norm = _normalize_thread_subject(subject)
-        if not norm:
-            return None
-        rows = conn.execute(
-            """
-            SELECT
-                p.id AS proposal_id,
-                p.proposed_slots,
-                p.recipient_timezone,
-                p.intent_classification,
-                e.sender,
-                e.subject
-            FROM proposals AS p
-            INNER JOIN email_threads AS e ON e.thread_id = p.thread_id
-            WHERE p.status = ?
-            ORDER BY p.id DESC
-            LIMIT 30
-            """,
-            (STATUS_OFFER_SENT,),
-        ).fetchall()
-        for row in rows:
-            if _normalize_thread_subject(str(row["subject"] or "")) == norm:
-                return dict(row)
-    return None
-
-
-def _normalize_thread_subject(subject: str) -> str:
-    s = (subject or "").strip().lower()
-    while True:
-        if s.startswith("re:"):
-            s = s[3:].strip()
-        elif s.startswith("fwd:"):
-            s = s[4:].strip()
-        else:
-            break
-    return s
+        return find_proposal_for_inbound(
+            conn,
+            conversation_id=conversation_id,
+            subject=subject,
+            statuses={STATUS_OFFER_SENT},
+        )
 
 
 def _parse_slots(raw: Any) -> list[dict[str, str]]:
@@ -203,26 +163,5 @@ def _parse_slots(raw: Any) -> list[dict[str, str]]:
     return []
 
 
-def _same_person(a: str, b: str) -> bool:
-    email_a = _extract_email(a)
-    email_b = _extract_email(b)
-    return bool(email_a and email_b and email_a == email_b)
-
-
-def _extract_email(value: str) -> str | None:
-    match = re.search(r"[\w.+-]+@[\w.-]+\.\w+", value)
-    return match.group(0).lower() if match else (value.lower() if "@" in value else None)
-
-
 def _is_kory_sender(sender: str) -> bool:
-    from app.config import settings
-
-    lexi = (settings.lexi_mailbox_email or "").strip().lower()
-    email = _extract_email(sender) or sender
-    kory_emails = {e.lower() for e in settings.kory_sender_emails}
-    if lexi:
-        kory_emails.add(lexi)
-    if email in kory_emails:
-        return True
-    addr = (email or "").strip().lower()
-    return any(domain in addr for domain in ("@iconicfounders.com", "@ifg.vc"))
+    return is_internal_sender(sender)

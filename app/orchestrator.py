@@ -44,6 +44,10 @@ from app.integrations.outlook_email import (
     normalize_message,
 )
 from app.scheduling.proposal_state import ProposalStatus, transition
+from app.scheduling.thread_matching import (
+    find_proposal_id_for_thread,
+    normalize_thread_subject as _normalize_thread_subject,
+)
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
@@ -932,65 +936,19 @@ def _skip_inbound_for_local_test_mode(*, subject: str) -> bool:
     return "test" not in (subject or "").strip().lower()
 
 
-def _normalize_thread_subject(subject: str) -> str:
-    s = (subject or "").strip().lower()
-    while True:
-        if s.startswith("re:"):
-            s = s[3:].strip()
-        elif s.startswith("fwd:"):
-            s = s[4:].strip()
-        else:
-            break
-    return s
-
-
 def _find_proposal_for_delegation_followup(
     *,
     conversation_id: str,
     subject: str,
 ) -> int | None:
+    """Any proposal on this thread, whatever state it is in — Kory delegating
+    again reopens threads Lexi has already closed out."""
     with get_lexi_connection() as conn:
-        if conversation_id:
-            row = conn.execute(
-                """
-                SELECT p.id
-                FROM proposals AS p
-                INNER JOIN email_threads AS e ON e.thread_id = p.thread_id
-                WHERE e.conversation_id = ?
-                ORDER BY p.id DESC
-                LIMIT 1
-                """,
-                (conversation_id,),
-            ).fetchone()
-            if row:
-                return int(row["id"])
-
-        norm = _normalize_thread_subject(subject)
-        if not norm:
-            return None
-        rows = conn.execute(
-            """
-            SELECT e.thread_id, e.subject
-            FROM email_threads AS e
-            ORDER BY e.id DESC
-            LIMIT 50
-            """
-        ).fetchall()
-        for row in rows:
-            if _normalize_thread_subject(str(row["subject"] or "")) != norm:
-                continue
-            prop = conn.execute(
-                """
-                SELECT id FROM proposals
-                WHERE thread_id = ?
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (row["thread_id"],),
-            ).fetchone()
-            if prop:
-                return int(prop["id"])
-    return None
+        return find_proposal_id_for_thread(
+            conn,
+            conversation_id=conversation_id,
+            subject=subject,
+        )
 
 
 def _update_proposal_conversation_id(proposal_id: int, conversation_id: str) -> None:

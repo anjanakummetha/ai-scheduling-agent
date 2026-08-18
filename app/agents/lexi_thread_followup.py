@@ -10,6 +10,11 @@ from typing import Any
 
 from app.config import settings
 from app.scheduling.proposal_state import LEXI_INVOLVED, ProposalStatus, transition
+from app.scheduling.thread_matching import (
+    find_proposal_for_inbound,
+    is_internal_sender,
+    normalize_thread_subject as _normalize_subject,
+)
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
@@ -642,96 +647,27 @@ def _find_lexi_involved_proposal(
     *,
     subject: str = "",
 ) -> dict[str, Any] | None:
-    placeholders = ",".join("?" * len(LEXI_INVOLVED_STATUSES))
+    """The proposal this reply is answering.
+
+    One shared resolver (app/scheduling/thread_matching.py) rather than a copy
+    per module: a reply answers the offer that was actually SENT, not a newer
+    draft still waiting on Kory, and that ordering has to hold everywhere or the
+    acceptance lands on the wrong row and the meeting is never booked.
+    """
     with get_lexi_connection() as conn:
-        if conversation_id:
-            row = conn.execute(
-                f"""
-                SELECT
-                    p.id AS proposal_id,
-                    p.status,
-                    p.proposed_slots,
-                    p.recipient_timezone,
-                    p.intent_classification,
-                    p.is_delegation,
-                    e.sender,
-                    e.subject
-                FROM proposals AS p
-                INNER JOIN email_threads AS e ON e.thread_id = p.thread_id
-                WHERE p.status IN ({placeholders})
-                  AND e.conversation_id = ?
-                -- Newest-first is wrong when two proposals share a
-                -- conversation: a reply answers the offer that was actually
-                -- SENT, not a newer draft still waiting on Kory. Live E2E
-                -- 2026-08-18 wrote the counterpart's acceptance onto a
-                -- pending_approval row and left the real offer untouched, so
-                -- the meeting was never booked. Outstanding offers first.
-                ORDER BY CASE p.status
-                             WHEN 'offer_sent' THEN 0
-                             WHEN 'pending_invite' THEN 1
-                             WHEN 'pending_reoffer' THEN 2
-                             ELSE 3
-                         END,
-                         p.id DESC
-                LIMIT 1
-                """,
-                (*LEXI_INVOLVED_STATUSES, conversation_id),
-            ).fetchone()
-            if row:
-                return dict(row)
-
-        norm = _normalize_subject(subject)
-        if norm:
-            row = conn.execute(
-                f"""
-                SELECT
-                    p.id AS proposal_id,
-                    p.status,
-                    p.proposed_slots,
-                    p.recipient_timezone,
-                    p.intent_classification,
-                    p.is_delegation,
-                    e.sender,
-                    e.subject
-                FROM proposals AS p
-                INNER JOIN email_threads AS e ON e.thread_id = p.thread_id
-                WHERE p.status IN ({placeholders})
-                  AND lower(replace(replace(e.subject, 'Re: ', ''), 'RE: ', '')) LIKE ?
-                -- Newest-first is wrong when two proposals share a
-                -- conversation: a reply answers the offer that was actually
-                -- SENT, not a newer draft still waiting on Kory. Live E2E
-                -- 2026-08-18 wrote the counterpart's acceptance onto a
-                -- pending_approval row and left the real offer untouched, so
-                -- the meeting was never booked. Outstanding offers first.
-                ORDER BY CASE p.status
-                             WHEN 'offer_sent' THEN 0
-                             WHEN 'pending_invite' THEN 1
-                             WHEN 'pending_reoffer' THEN 2
-                             ELSE 3
-                         END,
-                         p.id DESC
-                LIMIT 1
-                """,
-                (*LEXI_INVOLVED_STATUSES, f"%{norm[:60]}%"),
-            ).fetchone()
-            if row:
-                return dict(row)
-    return None
-
-
-def _normalize_subject(subject: str) -> str:
-    s = (subject or "").strip().lower()
-    while s.startswith("re:") or s.startswith("fwd:"):
-        s = s.split(":", 1)[1].strip()
-    return s
+        return find_proposal_for_inbound(
+            conn,
+            conversation_id=conversation_id,
+            subject=subject,
+            statuses=LEXI_INVOLVED,
+        )
 
 
 def _is_kory_sender(sender: str) -> bool:
-    from app.config import settings
+    """Kory, Lexi's own mailbox, or anyone at the firm — never a counterpart.
 
-    addr = (sender or "").strip().lower()
-    if not addr:
-        return False
-    if addr in {e.lower() for e in settings.kory_sender_emails}:
-        return True
-    return any(domain in addr for domain in ("@iconicfounders.com", "@ifg.vc"))
+    This used to omit Lexi's mailbox while the copy in offer_reply.py included
+    it, so a copy of her own outbound mail could be processed here as though the
+    counterpart had replied to it.
+    """
+    return is_internal_sender(sender)
