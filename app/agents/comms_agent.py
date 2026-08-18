@@ -676,10 +676,21 @@ def execute_lexi_approval(
                     gate_error = _pre_send_slot_gate(proposal)
                     if gate_error:
                         raise ValueError(gate_error)
+                    prior_attempts = _record_send_attempt(conn, proposal_id)
                     email_ok, email_error = _send_drafted_reply(proposal, result)
                     result.email_sent = email_ok
                     if email_error:
                         result.errors.append(email_error)
+                    if email_ok and prior_attempts and not follow_up:
+                        # An earlier attempt handed this same email to Outlook
+                        # and we never got a confirmation. It may have gone out.
+                        # Kory should hear that from Lexi, not from the
+                        # recipient — and he cannot see the audit log.
+                        result.warnings = (result.warnings or []) + [
+                            f"Heads up: {prior_attempts} earlier attempt(s) to send "
+                            "this offer went unconfirmed. If one of them did reach "
+                            "them, they have now had it twice."
+                        ]
                     if email_ok:
                         # ATOMICITY: the offer email is already dispatched (an
                         # external, non-transactional side effect). Record the
@@ -1015,6 +1026,38 @@ def _hold_times_on_calendar(proposal_id: int) -> list[str]:
     except Exception:  # noqa: BLE001 — reporting detail must never break the send
         logger.exception("Could not read hold times for proposal %s", proposal_id)
     return times
+
+
+_SEND_ATTEMPT_STEP = "offer_send_attempted"
+
+
+def _record_send_attempt(conn: sqlite3.Connection, proposal_id: int) -> int:
+    """Note that we are about to hand an email to Outlook. Returns how many
+    attempts came before this one.
+
+    Sending is an external, non-transactional side effect, so there is an
+    unavoidable window: Composio can accept the send and the response can be
+    lost, leaving us unable to tell "never went out" from "went out and we did
+    not hear". We fail closed there — the offer is not recorded as sent, which
+    is right, because recording a send that did not happen is unrecoverable.
+
+    But a retry after that is the one case where Lexi might genuinely email
+    someone twice, and Kory should hear about it from her rather than from the
+    recipient. Counting attempts is what makes it sayable.
+    """
+    prior = conn.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE step_name = ? AND reference_id = ?",
+        (_SEND_ATTEMPT_STEP, str(proposal_id)),
+    ).fetchone()[0]
+    _insert_audit_log(
+        conn,
+        step_name=_SEND_ATTEMPT_STEP,
+        reference_id=str(proposal_id),
+        log_level="INFO",
+        message=f"Handing the offer email to Outlook (attempt {prior + 1}).",
+        payload={"proposal_id": proposal_id, "attempt": prior + 1},
+    )
+    return int(prior)
 
 
 def _bundle_proposal_id(proposal: dict[str, Any]) -> int:

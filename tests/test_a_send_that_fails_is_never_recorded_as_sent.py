@@ -333,3 +333,54 @@ def test_a_successful_invite_still_releases_the_other_holds(picked):
         result, _ = _send_invite(pid, slot, confirmed="evt-hold")
     assert result.ok is True, result.errors
     assert _holds(pid) == 1, "the unused hold was left on Kory's calendar"
+
+
+# ---------------------------------------------------------------------------
+# The one window that cannot be closed, only made visible
+# ---------------------------------------------------------------------------
+
+
+def test_a_resend_after_an_unconfirmed_attempt_warns_kory(staged):
+    """Sending is a non-transactional side effect, so there is an unavoidable
+    window: Composio can accept the send and the response can be lost. We fail
+    closed — the offer is not recorded as sent, because recording a send that
+    did not happen is unrecoverable.
+
+    But the retry after that is the one case where Lexi might genuinely email
+    someone twice, and Kory should hear it from her rather than from the
+    recipient. He cannot see the audit log.
+    """
+    pid, slot = staged
+
+    first, _, _ = _approve(
+        pid, slot,
+        **{
+            "app.agents.comms_agent.create_draft_reply": {"return_value": ("draft-1", None)},
+            "app.agents.comms_agent.send_draft": {"return_value": None},
+        },
+    )
+    assert first.email_sent is False
+
+    second, _, _ = _approve(
+        pid, slot,
+        **{
+            "app.agents.comms_agent.create_draft_reply": {"return_value": ("draft-2", None)},
+            "app.agents.comms_agent.send_draft": {"return_value": "log-99"},
+        },
+    )
+    assert second.email_sent is True, second.errors
+    assert any("had it twice" in w for w in (second.warnings or [])), second.warnings
+
+
+def test_a_clean_first_send_carries_no_such_warning(staged):
+    """The warning must mean something, so it cannot appear on every send."""
+    pid, slot = staged
+    result, _, _ = _approve(
+        pid, slot,
+        **{
+            "app.agents.comms_agent.create_draft_reply": {"return_value": ("draft-1", None)},
+            "app.agents.comms_agent.send_draft": {"return_value": "log-1"},
+        },
+    )
+    assert result.email_sent is True
+    assert not any("had it twice" in w for w in (result.warnings or [])), result.warnings
