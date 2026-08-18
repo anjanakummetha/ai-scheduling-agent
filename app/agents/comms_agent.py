@@ -23,6 +23,7 @@ from app.scheduling.proposal_state import (
     FACT_INVITE_SENT_AT,
     FACT_OFFER_SENT_AT,
     ProposalStatus,
+    offer_already_sent,
     record_fact,
     transition,
 )
@@ -653,111 +654,109 @@ def execute_lexi_approval(
                 result.ok = True
             else:
                 if phase == "send_offer":
-                    from app.scheduling.hold_reminder import is_hold_reminder_proposal
+                    # Is this the counterpart's FIRST word from us, or a
+                    # follow-up on a thread they have already heard from?
+                    #
+                    # This used to be decided by whether scheduling_note started
+                    # with "HOLD_REMINDER" — a string sniff standing in for a
+                    # fact, and one that also caused the gate below to be skipped
+                    # entirely on that path. It now asks the world: an offer
+                    # email either reached somebody or it did not, and that is
+                    # recorded in a write-once column no status change can rewind.
+                    follow_up = offer_already_sent(conn, proposal_id)
 
-                    hold_reminder = is_hold_reminder_proposal(proposal)
-                    if not hold_reminder:
-                        # Final slot gate (live 2026-08-11, proposal 9187): the
-                        # draft's offered times must be the staged slots, and
-                        # every staged slot must still be free right now. A
-                        # hand-edited draft that diverged, or a slot booked
-                        # since staging, refuses HERE — before the email exists.
-                        gate_error = _pre_send_slot_gate(proposal)
-                        if gate_error:
-                            raise ValueError(gate_error)
+                    # Final slot gate (live 2026-08-11, proposal 9187): the
+                    # draft's offered times must be the staged slots, and every
+                    # staged slot must still be free right now. A hand-edited
+                    # draft that diverged, or a slot booked since staging,
+                    # refuses HERE — before the email exists. It runs on
+                    # follow-ups too now: the gate discounts our own holds, so
+                    # re-quoting times we are holding no longer looks like a
+                    # double-booking.
+                    gate_error = _pre_send_slot_gate(proposal)
+                    if gate_error:
+                        raise ValueError(gate_error)
                     email_ok, email_error = _send_drafted_reply(proposal, result)
                     result.email_sent = email_ok
                     if email_error:
                         result.errors.append(email_error)
                     if email_ok:
-                        if hold_reminder:
-                            _insert_audit_log(
-                                conn,
-                                step_name="hold_reminder_sent",
-                                reference_id=str(proposal_id),
-                                log_level="INFO",
-                                message="Hold reminder email sent after Kory approval.",
-                                payload={"proposal_id": proposal_id},
-                            )
-                            # A follow-up on a thread whose offer is already out.
-                            # record_fact is a deliberate no-op here: the offer
-                            # timestamp records when the RECIPIENT first heard from
-                            # us, and a reminder must not make a stale offer look
-                            # fresh. The existing holds stay exactly as they are.
-                            record_fact(conn, proposal_id, FACT_OFFER_SENT_AT)
-                            transition(
-                                conn,
-                                proposal_id,
-                                to=STATUS_OFFER_SENT,
-                                reason="Hold reminder sent; the original offer still stands.",
-                                actor=authorized_by or "kory",
-                                fields={"scheduling_note": None},
-                            )
-                            result.status = STATUS_OFFER_SENT
+                        # ATOMICITY: the offer email is already dispatched (an
+                        # external, non-transactional side effect). Record the
+                        # world fact and commit OFFER_SENT NOW — before the
+                        # calendar hold work — so a failure during hold placement
+                        # (a transient DB lock, say) can never roll the proposal
+                        # back to pending_approval and let it be sent again.
+                        #
+                        # record_fact is write-once, so on a follow-up it is a
+                        # deliberate no-op: offer_sent_at records when the
+                        # counterpart FIRST heard from us, and a reminder must not
+                        # make a week-old offer look like it went out today.
+                        record_fact(conn, proposal_id, FACT_OFFER_SENT_AT)
+                        transition(
+                            conn,
+                            proposal_id,
+                            to=STATUS_OFFER_SENT,
+                            reason=(
+                                "Follow-up sent; the original offer still stands."
+                                if follow_up
+                                else "Offer email dispatched to the counterpart."
+                            ),
+                            actor=authorized_by or "kory",
+                            # A staged follow-up carries its reason in
+                            # scheduling_note; once sent, that note is spent.
+                            fields={"scheduling_note": None} if follow_up else None,
+                        )
+                        result.status = STATUS_OFFER_SENT
+                        _insert_audit_log(
+                            conn,
+                            step_name="hold_reminder_sent" if follow_up else "offer_email_sent",
+                            reference_id=str(proposal_id),
+                            log_level="INFO",
+                            message=(
+                                "Follow-up email sent after Kory approval."
+                                if follow_up
+                                else "Offer email sent; status committed before hold placement."
+                            ),
+                            payload={"proposal_id": proposal_id, "follow_up": follow_up},
+                        )
+                        conn.execute("RELEASE SAVEPOINT lexi_execution")
+                        conn.commit()
+                        conn.execute("SAVEPOINT lexi_execution")
+                        # Holds go on their OWN connection: the approval
+                        # connection races the orchestrator/webhook writers, and
+                        # both live runs of this path died on a lock mid-loop
+                        # (orphaning calendar events). Per-slot resumability makes
+                        # the retries incremental — and makes this call safe to
+                        # run unconditionally: a follow-up re-quoting times we
+                        # already hold places nothing, because every staged slot
+                        # already has a live hold. That replaced a branch keyed on
+                        # a note prefix, which got it right only by coincidence.
+                        hold_count, hold_error = _place_holds_isolated(
+                            proposal_id=proposal_id, proposal=proposal, result=result
+                        )
+                        if hold_error:
+                            result.errors.append(hold_error)
                             result.warnings = (result.warnings or []) + [
-                                "Hold reminder sent — existing calendar holds unchanged."
+                                f"Email sent — calendar holds need attention: {hold_error}"
                             ]
-                        else:
-                            # ATOMICITY: the offer email is already dispatched (an
-                            # external, non-transactional side effect). Commit
-                            # OFFER_SENT NOW — before the calendar hold work — so a
-                            # failure during hold placement (e.g. a transient DB
-                            # lock) can never roll the proposal back to
-                            # pending_approval and let it be re-sent (duplicate email).
-                            # Record the WORLD FACT first. This column is
-                            # write-once and no status change can rewind it, so
-                            # from here on every path — including ones written
-                            # later by someone who has not read this file — can
-                            # ask offer_is_outstanding() and get the truth rather
-                            # than whatever the workflow position happens to say.
-                            record_fact(conn, proposal_id, FACT_OFFER_SENT_AT)
-                            transition(
+                        result.holds_confirmed = hold_count
+                        result.holds_placed_times = _hold_times_on_calendar(proposal_id)
+                        if follow_up:
+                            result.warnings = (result.warnings or []) + [
+                                "Follow-up sent — existing calendar holds unchanged."
+                            ]
+                        try:
+                            _dispatch_asana_reservation_reminder_if_needed(
                                 conn,
-                                proposal_id,
-                                to=STATUS_OFFER_SENT,
-                                reason="Offer email dispatched to the counterpart.",
-                                actor=authorized_by or "kory",
+                                proposal_id=proposal_id,
+                                proposal=proposal,
+                                time_slot="",
+                                result=result,
                             )
-                            result.status = STATUS_OFFER_SENT
-                            _insert_audit_log(
-                                conn,
-                                step_name="offer_email_sent",
-                                reference_id=str(proposal_id),
-                                log_level="INFO",
-                                message="Offer email sent; status committed before hold placement.",
-                                payload={"proposal_id": proposal_id},
-                            )
-                            conn.execute("RELEASE SAVEPOINT lexi_execution")
-                            conn.commit()
+                        except Exception:  # noqa: BLE001 — asana is best-effort
+                            conn.execute("ROLLBACK TO SAVEPOINT lexi_execution")
                             conn.execute("SAVEPOINT lexi_execution")
-                            # Holds go on their OWN connection: the approval
-                            # connection races the orchestrator/webhook writers,
-                            # and both live runs of this path died on a lock
-                            # mid-loop (orphaning calendar events). Per-slot
-                            # resumability makes the retries incremental.
-                            hold_count, hold_error = _place_holds_isolated(
-                                proposal_id=proposal_id, proposal=proposal, result=result
-                            )
-                            if hold_error:
-                                result.errors.append(hold_error)
-                                result.warnings = (result.warnings or []) + [
-                                    f"Email sent — calendar holds need attention: {hold_error}"
-                                ]
-                            result.holds_confirmed = hold_count
-                            result.holds_placed_times = _hold_times_on_calendar(
-                                proposal_id
-                            )
-                            try:
-                                _dispatch_asana_reservation_reminder_if_needed(
-                                    conn,
-                                    proposal_id=proposal_id,
-                                    proposal=proposal,
-                                    time_slot="",
-                                    result=result,
-                                )
-                            except Exception:  # noqa: BLE001 — asana is best-effort
-                                conn.execute("ROLLBACK TO SAVEPOINT lexi_execution")
-                                conn.execute("SAVEPOINT lexi_execution")
                     else:
                         result.status = PENDING_APPROVAL
                     result.ok = email_ok
@@ -980,6 +979,27 @@ def _hold_times_on_calendar(proposal_id: int) -> list[str]:
     return times
 
 
+def _bundle_proposal_id(proposal: dict[str, Any]) -> int:
+    """The proposal's own id, whichever key the caller's row used.
+
+    _fetch_proposal_bundle selects `p.id`; the queue and lookup helpers alias it
+    to `proposal_id`. _pre_send_slot_gate read only `proposal_id`, so on a bundle
+    it silently got 0 — and every "exclude this proposal" clause downstream
+    became "exclude proposal 0", i.e. excluded nothing. A proposal's own holds
+    could then block its own send. It stayed invisible because on a FIRST send
+    there are no holds yet, and the one path that has them (a follow-up) used to
+    skip this gate entirely.
+    """
+    for key in ("proposal_id", "id"):
+        value = proposal.get(key)
+        if value not in (None, ""):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
 def _slot_reserved_by_other(proposal_id: int, slots: list[dict[str, str]]) -> str | None:
     """True (error string) when another active proposal owns an overlapping slot.
 
@@ -1073,7 +1093,7 @@ def _pre_send_slot_gate(proposal: dict[str, Any]) -> str | None:
     if not slots:
         return None
 
-    reserved = _slot_reserved_by_other(int(proposal.get("proposal_id") or 0), slots)
+    reserved = _slot_reserved_by_other(_bundle_proposal_id(proposal), slots)
     if reserved:
         return reserved
 
@@ -1121,7 +1141,20 @@ def _pre_send_slot_gate(proposal: dict[str, Any]) -> str | None:
             "refusing to send unverified times. Nothing was sent; try again "
             "in a minute."
         )
-    busy = list(context.get("busy_events") or [])
+    # Our own holds are not conflicts. We hold what we offer, so a HOLD event
+    # sits at exactly each offered time; leaving them in the busy set makes this
+    # gate refuse Lexi's own offer as "already booked". That matters most on a
+    # follow-up send (a hold reminder), which is why that path used to skip this
+    # gate entirely on the strength of a "HOLD_REMINDER" prefix in a note —
+    # trading a false refusal for no validation at all.
+    from app.scheduling.busy_intervals import without_own_holds
+
+    hold_ids, hold_intervals = _own_hold_fingerprints(_bundle_proposal_id(proposal))
+    busy = without_own_holds(
+        list(context.get("busy_events") or []),
+        hold_event_ids=hold_ids,
+        hold_intervals=hold_intervals,
+    )
     clashes: list[str] = []
     for slot in slots:
         if slot_conflicts_busy(slot, busy):
@@ -1270,6 +1303,29 @@ def _fetch_holds(conn: sqlite3.Connection, proposal_id: int) -> list[dict[str, A
         (proposal_id,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _own_hold_fingerprints(
+    proposal_id: int,
+) -> tuple[set[str], list[tuple[Any, Any]]]:
+    """Ids and intervals of the holds WE placed for this proposal."""
+    from app.scheduling.busy_intervals import parse_iso_datetime
+
+    ids: set[str] = set()
+    intervals: list[tuple[Any, Any]] = []
+    try:
+        with get_lexi_connection() as conn:
+            for hold in _fetch_holds(conn, proposal_id):
+                event_id = str(hold.get("event_id") or "").strip()
+                if event_id:
+                    ids.add(event_id)
+                start = parse_iso_datetime(str(hold.get("slot_start") or ""))
+                end = parse_iso_datetime(str(hold.get("slot_end") or ""))
+                if start and end:
+                    intervals.append((start, end))
+    except Exception:  # noqa: BLE001 — a read failure must not block a real send
+        logger.exception("Could not read own holds for proposal %s", proposal_id)
+    return ids, intervals
 
 
 def _fetch_proposal_bundle(conn: sqlite3.Connection, proposal_id: int) -> dict[str, Any] | None:

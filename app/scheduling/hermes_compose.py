@@ -7,6 +7,7 @@ only writes prose from a structured facts packet.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -18,6 +19,8 @@ from app.llm.kory_voice import voice_prompt_block
 from app.storage.lexi_db import get_lexi_connection
 
 import rules as kory_rules
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_greeting_name(stored_name: str | None, sender_email: str, body: str) -> str:
@@ -291,7 +294,11 @@ def compose_offer_email_with_hermes(
             slots=slots,
         )
         draft = _enforce_offered_times_block(draft, slot_block)
-        if draft and _draft_includes_slot_block(draft, slot_block, slots):
+        if (
+            draft
+            and _draft_includes_slot_block(draft, slot_block, slots)
+            and _draft_offers_only_staged_slots(draft, slots)
+        ):
             return draft, "hermes"
     except Exception:
         pass
@@ -581,6 +588,42 @@ def _rules_summary_for_type(type_key: str) -> str:
 def _soft_blocks_summary() -> str:
     names = [str(b.get("name") or "") for b in kory_rules.SOFT_BLOCKS if b.get("movable")]
     return "Movable if Kory approves: " + ", ".join(names) if names else ""
+
+
+def _draft_offers_only_staged_slots(draft: str, slots: list[dict[str, str]]) -> bool:
+    """Does this draft offer any time the engine did not stage?
+
+    ``_enforce_offered_times_block`` rewrites the bullet list, so the OPTIONS are
+    always canonical — but a model can still add a time in prose around them
+    ("if none of those work I could do Saturday morning"). The engine is pinned
+    never to stage a weekend, and the send gate refuses a draft whose times
+    diverge from the staged slots, so such a draft fails safe: it just fails
+    LATE, as a refusal Kory has to unpick, on a draft that was already written
+    and shown to him.
+
+    Checking here instead means composition simply cannot emit one. The check is
+    the send gate's own ``draft_matches_slots``, deliberately the same function
+    rather than a second implementation of the same idea — the two could
+    otherwise disagree about what counts as a divergence, which is how this
+    class of bug started.
+
+    Returning False falls back to the template, which is generated FROM the
+    slots and therefore cannot disagree with them.
+    """
+    from app.scheduling.draft_slot_sync import draft_matches_slots
+
+    try:
+        ok, mismatch = draft_matches_slots(draft_body=draft, proposed_slots=slots)
+    except Exception:  # noqa: BLE001 — a parser failure must not lose the draft
+        logger.exception("Could not verify composed draft against staged slots.")
+        return True
+    if not ok:
+        logger.warning(
+            "Composed draft offered times outside the staged slots; using the "
+            "slot-derived template instead. %s",
+            mismatch,
+        )
+    return ok
 
 
 def _draft_includes_slot_block(draft: str, slot_block: str, slots: list[dict[str, str]]) -> bool:

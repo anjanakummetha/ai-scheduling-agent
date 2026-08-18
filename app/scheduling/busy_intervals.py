@@ -89,6 +89,48 @@ def slot_conflicts_busy(
     return False
 
 
+HOLD_TITLE_PREFIX = "HOLD:"
+
+
+def without_own_holds(
+    busy_events: list[dict[str, Any]],
+    *,
+    hold_event_ids: set[str],
+    hold_intervals: list[tuple[datetime, datetime]],
+) -> list[dict[str, Any]]:
+    """The calendar as it would look if we had not placed our own holds.
+
+    We hold what we offer, so a HOLD event sits at exactly the time we are
+    asking about. Validating an offered slot against a calendar that includes
+    that hold means Lexi refuses her own offer as "already booked" — the meeting
+    never gets booked and the hold stays there forever. It looked intermittent
+    only because the calendar cache sometimes still held a pre-hold read.
+
+    An event is ours if its id is one we recorded, or — for a hold created by a
+    run that died before its database row landed — if it is titled "HOLD:" AND
+    covers exactly one of our intervals. Both conditions are needed: matching on
+    the interval alone would discount a REAL meeting that happens to sit exactly
+    on a time we are holding, which is the one thing this check exists to catch.
+    """
+    if not hold_event_ids and not hold_intervals:
+        return busy_events
+    kept: list[dict[str, Any]] = []
+    for event in busy_events:
+        if str(event.get("id") or "") in hold_event_ids:
+            continue
+        subject = str(event.get("subject") or "").strip()
+        if subject.upper().startswith(HOLD_TITLE_PREFIX):
+            start = parse_event_datetime(event.get("start"))
+            end = parse_event_datetime(event.get("end"))
+            if start and end and any(
+                start == hold_start and end == hold_end
+                for hold_start, hold_end in hold_intervals
+            ):
+                continue
+        kept.append(event)
+    return kept
+
+
 def slot_conflicts_any_proposed(
     slot: dict[str, str],
     other_slots: list[dict[str, str]],

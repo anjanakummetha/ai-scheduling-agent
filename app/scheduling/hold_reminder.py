@@ -277,6 +277,12 @@ def stage_release_followups(proposal_ids: list[int]) -> list[int]:
                 actor="lexi",
                 fields={
                     "drafted_reply": draft,
+                    # The holds are gone and this draft quotes no times, so the
+                    # staged slots must go with them. Leaving them behind is the
+                    # record disagreeing with the world again: the send gate
+                    # would re-validate released times, and hold placement would
+                    # put fresh holds on slots nobody is being offered.
+                    "proposed_slots": None,
                     "scheduling_note": (
                         f"{HOLD_REMINDER_PREFIX}: Holds released after no reply — "
                         "approve to send the follow-up."
