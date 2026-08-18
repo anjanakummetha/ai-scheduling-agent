@@ -43,13 +43,14 @@ from app.integrations.outlook_email import (
     merge_list_message_fields,
     normalize_message,
 )
+from app.scheduling.proposal_state import ProposalStatus, transition
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
 
-PENDING_TRIAGE = "pending_triage"
-PENDING_APPROVAL = "pending_approval"
-STATUS_EXECUTED = "executed"
+PENDING_TRIAGE = ProposalStatus.PENDING_TRIAGE
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
+STATUS_EXECUTED = ProposalStatus.EXECUTED
 
 AUTO_EXECUTE_MIN_CONFIDENCE = float(os.getenv("LEXI_AUTO_EXECUTE_CONFIDENCE", "0.95"))
 AUTO_EXECUTE_ENABLED = os.getenv("LEXI_AUTO_EXECUTE_ENABLED", "false").lower() in {
@@ -1015,13 +1016,12 @@ def _update_proposal_conversation_id(proposal_id: int, conversation_id: str) -> 
 
 def _reactivate_proposal_for_delegation(proposal_id: int) -> None:
     with get_lexi_connection() as conn:
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = ?, updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (AWAITING_REPLY_PROMPT, proposal_id),
+        transition(
+            conn,
+            proposal_id,
+            to=AWAITING_REPLY_PROMPT,
+            reason="Kory delegated again on a thread that had been closed out.",
+            actor="kory",
         )
         conn.commit()
 
@@ -1164,13 +1164,17 @@ def _duplicate_newsletter_burst(
 
 def _mark_proposal_no_reply(proposal_id: int, *, reason: str) -> None:
     with get_lexi_connection() as conn:
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = ?, justification = COALESCE(justification, '') || ?
-            WHERE id = ?
-            """,
-            (NO_REPLY_NEEDED, f" [auto-skip: {reason}]", proposal_id),
+        row = conn.execute(
+            "SELECT justification FROM proposals WHERE id = ?", (proposal_id,)
+        ).fetchone()
+        justification = (str(row["justification"] or "") if row else "") + f" [auto-skip: {reason}]"
+        transition(
+            conn,
+            proposal_id,
+            to=NO_REPLY_NEEDED,
+            reason=f"Auto-skipped: {reason}",
+            actor="triage",
+            fields={"justification": justification},
         )
         conn.execute(
             """

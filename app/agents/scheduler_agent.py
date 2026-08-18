@@ -14,12 +14,19 @@ from typing import Any
 
 from app.config import settings
 from app.llm.hermes_client import get_hermes_client
+from app.scheduling.proposal_state import (
+    SCHEDULABLE,
+    ProposalStatus,
+    offer_is_outstanding,
+    transition,
+)
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
 
-PENDING_TRIAGE = "pending_triage"
-PENDING_APPROVAL = "pending_approval"
+PENDING_TRIAGE = ProposalStatus.PENDING_TRIAGE
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
+
 MIN_SLOT_OPTIONS = 2
 MAX_SLOT_OPTIONS = 3
 
@@ -98,22 +105,51 @@ class ScheduleResult:
     plan: Any = None
 
 
-# An offer already in someone's inbox, or a thread that is finished. Re-staging
-# any of these rewrites a draft that no longer matches reality.
-TERMINAL_OR_SENT_STATUSES = frozenset(
-    {
-        "offer_sent",
-        "pending_invite",
-        "executed",
-        "cancelled",
-        "rejected",
-        "no_reply_needed",
-    }
-)
+def release_offer_holds(conn: sqlite3.Connection, proposal_id: int) -> int:
+    """Take the previous round's holds off the calendar. Returns how many.
+
+    A new round of times must never leave the old round's holds behind: they
+    block the very slots the engine is about to search, and Kory ends up with
+    calendar entries for times nobody was ever offered.
+    """
+    from app.agents.comms_agent import ExecutionResult, _release_all_holds
+
+    sink = ExecutionResult(
+        ok=False,
+        proposal_id=proposal_id,
+        status="",
+        decision="reoffer",
+        warnings=[],
+        errors=[],
+    )
+    return _release_all_holds(conn, proposal_id, sink)
 
 
-def process_proposal_schedule(proposal_id: int) -> bool:
-    """Advance one proposal to pending_approval (from awaiting_reply_prompt or pending_triage)."""
+def process_proposal_schedule(proposal_id: int, *, reoffer: bool = False) -> bool:
+    """Stage an offer for ONE proposal.
+
+    This is the entry point a retry, a redelivered webhook or a follow-up
+    reaches, and it is where the worst bug in Lexi's history lived: it called
+    ``_advance_proposal`` unconditionally, which rewrites the draft and puts the
+    status back to ``pending_approval``. An offer already in the recipient's
+    inbox, with holds already on the calendar, reappeared in ``pending`` looking
+    unsent — so approving it emailed the same person a second offer and placed a
+    second set of holds.
+
+    ``reoffer`` is the fix, and it is a parameter rather than a status check on
+    purpose. Opening a new round on a thread that already has an offer out is a
+    legitimate thing to do — ``begin_reoffer_schedule`` after a decline, or a
+    counterpart asking to move a booked meeting — but it is never something that
+    should happen *incidentally*. Callers that mean it say so, and this function
+    then clears the previous round's holds before searching. Every other caller,
+    including ones nobody has written yet, gets the safe default and is refused.
+
+    The refusal keys off the WORLD FACT rather than the status: a status is a
+    workflow position and may legitimately move backwards, whereas an email
+    cannot be un-sent. ``offer_is_outstanding`` therefore catches the case that
+    caused the original bug — a proposal rolled back to a pre-offer status
+    behind an offer that really did go out.
+    """
     with get_lexi_connection() as conn:
         proposal = _fetch_proposal_by_id(conn, proposal_id)
         if not proposal:
@@ -123,37 +159,83 @@ def process_proposal_schedule(proposal_id: int) -> bool:
             (proposal_id,),
         ).fetchone()
         current = str(status_row["status"]) if status_row else ""
-        # Never re-stage a proposal whose offer has already left, or one that is
-        # finished. _advance_proposal rewrites the draft and sets the status back
-        # to pending_approval, so an offer_sent proposal reappeared in `pending`
-        # looking unsent — while the email was already in the recipient's inbox
-        # and the holds were on the calendar. Approving it then sent the SAME
-        # person a second offer and placed a second set of holds.
-        #
-        # The batch path (process_pending_schedules) was always safe: it selects
-        # WHERE status = pending_triage. This single-proposal entry point had no
-        # equivalent guard, and it is the one a retry, a redelivered webhook or a
-        # follow-up reaches.
-        if current in TERMINAL_OR_SENT_STATUSES:
+
+        if offer_is_outstanding(conn, proposal_id):
+            if not reoffer:
+                _insert_audit_log(
+                    conn,
+                    step_name="scheduler_engine",
+                    reference_id=str(proposal_id),
+                    log_level="INFO",
+                    message=(
+                        f"Refused to re-stage proposal {proposal_id} (status "
+                        f"{current}): its offer is already in the recipient's "
+                        "inbox. A deliberate new round calls this with "
+                        "reoffer=True, which releases the old holds first."
+                    ),
+                    payload={"status": current},
+                )
+                conn.commit()
+                return False
+            released = release_offer_holds(conn, proposal_id)
             _insert_audit_log(
                 conn,
                 step_name="scheduler_engine",
                 reference_id=str(proposal_id),
                 log_level="INFO",
                 message=(
-                    f"Refused to re-stage proposal {proposal_id}: status is "
-                    f"{current}. Its offer has already been sent or the thread "
-                    "is closed."
+                    f"New round opened on proposal {proposal_id} (was {current}); "
+                    f"{released} hold(s) from the previous offer released before "
+                    "searching."
+                ),
+                payload={"status": current, "holds_released": released},
+            )
+            conn.commit()
+
+        if reoffer and current not in SCHEDULABLE:
+            # A deliberate new round starts from wherever the thread actually is
+            # (executed for "can we move Wednesday?", offer_sent for a decline).
+            moved = transition(
+                conn,
+                proposal_id,
+                to=PENDING_TRIAGE,
+                expect=current,
+                reason="New round of times requested; re-entering the scheduling engine.",
+                actor="scheduler",
+            )
+            if not moved.claimed:
+                conn.commit()
+                return False
+            conn.commit()
+            current = PENDING_TRIAGE
+
+        if current not in SCHEDULABLE:
+            _insert_audit_log(
+                conn,
+                step_name="scheduler_engine",
+                reference_id=str(proposal_id),
+                log_level="INFO",
+                message=(
+                    f"Refused to schedule proposal {proposal_id}: status "
+                    f"{current} is not one the engine may stage an offer from."
                 ),
                 payload={"status": current},
             )
             conn.commit()
             return False
-        if current in {"awaiting_reply_prompt", "pending_reoffer"}:
-            conn.execute(
-                "UPDATE proposals SET status = ?, updated_at = datetime('now') WHERE id = ?",
-                (PENDING_TRIAGE, proposal_id),
+
+        if current != PENDING_TRIAGE:
+            moved = transition(
+                conn,
+                proposal_id,
+                to=PENDING_TRIAGE,
+                expect=current,
+                reason="Queued for the scheduling engine.",
+                actor="scheduler",
             )
+            if not moved.claimed:
+                conn.commit()
+                return False
             conn.commit()
         return _advance_proposal(conn, proposal)
 
@@ -732,28 +814,32 @@ def _update_proposal_for_approval(
     # of a draft that offers exactly Thursday (live O-4, #6481 — same lesson
     # as hermes_orchestrator._persist_proposal_draft, drifted copy).
     note = (schedule.scheduling_note or "").strip() or None
-    conn.execute(
-        """
-        UPDATE proposals
-        SET status = ?,
-            proposed_slots = ?,
-            drafted_reply = ?,
-            confidence_score = ?,
-            recipient_timezone = COALESCE(?, recipient_timezone),
-            scheduling_note = ?,
-            updated_at = datetime('now')
-        WHERE id = ?
-        """,
-        (
-            PENDING_APPROVAL,
-            json.dumps(schedule.slots, default=str),
-            drafted,
-            schedule.confidence_score,
-            recipient_timezone,
-            note,
-            proposal_id,
+    # Slots, draft and status move in ONE statement. Written separately, the row
+    # is briefly observable as "approved and ready" carrying the PREVIOUS draft,
+    # and the Teams push runs off exactly that read.
+    outcome = transition(
+        conn,
+        proposal_id,
+        to=PENDING_APPROVAL,
+        reason=(
+            f"Engine staged {len(schedule.slots)} slot(s) via {schedule.source}; "
+            "awaiting Kory's approval."
         ),
+        actor="scheduler",
+        fields={
+            "proposed_slots": json.dumps(schedule.slots, default=str),
+            "drafted_reply": drafted,
+            "confidence_score": schedule.confidence_score,
+            "scheduling_note": note,
+        },
+        # A freshly resolved timezone refines what we know; it must not erase a
+        # stored one when this pass could not determine it.
+        coalesce_fields={"recipient_timezone": recipient_timezone},
     )
+    if not outcome.claimed:
+        raise RuntimeError(
+            f"Could not stage proposal {proposal_id} for approval: {outcome.refusal}"
+        )
 
 
 def _insert_audit_log(

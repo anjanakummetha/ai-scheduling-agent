@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.comms_agent import execute_lexi_approval
+from app.scheduling.proposal_state import transition
 from app.storage.lexi_db import get_lexi_connection
 
 
@@ -72,10 +73,19 @@ def test_needs_guidance_proposal_can_be_rejected(escalated_proposal):
 
 
 def test_terminal_statuses_still_refuse_rejection(escalated_proposal):
+    # Reach `cancelled` the way the product does — book the meeting, then cancel
+    # it. Jumping straight there with an UPDATE is exactly the kind of write the
+    # state-machine guard now refuses, and a fixture that cannot happen in
+    # production proves nothing about production.
     with get_lexi_connection() as conn:
-        conn.execute(
-            "UPDATE proposals SET status='cancelled' WHERE id = ?", (escalated_proposal,)
-        )
+        for status in ("executed", "cancelled"):
+            transition(
+                conn,
+                escalated_proposal,
+                to=status,
+                reason="Test fixture: book then cancel to reach a terminal status.",
+                actor="test",
+            )
         conn.commit()
     result = execute_lexi_approval(
         escalated_proposal, "rejected", "", "kory",

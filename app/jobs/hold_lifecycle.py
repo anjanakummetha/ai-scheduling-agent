@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.integrations.outlook_calendar import delete_calendar_event
+from app.scheduling.proposal_state import ProposalStatus, transition
 from app.storage.lexi_db import get_lexi_connection
 
 import rules as kory_rules
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 # false). Those holds are settled at confirm time instead.
 RELEASABLE_HOLD_STATUSES = ("pending_approval", "offer_sent")
 RELEASED_STATUS = "released"
-PENDING_APPROVAL = "pending_approval"
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
 
 
 def run_hold_lifecycle_cycle() -> dict[str, Any]:
@@ -112,10 +113,16 @@ def _release_expired_holds() -> int:
                 str(row["proposal_status"] or "") == "pending_approval"
                 and str(row["scheduling_note"] or "").startswith("HOLD_REMINDER")
             ):
-                conn.execute(
-                    "UPDATE proposals SET status = 'rejected', "
-                    "updated_at = datetime('now') WHERE id = ?",
-                    (pid,),
+                transition(
+                    conn,
+                    pid,
+                    to=ProposalStatus.REJECTED,
+                    expect=ProposalStatus.PENDING_APPROVAL,
+                    reason=(
+                        "Hold-reminder draft closed: its holds expired and were "
+                        "released, so the times it quotes no longer exist."
+                    ),
+                    actor="system",
                 )
                 _audit(
                     conn,

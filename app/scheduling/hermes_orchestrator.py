@@ -9,11 +9,12 @@ from typing import Any
 from app.scheduling.reply_composer import compose_scheduling_reply
 from app.scheduling.schedule_from_context import ScheduleFromContextResult, schedule_from_context
 from app.scheduling.session_sync import sync_scheduling_session_for_proposal
+from app.scheduling.proposal_state import ProposalStatus, transition
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
 
-PENDING_APPROVAL = "pending_approval"
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
 
 
 def orchestrate_scheduling_from_email(
@@ -190,25 +191,20 @@ def _persist_proposal_draft(
     scheduling_note: str = "",
 ) -> None:
     with get_lexi_connection() as conn:
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = ?, drafted_reply = ?, proposed_slots = ?,
-                voice_mode = ?, recipient_timezone = COALESCE(?, recipient_timezone),
-                scheduling_note = ?,
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (
-                PENDING_APPROVAL,
-                draft,
-                json.dumps(slots, default=str),
-                voice_mode,
-                recipient_timezone,
+        transition(
+            conn,
+            proposal_id,
+            to=PENDING_APPROVAL,
+            reason=f"Hermes staged {len(slots)} slot(s); awaiting Kory's approval.",
+            actor="lexi",
+            fields={
+                "drafted_reply": draft,
+                "proposed_slots": json.dumps(slots, default=str),
+                "voice_mode": voice_mode,
                 # A fresh draft carries its fresh caveat — or clears a stale one.
-                scheduling_note.strip() or None,
-                proposal_id,
-            ),
+                "scheduling_note": scheduling_note.strip() or None,
+            },
+            coalesce_fields={"recipient_timezone": recipient_timezone},
         )
         conn.commit()
 

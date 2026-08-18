@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.scheduling.hermes_orchestrator import orchestrate_proposal_scheduling
+from app.scheduling.proposal_state import ProposalStatus
 from app.scheduling.session_sync import sync_scheduling_session_for_proposal
 
-PENDING_APPROVAL = "pending_approval"
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
 
 
 def run_delegation_scheduling_task(proposal_id: int, bundle: dict[str, Any]) -> dict[str, Any]:

@@ -14,10 +14,11 @@ from typing import Any
 from app.config import settings
 from app.llm.hermes_client import get_hermes_client
 from app.rules.rule_engine import is_priority_contact, load_rules
+from app.scheduling.proposal_state import ProposalStatus
 from app.storage.lexi_db import get_lexi_connection
 
-TRIAGE_STATUS = "pending_triage"
-AWAITING_REPLY_PROMPT = "awaiting_reply_prompt"
+TRIAGE_STATUS = ProposalStatus.PENDING_TRIAGE
+AWAITING_REPLY_PROMPT = ProposalStatus.AWAITING_REPLY_PROMPT
 
 VALID_INTENTS = frozenset(
     {

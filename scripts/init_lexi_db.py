@@ -271,13 +271,54 @@ def _migrate_proposal_invite_event(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE proposals ADD COLUMN invite_event_id TEXT")
 
 
+def _migrate_proposal_world_facts(conn: sqlite3.Connection) -> None:
+    """Monotonic records of irreversible side effects.
+
+    Separate from ``status`` on purpose. A status is a workflow position and
+    may legitimately move backwards (a thread re-enters scheduling); an email
+    that reached someone's inbox cannot be un-sent. Conflating the two is what
+    let a sent offer look unsent and get sent twice. See
+    ``app/scheduling/proposal_state.py``.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()}
+    for name in ("offer_sent_at", "invite_sent_at"):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE proposals ADD COLUMN {name} TEXT")
+    # Backfill from the workflow position for rows that predate these columns:
+    # anything that reached offer_sent or beyond definitely had its offer sent.
+    conn.execute(
+        """
+        UPDATE proposals
+        SET offer_sent_at = COALESCE(updated_at, created_at, datetime('now'))
+        WHERE offer_sent_at IS NULL
+          AND status IN ('offer_sent', 'pending_invite', 'pending_reoffer', 'executed')
+        """
+    )
+    conn.execute(
+        """
+        UPDATE proposals
+        SET invite_sent_at = COALESCE(updated_at, created_at, datetime('now'))
+        WHERE invite_sent_at IS NULL
+          AND status = 'executed'
+        """
+    )
+
+
+def _install_proposal_guard_triggers(
+    conn: sqlite3.Connection, *, enforce_transitions: bool = True
+) -> None:
+    from app.scheduling.proposal_state import install_guard_triggers
+
+    install_guard_triggers(conn, enforce_transitions=enforce_transitions)
+
+
 def _migrate_approval_feedback(conn: sqlite3.Connection) -> None:
     from app.storage.learning_log import ensure_approval_feedback_table
 
     ensure_approval_feedback_table(conn)
 
 
-def init_lexi_db(db_path: Path = DB_PATH) -> None:
+def init_lexi_db(db_path: Path = DB_PATH, *, enforce_transitions: bool = True) -> None:
     """Create data/lexi.db and apply the Lexi Phase 1 schema."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     existed_before = db_path.exists()
@@ -302,6 +343,8 @@ def init_lexi_db(db_path: Path = DB_PATH) -> None:
         _migrate_kory_memory(conn)
         _migrate_recipient_profiles(conn)
         _migrate_approval_feedback(conn)
+        _migrate_proposal_world_facts(conn)
+        _install_proposal_guard_triggers(conn, enforce_transitions=enforce_transitions)
         conn.commit()
 
         tables = [
@@ -328,10 +371,14 @@ def init_lexi_db(db_path: Path = DB_PATH) -> None:
 
 
 def main() -> int:
+    # Escape hatch, documented in app/scheduling/proposal_state.py: drops the
+    # legal-transition trigger without a code deploy if a legitimate path ever
+    # turns out to be missing from LEGAL_TRANSITIONS.
+    enforce = "--no-transition-guard" not in sys.argv
     try:
         from app.config import settings
 
-        init_lexi_db(settings.lexi_database_path)
+        init_lexi_db(settings.lexi_database_path, enforce_transitions=enforce)
     except sqlite3.Error as exc:
         print(f"[lexi] ERROR: database initialization failed: {exc}", file=sys.stderr)
         return 1

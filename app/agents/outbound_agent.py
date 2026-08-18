@@ -22,10 +22,17 @@ from app.llm.hermes_client import get_hermes_client
 from app.rules.validators import filter_slots_by_rules
 from app.scheduling.calendar_intelligence import resolve_write_calendar_name
 from app.scheduling.email_format import build_scheduling_reply, sender_first_name
+from app.scheduling.proposal_state import (
+    FACT_INVITE_SENT_AT,
+    FACT_OFFER_SENT_AT,
+    ProposalStatus,
+    record_fact,
+    transition,
+)
 from app.storage.lexi_db import get_lexi_connection
 
-PENDING_APPROVAL = "pending_approval"
-STATUS_EXECUTED = "executed"
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
+STATUS_EXECUTED = ProposalStatus.EXECUTED
 MAX_SLOT_OPTIONS = 3
 MIN_SLOT_OPTIONS = 2
 
@@ -193,7 +200,13 @@ def initiate_outbound_scheduling(
 
             if require_ceo_signoff or not immediate_send_allowed():
                 require_ceo_signoff = True
-                _set_proposal_status(conn, proposal_id, PENDING_APPROVAL)
+                transition(
+                    conn,
+                    proposal_id,
+                    to=PENDING_APPROVAL,
+                    reason="Outbound delegation drafted; CEO sign-off required before send.",
+                    actor="lexi",
+                )
                 result["status"] = PENDING_APPROVAL
                 result["ok"] = True
                 result["holds_placed"] = False
@@ -504,7 +517,16 @@ def _dispatch_outbound_execution(
             "Outbound delegation sent without CEO sign-off.",
         ),
     )
-    _set_proposal_status(conn, proposal_id, STATUS_EXECUTED)
+    if dispatch.get("calendar_event_id"):
+        record_fact(conn, proposal_id, FACT_INVITE_SENT_AT)
+    record_fact(conn, proposal_id, FACT_OFFER_SENT_AT)
+    transition(
+        conn,
+        proposal_id,
+        to=STATUS_EXECUTED,
+        reason="Outbound delegation dispatched under standing auto-execute authority.",
+        actor=authorized_by or "kory",
+    )
     _finalize_outbound_holds(
         conn,
         proposal_id=proposal_id,
@@ -657,17 +679,6 @@ def _insert_outbound_proposal(
         ),
     )
     return int(cursor.lastrowid)
-
-
-def _set_proposal_status(conn: sqlite3.Connection, proposal_id: int, status: str) -> None:
-    conn.execute(
-        """
-        UPDATE proposals
-        SET status = ?, updated_at = datetime('now')
-        WHERE id = ?
-        """,
-        (status, proposal_id),
-    )
 
 
 def _filter_non_conflicting_slots(

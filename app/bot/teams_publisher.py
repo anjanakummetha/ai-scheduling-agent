@@ -19,6 +19,7 @@ from app.agents.inbound_reply import get_inbound_reply_queue
 from app.bot.teams_text import format_approval_notification, format_reply_prompt_notification
 from app.config import settings
 from app.safety.outbound_guard import teams_push_allowed
+from app.scheduling.proposal_state import ProposalStatus
 from app.storage.lexi_db import get_lexi_connection
 from app.utils.teams_cards import generate_approval_card, generate_reply_prompt_card
 
@@ -37,7 +38,7 @@ def _tenant_teams_service_url() -> str:
     if tenant_id:
         return f"https://smba.trafficmanager.net/amer/{tenant_id}/"
     return DEFAULT_TEAMS_SERVICE_URL
-PENDING_APPROVAL = "pending_approval"
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
 _TEAMS_PUSH_COOLDOWN_SECONDS = 300
 _recent_teams_pushes: dict[int, float] = {}
 _inflight_scheduled_pushes: set[int] = set()

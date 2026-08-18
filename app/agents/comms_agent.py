@@ -19,17 +19,26 @@ from app.integrations.outlook_email import (
     send_reply_in_thread,
 )
 from app.config import settings
+from app.scheduling.proposal_state import (
+    FACT_INVITE_SENT_AT,
+    FACT_OFFER_SENT_AT,
+    ProposalStatus,
+    record_fact,
+    transition,
+)
 
 logger = logging.getLogger(__name__)
 from app.storage.lexi_db import get_lexi_connection
 from app.utils.teams_cards import generate_approval_card
 
-PENDING_APPROVAL = "pending_approval"
-STATUS_OFFER_SENT = "offer_sent"
-STATUS_PENDING_INVITE = "pending_invite"
-STATUS_PENDING_REOFFER = "pending_reoffer"
-STATUS_EXECUTED = "executed"
-STATUS_REJECTED = "rejected"
+# Names kept for the many call sites that import them; the values now come
+# from the single declaration in app/scheduling/proposal_state.py.
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
+STATUS_OFFER_SENT = ProposalStatus.OFFER_SENT
+STATUS_PENDING_INVITE = ProposalStatus.PENDING_INVITE
+STATUS_PENDING_REOFFER = ProposalStatus.PENDING_REOFFER
+STATUS_EXECUTED = ProposalStatus.EXECUTED
+STATUS_REJECTED = ProposalStatus.REJECTED
 
 DecisionType = Literal["approved", "modified", "rejected"]
 MOCK_HOLD_PREFIX = "hold-pending-"
@@ -175,15 +184,18 @@ def cancel_booked_meeting(
             authorized_by=authorized_by,
             modification_notes=(reason or None),
         )
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = 'cancelled', invite_event_id = NULL,
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (proposal_id,),
+        cancelled = transition(
+            conn,
+            proposal_id,
+            to=ProposalStatus.CANCELLED,
+            expect=ProposalStatus.EXECUTED,
+            reason=f"Kory cancelled the booked meeting. {reason}".strip(),
+            actor=authorized_by or "kory",
+            fields={"invite_event_id": None},
         )
+        if not cancelled.claimed:
+            conn.commit()
+            return {"ok": False, "error": cancelled.refusal}
         _insert_audit_log(
             conn,
             step_name="meeting_cancelled",
@@ -336,18 +348,18 @@ def mark_recipient_slot_choice(
         ]
         if extras:
             selected_slot = {**selected_slot, "extra_attendees": extras}
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = ?, recipient_selected_slot = ?, updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (
-                STATUS_PENDING_INVITE,
-                json.dumps(selected_slot),
-                proposal_id,
-            ),
+        picked = transition(
+            conn,
+            proposal_id,
+            to=STATUS_PENDING_INVITE,
+            expect={STATUS_OFFER_SENT, STATUS_PENDING_REOFFER},
+            reason="Counterpart chose one of the offered times.",
+            actor="recipient",
+            fields={"recipient_selected_slot": json.dumps(selected_slot)},
         )
+        if not picked.claimed:
+            conn.commit()
+            return {"ok": False, "error": picked.refusal}
         _insert_audit_log(
             conn,
             step_name="recipient_slot_choice",
@@ -387,14 +399,18 @@ def mark_recipient_reoffer_request(
             errors=[],
         )
         released = _release_all_holds(conn, proposal_id, dummy)
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = ?, recipient_selected_slot = NULL, updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (STATUS_PENDING_REOFFER, proposal_id),
+        declined = transition(
+            conn,
+            proposal_id,
+            to=STATUS_PENDING_REOFFER,
+            expect=STATUS_OFFER_SENT,
+            reason=f"Counterpart declined all offered times; {released} hold(s) released.",
+            actor="recipient",
+            fields={"recipient_selected_slot": None},
         )
+        if not declined.claimed:
+            conn.commit()
+            return {"ok": False, "error": declined.refusal}
         _insert_audit_log(
             conn,
             step_name="recipient_reoffer_request",
@@ -621,7 +637,17 @@ def execute_lexi_approval(
 
             if normalized_decision == "rejected":
                 released = _release_all_holds(conn, proposal_id, result)
-                _set_proposal_status(conn, proposal_id, STATUS_REJECTED)
+                transition(
+                    conn,
+                    proposal_id,
+                    to=STATUS_REJECTED,
+                    expect=status,
+                    reason=(
+                        f"Kory rejected this proposal. {modification_notes or ''}".strip()
+                        + f" ({released} hold(s) released.)"
+                    ),
+                    actor=authorized_by or "kory",
+                )
                 result.holds_released = released
                 result.status = STATUS_REJECTED
                 result.ok = True
@@ -653,15 +679,20 @@ def execute_lexi_approval(
                                 message="Hold reminder email sent after Kory approval.",
                                 payload={"proposal_id": proposal_id},
                             )
-                            conn.execute(
-                                """
-                                UPDATE proposals
-                                SET scheduling_note = NULL, updated_at = datetime('now')
-                                WHERE id = ?
-                                """,
-                                (proposal_id,),
+                            # A follow-up on a thread whose offer is already out.
+                            # record_fact is a deliberate no-op here: the offer
+                            # timestamp records when the RECIPIENT first heard from
+                            # us, and a reminder must not make a stale offer look
+                            # fresh. The existing holds stay exactly as they are.
+                            record_fact(conn, proposal_id, FACT_OFFER_SENT_AT)
+                            transition(
+                                conn,
+                                proposal_id,
+                                to=STATUS_OFFER_SENT,
+                                reason="Hold reminder sent; the original offer still stands.",
+                                actor=authorized_by or "kory",
+                                fields={"scheduling_note": None},
                             )
-                            _set_proposal_status(conn, proposal_id, STATUS_OFFER_SENT)
                             result.status = STATUS_OFFER_SENT
                             result.warnings = (result.warnings or []) + [
                                 "Hold reminder sent — existing calendar holds unchanged."
@@ -673,7 +704,20 @@ def execute_lexi_approval(
                             # failure during hold placement (e.g. a transient DB
                             # lock) can never roll the proposal back to
                             # pending_approval and let it be re-sent (duplicate email).
-                            _set_proposal_status(conn, proposal_id, STATUS_OFFER_SENT)
+                            # Record the WORLD FACT first. This column is
+                            # write-once and no status change can rewind it, so
+                            # from here on every path — including ones written
+                            # later by someone who has not read this file — can
+                            # ask offer_is_outstanding() and get the truth rather
+                            # than whatever the workflow position happens to say.
+                            record_fact(conn, proposal_id, FACT_OFFER_SENT_AT)
+                            transition(
+                                conn,
+                                proposal_id,
+                                to=STATUS_OFFER_SENT,
+                                reason="Offer email dispatched to the counterpart.",
+                                actor=authorized_by or "kory",
+                            )
                             result.status = STATUS_OFFER_SENT
                             _insert_audit_log(
                                 conn,
@@ -820,7 +864,19 @@ def execute_lexi_approval(
                                 (confirmed_id, proposal_id),
                             )
 
-                    _set_proposal_status(conn, proposal_id, STATUS_EXECUTED)
+                    if confirmed_id:
+                        record_fact(conn, proposal_id, FACT_INVITE_SENT_AT)
+                    transition(
+                        conn,
+                        proposal_id,
+                        to=STATUS_EXECUTED,
+                        reason=(
+                            "Calendar invite dispatched; meeting booked."
+                            if confirmed_id
+                            else "Invite phase completed without a confirmed event."
+                        ),
+                        actor=authorized_by or "kory",
+                    )
                     result.status = STATUS_EXECUTED
                     result.ok = bool(confirmed_id)
                     if result.errors and not result.ok:
@@ -1277,17 +1333,6 @@ def _insert_approval(
             authorized_by,
             modification_notes,
         ),
-    )
-
-
-def _set_proposal_status(conn: sqlite3.Connection, proposal_id: int, status: str) -> None:
-    conn.execute(
-        """
-        UPDATE proposals
-        SET status = ?, updated_at = datetime('now')
-        WHERE id = ?
-        """,
-        (status, proposal_id),
     )
 
 

@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from app.config import settings
+from app.scheduling.proposal_state import LEXI_INVOLVED, ProposalStatus, transition
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
@@ -25,14 +26,9 @@ _CANCEL_RE = re.compile(
     r"|don'?t need (?:the|this) (?:meeting|call) (?:anymore|any more))\b"
 )
 
-LEXI_INVOLVED_STATUSES = (
-    "offer_sent",
-    "pending_invite",
-    "pending_reoffer",
-    "pending_approval",
-    "executed",
-    "awaiting_reply_prompt",
-)
+# Sorted so the SQL placeholder order is stable; membership is declared once
+# in the state machine.
+LEXI_INVOLVED_STATUSES = tuple(sorted(LEXI_INVOLVED))
 
 
 
@@ -479,17 +475,21 @@ def _reschedule_unsent_offer(
                 "(SELECT thread_id FROM proposals WHERE id = ?)",
                 (merged, proposal_id),
             )
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = 'pending_triage', drafted_reply = NULL,
-                proposed_slots = NULL, teams_approval_notified_at = NULL,
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (proposal_id,),
+        moved = transition(
+            conn,
+            proposal_id,
+            to=ProposalStatus.PENDING_TRIAGE,
+            reason="Counterpart changed the ask before the offer went out; redrafting.",
+            actor="recipient",
+            fields={
+                "drafted_reply": None,
+                "proposed_slots": None,
+                "teams_approval_notified_at": None,
+            },
         )
         conn.commit()
+        if not moved.claimed:
+            return None
 
     from app.agents.scheduler_agent import process_proposal_schedule
 
@@ -544,22 +544,31 @@ def _reschedule_booked_meeting(
                 "(SELECT thread_id FROM proposals WHERE id = ?)",
                 (merged, proposal_id),
             )
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = 'pending_triage', drafted_reply = NULL,
-                proposed_slots = NULL, recipient_selected_slot = NULL,
-                intent_classification = 'reschedule',
-                teams_approval_notified_at = NULL, updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (proposal_id,),
+        moved = transition(
+            conn,
+            proposal_id,
+            to=ProposalStatus.PENDING_TRIAGE,
+            reason="Counterpart asked to move the booked meeting; drafting new times.",
+            actor="recipient",
+            fields={
+                "drafted_reply": None,
+                "proposed_slots": None,
+                "recipient_selected_slot": None,
+                "intent_classification": "reschedule",
+                "teams_approval_notified_at": None,
+            },
         )
         conn.commit()
+        if not moved.claimed:
+            return None
 
     from app.agents.scheduler_agent import process_proposal_schedule
 
-    if process_proposal_schedule(proposal_id):
+    # Deliberate new round on a thread that already has a booked meeting. The
+    # original invite is NOT touched here — invite dispatch removes it only once
+    # a replacement is confirmed, so a dead-end reschedule never costs Kory the
+    # meeting he already has.
+    if process_proposal_schedule(proposal_id, reoffer=True):
         from app.bot.teams_publisher import schedule_teams_approval_push
 
         schedule_teams_approval_push(proposal_id, force=True)

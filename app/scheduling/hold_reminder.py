@@ -9,6 +9,7 @@ from typing import Any
 
 from app.config import settings
 from app.scheduling.email_format import format_slot_for_email, recipient_display_name
+from app.scheduling.proposal_state import ProposalStatus, transition
 from app.storage.lexi_db import get_lexi_connection
 
 import rules as kory_rules
@@ -16,8 +17,8 @@ import rules as kory_rules
 logger = logging.getLogger(__name__)
 
 HOLD_REMINDER_PREFIX = "HOLD_REMINDER"
-OFFER_SENT = "offer_sent"
-PENDING_APPROVAL = "pending_approval"
+OFFER_SENT = ProposalStatus.OFFER_SENT
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
 RELEASED_STATUS = "released"
 
 
@@ -170,23 +171,29 @@ def process_due_hold_reminders() -> list[dict[str, Any]]:
                 recipient_timezone=str(row["recipient_timezone"] or "") or None,
             )
 
-            conn.execute(
-                """
-                UPDATE proposals
-                SET status = ?,
-                    drafted_reply = ?,
-                    scheduling_note = ?,
-                    teams_approval_notified_at = NULL,
-                    updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (
-                    PENDING_APPROVAL,
-                    draft,
-                    f"{HOLD_REMINDER_PREFIX}: No reply after hold period — approve to send reminder.",
-                    proposal_id,
-                ),
+            # offer_sent -> pending_approval, a legal move but NOT a fresh
+            # offer: the original email is still in their inbox and the holds
+            # are still on the calendar. offer_sent_at stays stamped, so the
+            # send path treats an approval here as a follow-up and leaves the
+            # holds alone.
+            reminder = transition(
+                conn,
+                proposal_id,
+                to=PENDING_APPROVAL,
+                expect=OFFER_SENT,
+                reason="No reply within the hold period; reminder drafted for Kory.",
+                actor="lexi",
+                fields={
+                    "drafted_reply": draft,
+                    "scheduling_note": (
+                        f"{HOLD_REMINDER_PREFIX}: No reply after hold period — "
+                        "approve to send reminder."
+                    ),
+                    "teams_approval_notified_at": None,
+                },
             )
+            if not reminder.claimed:
+                continue
             conn.execute(
                 """
                 INSERT INTO audit_log (step_name, reference_id, log_level, message, payload)
@@ -262,21 +269,23 @@ def stage_release_followups(proposal_ids: list[int]) -> list[int]:
                 slots=[],
                 recipient_timezone=str(row["recipient_timezone"] or "") or None,
             )
-            conn.execute(
-                """
-                UPDATE proposals
-                SET status = ?, drafted_reply = ?, scheduling_note = ?,
-                    teams_approval_notified_at = NULL, updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (
-                    PENDING_APPROVAL,
-                    draft,
-                    f"{HOLD_REMINDER_PREFIX}: Holds released after no reply — "
-                    "approve to send the follow-up.",
-                    proposal_id,
-                ),
+            followup = transition(
+                conn,
+                proposal_id,
+                to=PENDING_APPROVAL,
+                reason="Holds expired with no reply; follow-up drafted for Kory.",
+                actor="lexi",
+                fields={
+                    "drafted_reply": draft,
+                    "scheduling_note": (
+                        f"{HOLD_REMINDER_PREFIX}: Holds released after no reply — "
+                        "approve to send the follow-up."
+                    ),
+                    "teams_approval_notified_at": None,
+                },
             )
+            if not followup.claimed:
+                continue
             conn.execute(
                 "INSERT INTO audit_log (step_name, reference_id, log_level, message, payload) "
                 "VALUES (?, ?, ?, ?, ?)",

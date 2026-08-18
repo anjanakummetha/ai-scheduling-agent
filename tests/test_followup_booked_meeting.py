@@ -26,6 +26,13 @@ def _mem_db(status: str = "executed"):
         "intent_classification TEXT, "
         "teams_approval_notified_at TEXT, invite_event_id TEXT, updated_at TEXT)"
     )
+    # Transitions write an audit row; without this table the state module
+    # degrades to a log line and the test cannot see WHY a status moved.
+    conn.execute(
+        "CREATE TABLE audit_log (id INTEGER PRIMARY KEY, step_name TEXT, "
+        "reference_id TEXT, log_level TEXT, message TEXT, payload TEXT, "
+        "timestamp TEXT DEFAULT (datetime('now')))"
+    )
     conn.execute("INSERT INTO email_threads VALUES ('t1', 'Could we set up a 30-minute intro call?')")
     conn.execute(
         "INSERT INTO proposals (id, thread_id, status, recipient_selected_slot, invite_event_id) "
@@ -59,7 +66,11 @@ def test_reschedule_reply_on_booked_meeting_regenerates_offer():
             {}, _proposal(), body=RESCHEDULE_BODY
         )
     assert out is not None and out.get("rescheduled") is True
-    sched.assert_called_once_with(6835)
+    # reoffer=True is the load-bearing part. Opening a new round on a thread
+    # that already has a booked meeting is legitimate, but it must be asked for
+    # explicitly — the default refuses, which is what stops a retry or a
+    # redelivered webhook from silently re-drafting a live offer.
+    sched.assert_called_once_with(6835, reoffer=True)
     push.assert_called_once()
     prop = conn.execute(
         "SELECT status, recipient_selected_slot, invite_event_id FROM proposals WHERE id=6835"
@@ -68,6 +79,13 @@ def test_reschedule_reply_on_booked_meeting_regenerates_offer():
     assert prop["recipient_selected_slot"] is None  # stale pick must not survive
     assert prop["invite_event_id"] == "evt-original-invite"  # meeting untouched
     assert "current invite stays" in out["message"]
+    audited = conn.execute(
+        "SELECT message FROM audit_log WHERE reference_id = '6835' "
+        "AND step_name = 'proposal_transition'"
+    ).fetchone()
+    assert audited and "executed -> pending_triage" in audited["message"], (
+        "every status change must say who moved it and why"
+    )
 
 
 def test_cancel_reply_pings_kory_and_touches_nothing():

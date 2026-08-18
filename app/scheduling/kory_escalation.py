@@ -8,6 +8,7 @@ from typing import Any
 
 from app.safety.outbound_guard import teams_push_allowed
 from app.scheduling.hermes_compose import build_scheduling_context_packet, compose_kory_guidance_with_hermes
+from app.scheduling.proposal_state import ProposalStatus, transition
 from app.storage.lexi_db import get_lexi_connection
 
 
@@ -85,9 +86,12 @@ def _with_actionable_footer(summary: str, proposal_id: int) -> str:
 def _mark_needs_kory(proposal_id: int, summary: str) -> None:
     try:
         with get_lexi_connection() as conn:
-            conn.execute(
-                "UPDATE proposals SET status = ? WHERE id = ?",
-                ("needs_kory", proposal_id),
+            transition(
+                conn,
+                proposal_id,
+                to=ProposalStatus.NEEDS_KORY,
+                reason=summary or "Escalated to Kory.",
+                actor="lexi",
             )
             conn.commit()
     except Exception:

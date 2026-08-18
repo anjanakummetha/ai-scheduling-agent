@@ -103,7 +103,12 @@ class TestSchedulingNoteOnDelegationPath:
             "drafted_reply TEXT, proposed_slots TEXT, voice_mode TEXT, "
             "recipient_timezone TEXT, scheduling_note TEXT, updated_at TEXT)"
         )
-        conn.execute("INSERT INTO proposals (id, status) VALUES (1, 'triaged')")
+        conn.execute(
+            "CREATE TABLE audit_log (id INTEGER PRIMARY KEY, step_name TEXT, "
+            "reference_id TEXT, log_level TEXT, message TEXT, payload TEXT, "
+            "timestamp TEXT DEFAULT (datetime('now')))"
+        )
+        conn.execute("INSERT INTO proposals (id, status) VALUES (1, 'pending_triage')")
         conn.commit()
         conn.close()
 
@@ -138,7 +143,12 @@ class TestSchedulingNoteOnDelegationPath:
             "recipient_timezone TEXT, scheduling_note TEXT, updated_at TEXT)"
         )
         conn.execute(
-            "INSERT INTO proposals (id, status, scheduling_note) VALUES (1, 'triaged', 'stale warning')"
+            "CREATE TABLE audit_log (id INTEGER PRIMARY KEY, step_name TEXT, "
+            "reference_id TEXT, log_level TEXT, message TEXT, payload TEXT, "
+            "timestamp TEXT DEFAULT (datetime('now')))"
+        )
+        conn.execute(
+            "INSERT INTO proposals (id, status, scheduling_note) VALUES (1, 'pending_triage', 'stale warning')"
         )
         conn.commit()
         conn.close()

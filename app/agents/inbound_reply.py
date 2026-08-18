@@ -12,13 +12,14 @@ from app.agents.scheduler_agent import PENDING_TRIAGE, process_proposal_schedule
 from app.agents.triage_agent import NON_SCHEDULING_INTENTS, VALID_INTENTS
 from app.config import settings
 from app.llm.hermes_client import get_hermes_client
+from app.scheduling.proposal_state import CHAT_DRAFTABLE, ProposalStatus, transition
 from app.storage.lexi_db import get_lexi_connection
 from app.storage.lexi_store import update_drafted_reply
 
-AWAITING_REPLY_PROMPT = "awaiting_reply_prompt"
-NO_REPLY_NEEDED = "no_reply_needed"
-PENDING_APPROVAL = "pending_approval"
-NEEDS_SCHEDULING_GUIDANCE = "needs_scheduling_guidance"
+AWAITING_REPLY_PROMPT = ProposalStatus.AWAITING_REPLY_PROMPT
+NO_REPLY_NEEDED = ProposalStatus.NO_REPLY_NEEDED
+PENDING_APPROVAL = ProposalStatus.PENDING_APPROVAL
+NEEDS_SCHEDULING_GUIDANCE = ProposalStatus.NEEDS_SCHEDULING_GUIDANCE
 
 SCHEDULING_INTENTS = frozenset(VALID_INTENTS) - NON_SCHEDULING_INTENTS
 
@@ -120,31 +121,24 @@ def _set_needs_scheduling_guidance(
     suggested_guidance: str | None = None,
 ) -> None:
     with get_lexi_connection() as conn:
+        fields: dict[str, Any] = {
+            "teams_approval_notified_at": None,
+            "scheduling_note": reason,
+        }
         if clear_draft:
-            conn.execute(
-                """
-                UPDATE proposals
-                SET status = ?, drafted_reply = NULL, proposed_slots = NULL,
-                    teams_approval_notified_at = NULL,
-                    scheduling_note = ?,
-                    kory_scheduling_guidance = COALESCE(?, kory_scheduling_guidance),
-                    updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (NEEDS_SCHEDULING_GUIDANCE, reason, suggested_guidance, proposal_id),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE proposals
-                SET status = ?, teams_approval_notified_at = NULL,
-                    scheduling_note = ?,
-                    kory_scheduling_guidance = COALESCE(?, kory_scheduling_guidance),
-                    updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (NEEDS_SCHEDULING_GUIDANCE, reason, suggested_guidance, proposal_id),
-            )
+            # A draft that could not be re-derived must not linger: Kory would
+            # otherwise be shown stale times under a "needs guidance" heading.
+            fields["drafted_reply"] = None
+            fields["proposed_slots"] = None
+        transition(
+            conn,
+            proposal_id,
+            to=NEEDS_SCHEDULING_GUIDANCE,
+            reason=reason or "Scheduler could not find valid slots.",
+            actor="scheduler",
+            fields=fields,
+            coalesce_fields={"kory_scheduling_guidance": suggested_guidance},
+        )
         _audit(
             conn,
             proposal_id,
@@ -215,16 +209,22 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
         }
 
     with get_lexi_connection() as conn:
-        conn.execute(
-            """
-            UPDATE proposals
-            SET kory_scheduling_guidance = ?, status = ?, drafted_reply = NULL,
-                proposed_slots = NULL, teams_approval_notified_at = NULL,
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (guidance, PENDING_TRIAGE, proposal_id),
+        applied = transition(
+            conn,
+            proposal_id,
+            to=PENDING_TRIAGE,
+            reason=f"Kory gave scheduling guidance: {guidance}",
+            actor="kory",
+            fields={
+                "kory_scheduling_guidance": guidance,
+                "drafted_reply": None,
+                "proposed_slots": None,
+                "teams_approval_notified_at": None,
+            },
         )
+        if not applied.claimed:
+            conn.commit()
+            return {"ok": False, "proposal_id": proposal_id, "error": applied.refusal}
         _audit(conn, proposal_id, "scheduling_guidance_applied", guidance)
         conn.commit()
 
@@ -326,9 +326,13 @@ def decline_reply(proposal_id: int, *, reason: str = "") -> dict[str, Any]:
                 "ok": False,
                 "error": f"Proposal {proposal_id} is not awaiting reply prompt (status={row['status']}).",
             }
-        conn.execute(
-            "UPDATE proposals SET status = ?, updated_at = datetime('now') WHERE id = ?",
-            (NO_REPLY_NEEDED, proposal_id),
+        transition(
+            conn,
+            proposal_id,
+            to=NO_REPLY_NEEDED,
+            expect=AWAITING_REPLY_PROMPT,
+            reason=reason or "Kory declined to draft a reply.",
+            actor="kory",
         )
         _audit(
             conn,
@@ -467,20 +471,19 @@ def find_proposal_by_subject(subject_contains: str) -> dict[str, Any] | None:
 
 def _reactivate_proposal_for_chat_draft(proposal_id: int) -> None:
     with get_lexi_connection() as conn:
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = ?, updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (AWAITING_REPLY_PROMPT, proposal_id),
+        transition(
+            conn,
+            proposal_id,
+            to=AWAITING_REPLY_PROMPT,
+            reason="Kory asked for a draft on a thread that had been closed.",
+            actor="kory",
         )
         conn.commit()
 
 
-_CHAT_DRAFTABLE_STATUSES = frozenset(
-    {AWAITING_REPLY_PROMPT, NO_REPLY_NEEDED, NEEDS_SCHEDULING_GUIDANCE}
-)
+# Derived from the state machine rather than re-listed here, so a new status is
+# classified in exactly one place.
+_CHAT_DRAFTABLE_STATUSES = CHAT_DRAFTABLE
 
 
 def begin_draft_reply(proposal_id: int, *, voice_mode: str = "") -> dict[str, Any]:
@@ -613,7 +616,9 @@ def begin_reoffer_schedule(proposal_id: int) -> dict[str, Any]:
                 "error": f"Proposal {proposal_id} is not awaiting re-offer (status={row['status']}).",
             }
 
-    scheduled = process_proposal_schedule(proposal_id)
+    # A deliberate new round: the counterpart turned the first set down, so
+    # re-staging the draft is the point rather than an accident.
+    scheduled = process_proposal_schedule(proposal_id, reoffer=True)
     if not scheduled:
         return {
             "ok": False,
@@ -724,16 +729,13 @@ def _set_pending_approval(
 
     body = normalize_draft_for_display(drafted_reply, max_chars=None, voice_mode=voice_mode)
     with get_lexi_connection() as conn:
-        conn.execute(
-            """
-            UPDATE proposals
-            SET status = ?,
-                drafted_reply = ?,
-                confidence_score = ?,
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (PENDING_APPROVAL, body, confidence_score, proposal_id),
+        transition(
+            conn,
+            proposal_id,
+            to=PENDING_APPROVAL,
+            reason="General (non-scheduling) reply drafted; awaiting Kory's approval.",
+            actor="lexi",
+            fields={"drafted_reply": body, "confidence_score": confidence_score},
         )
         _audit(conn, proposal_id, "inbound_reply_drafted", "General reply draft staged.")
         conn.commit()

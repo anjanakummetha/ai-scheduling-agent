@@ -25,8 +25,19 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.agents.scheduler_agent import TERMINAL_OR_SENT_STATUSES, process_proposal_schedule
+from app.agents.scheduler_agent import process_proposal_schedule
+from app.scheduling.proposal_state import (
+    ALL_STATUSES,
+    SCHEDULABLE,
+    ProposalStatus,
+    record_fact,
+)
 from app.storage.lexi_db import get_lexi_connection
+
+# Every status the engine must refuse to stage a first offer from, derived
+# from the state machine rather than re-listed here — a new status is
+# classified in one place and this test picks it up automatically.
+NOT_SCHEDULABLE = sorted(ALL_STATUSES - SCHEDULABLE)
 
 MT = ZoneInfo("America/Denver")
 THREAD = "no-restage-thread"
@@ -73,7 +84,7 @@ def _cleanup():
         conn.commit()
 
 
-@pytest.mark.parametrize("status", sorted(TERMINAL_OR_SENT_STATUSES))
+@pytest.mark.parametrize("status", NOT_SCHEDULABLE)
 def test_a_sent_or_finished_proposal_is_never_re_staged(status: str):
     pid = _seed(status)
     with patch(
@@ -100,7 +111,7 @@ def test_the_refusal_is_recorded_so_it_is_not_a_silent_no_op():
     assert row and "Refused to re-stage" in row["message"], row
 
 
-@pytest.mark.parametrize("status", ["pending_triage", "awaiting_reply_prompt", "pending_reoffer"])
+@pytest.mark.parametrize("status", sorted(SCHEDULABLE))
 def test_a_proposal_that_SHOULD_advance_still_does(status: str):
     """The guard must not freeze the normal path."""
     pid = _seed(status)
@@ -111,3 +122,51 @@ def test_a_proposal_that_SHOULD_advance_still_does(status: str):
     assert _row(pid)["status"] != status or _row(pid)["drafted_reply"] != "ALREADY SENT", (
         f"{status} should still be advanceable"
     )
+
+
+def test_a_sent_offer_is_refused_even_if_the_status_was_rolled_back():
+    """The guard that matters, and the one the old code did not have.
+
+    Suppose something puts a proposal back to pending_triage after its offer
+    email has already gone out — a redelivered webhook, a follow-up handler, a
+    maintenance script, a bug nobody has written yet. Status alone says "safe to
+    stage"; the world says an email is sitting in somebody's inbox and holds are
+    on the calendar.
+
+    Lexi must believe the world. Re-staging here is what emailed the same person
+    twice.
+    """
+    pid = _seed(ProposalStatus.PENDING_TRIAGE)
+    with get_lexi_connection() as conn:
+        assert record_fact(conn, pid, "offer_sent_at") is True
+        conn.commit()
+
+    with patch(
+        "app.scheduling.calendar_context.load_scheduling_calendar_context", return_value=FREE
+    ):
+        advanced = process_proposal_schedule(pid)
+
+    row = _row(pid)
+    assert advanced is False
+    assert row["drafted_reply"] == "ALREADY SENT", "the sent offer's draft was rewritten"
+
+
+def test_a_world_fact_cannot_be_un_recorded():
+    """An email cannot be un-sent, so the column recording it is write-once.
+
+    Enforced by a database trigger, not by convention, because the whole point
+    of the fact layer is that the rest of the system may trust it absolutely.
+    """
+    import sqlite3
+
+    pid = _seed(ProposalStatus.OFFER_SENT)
+    with get_lexi_connection() as conn:
+        record_fact(conn, pid, "offer_sent_at")
+        conn.commit()
+
+        # A second record_fact is a no-op rather than a refresh: a retry that
+        # sends nothing must not make a two-day-old offer look like it just went.
+        assert record_fact(conn, pid, "offer_sent_at") is False
+
+        with pytest.raises(sqlite3.Error):
+            conn.execute("UPDATE proposals SET offer_sent_at = NULL WHERE id = ?", (pid,))
