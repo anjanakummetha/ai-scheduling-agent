@@ -45,6 +45,15 @@ _TEST_ENV = {
     # passed locally while failing on a runner that has none. Pinned to the
     # production identity rule (Lexi voice unless a Kory sign-off is detected).
     "LEXI_DEFAULT_SEND_CHANNEL": "lexi",
+    # Same lesson, same fix: WHO Lexi and Kory are came from the developer's
+    # .env, which CI does not have. Without it settings.lexi_mailbox_email is
+    # None and kory_sender_emails is empty, so "is this addressed to Lexi?" and
+    # "is this from Kory?" answer no for everyone — and the direct-mail tests
+    # got a "not handled" dict instead of an action. Green on the laptop, red on
+    # the runner, for a whole class of identity-dependent behaviour.
+    "LEXI_MAILBOX_EMAIL": "lexi@iconicfounders.com",
+    "KORY_SENDER_EMAILS": "kory@ifg.vc,kory@iconicfounders.com",
+    "KORY_CC_EMAIL": "kory.mitchell@iconicfounders.com",
     # 3. Own database. The suite used to inherit LEXI_DATABASE_PATH from .env and
     # share whatever store the developer's stack was pointed at. That is not just
     # untidy: a fixture proposal parked in pending_invite was picked up by a

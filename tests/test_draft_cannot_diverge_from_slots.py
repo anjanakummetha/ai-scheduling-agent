@@ -54,56 +54,28 @@ def _next_saturday() -> date:
 
 @contextmanager
 def _model_available():
-    """Force the "an LLM is configured" branch regardless of the developer's env.
+    """Force the "an LLM is configured" branch for the module under test.
 
-    settings is a frozen dataclass shared by reference across modules, so this
-    goes through object.__setattr__ like the `live_writes` fixture. Without it
-    the test reads whatever key happens to be in .env and silently exercises a
-    different branch on a machine that has none.
+    Deliberately mutates ``hermes_compose.settings`` rather than
+    ``app.config.settings``. They are normally the same object, but several
+    tests call ``importlib.reload(app.config)``, which rebinds
+    ``app.config.settings`` to a NEW instance while every module that did
+    ``from app.config import settings`` keeps holding the old one. Patching the
+    wrong one is silent: composition sees no key, returns the template, and the
+    test reports "the check is too strict" when the check never ran.
+
+    That is exactly how this failed in CI and passed on the developer's laptop —
+    where .env supplies a real key, so the override was never load-bearing.
     """
-    from app.config import settings
+    from app.scheduling import hermes_compose
 
-    previous = settings.llm_api_key
-    object.__setattr__(settings, "llm_api_key", "test-key-not-used")
+    target = hermes_compose.settings
+    previous = target.llm_api_key
+    object.__setattr__(target, "llm_api_key", "test-key-not-used")
     try:
         yield
     finally:
-        object.__setattr__(settings, "llm_api_key", previous)
-
-
-def _why_rejected(model_output: str, slots: list[dict[str, str]]) -> str:
-    """Replay composition's three checks on the MODEL's output.
-
-    They have to be evaluated on what the model produced, after the canonical
-    block is spliced in — not on whatever came back. Reporting them on the
-    returned draft says nothing, because on a fallback that IS the template and
-    the template passes everything by construction.
-    """
-    from app.scheduling.draft_slot_sync import (
-        draft_matches_slots,
-        extract_offer_times_from_draft,
-    )
-    from app.scheduling.email_format import format_offer_slot_block
-    from app.scheduling.hermes_compose import (
-        _draft_includes_slot_block,
-        _draft_offers_only_staged_slots,
-        _enforce_offered_times_block,
-    )
-
-    block = format_offer_slot_block(slots, recipient_tz=MT)
-    enforced = _enforce_offered_times_block(model_output, block)
-    ok, mismatch = draft_matches_slots(draft_body=enforced, proposed_slots=slots)
-    return (
-        f"\n  truthy={bool(enforced)}"
-        f"\n  includes_slot_block={_draft_includes_slot_block(enforced, block, slots)}"
-        f"\n  offers_only_staged={_draft_offers_only_staged_slots(enforced, slots)}"
-        f"\n  matches_slots={ok} {mismatch}"
-        f"\n  canonical block={block!r}"
-        f"\n  model output={model_output!r}"
-        f"\n  after enforce={enforced!r}"
-        f"\n  staged={[s['start'] for s in slots]}"
-        f"\n  parsed back={[p['start'] for p in extract_offer_times_from_draft(enforced)]}"
-    )
+        object.__setattr__(target, "llm_api_key", previous)
 
 
 def _compose(model_draft: str, slots: list[dict[str, str]]) -> tuple[str, str]:
