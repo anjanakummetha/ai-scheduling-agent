@@ -188,3 +188,41 @@ def test_every_offered_slot_is_still_in_the_future(guidance: str):
     now = datetime.now(MT)
     for slot in result.slots:
         assert datetime.fromisoformat(slot["start"]).astimezone(MT) > now
+
+
+def test_the_engine_never_proposes_a_weekend_even_when_fully_booked():
+    """Kory: "Default is no work meetings on weekends — it creates issues at home."
+
+    The pressure case is a calendar with nowhere to go: a fallback ladder that
+    widens far enough will eventually reach a Saturday unless the rule holds.
+    """
+    monday = _monday(1)
+    for busy in ([], _fill(monday, 14)):
+        result = _run("Can we meet soon? Any day works.", busy)
+        assert result.slots, "she must still find something"
+        for day in _slot_days(result):
+            assert day.weekday() < 5, f"offered {day:%A} {day}"
+
+
+def test_a_draft_offering_a_weekend_is_refused_at_the_send_gate():
+    """Belt and braces: if a weekend ever reaches a draft, nothing sends.
+
+    Seen live 2026-08-18 — a draft carrying "Sunday, August 30 at 9:00 AM MT"
+    was refused with nothing sent and no holds touched. That refusal is the
+    9187 protection doing its job, not a failure.
+    """
+    from app.scheduling.draft_slot_sync import verify_draft_slots
+
+    today = date.today()
+    sunday = today + timedelta(days=(6 - today.weekday()) % 7 + 7)
+    draft = (
+        "Hi,\n\nA few times:\n\n"
+        f"• {sunday:%A}, {sunday:%B} {sunday.day} at 9:00-9:30 AM MT\n"
+    )
+    check = verify_draft_slots(
+        draft_body=draft,
+        intent="referral_or_intro",
+        subject="[TEST] intro",
+        calendar_context={"status": "available", "busy_events": []},
+    )
+    assert not check.ok, "a weekend draft must never pass the send gate"
