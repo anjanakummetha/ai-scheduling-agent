@@ -24,3 +24,8 @@ CEO_Executive_Dashboard--main/
 # Runtime cache rebuilt from Kory sent mail; holds verbatim excerpts of real
 # correspondence. Same class as .env and data/*.db — never commit it.
 data/kory_voice_profile.json
+
+# Coverage artefacts
+.coverage
+.coverage.*
+htmlcov/
