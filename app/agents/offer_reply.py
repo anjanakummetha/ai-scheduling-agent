@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
 from app.agents.comms_agent import (
@@ -15,7 +14,6 @@ from app.agents.comms_agent import (
 from app.config import settings
 from app.scheduling.recipient_slot import match_recipient_slot_choice, recipient_times_rejected
 from app.scheduling.thread_matching import (
-    extract_email as _extract_email,
     find_proposal_for_inbound,
     is_internal_sender,
     same_person as _same_person,

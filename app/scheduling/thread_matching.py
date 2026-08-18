@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
 from app.scheduling.proposal_state import (
+    ALL_STATUSES,
     LEXI_INVOLVED,
     OFFER_OUTSTANDING_STATUSES,
     ProposalStatus,
@@ -239,12 +240,6 @@ def find_proposal_id_for_thread(
         conn,
         conversation_id=conversation_id,
         subject=subject,
-        statuses=_all_statuses(),
+        statuses=ALL_STATUSES,
     )
     return int(found["proposal_id"]) if found else None
-
-
-def _all_statuses() -> Sequence[str]:
-    from app.scheduling.proposal_state import ALL_STATUSES
-
-    return tuple(sorted(ALL_STATUSES))

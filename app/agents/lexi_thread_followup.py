@@ -10,11 +10,7 @@ from typing import Any
 
 from app.config import settings
 from app.scheduling.proposal_state import LEXI_INVOLVED, ProposalStatus, transition
-from app.scheduling.thread_matching import (
-    find_proposal_for_inbound,
-    is_internal_sender,
-    normalize_thread_subject as _normalize_subject,
-)
+from app.scheduling.thread_matching import find_proposal_for_inbound, is_internal_sender
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)

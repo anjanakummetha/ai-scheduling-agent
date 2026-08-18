@@ -44,10 +44,7 @@ from app.integrations.outlook_email import (
     normalize_message,
 )
 from app.scheduling.proposal_state import ProposalStatus, transition
-from app.scheduling.thread_matching import (
-    find_proposal_id_for_thread,
-    normalize_thread_subject as _normalize_thread_subject,
-)
+from app.scheduling.thread_matching import find_proposal_id_for_thread
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
