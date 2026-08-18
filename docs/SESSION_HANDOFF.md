@@ -1,4 +1,165 @@
-# Lexi — Session Handoff (updated 2026-08-18, scheduling hardening + root cause)
+# Lexi — Session Handoff (updated 2026-08-18, the structural pass)
+
+**Resume phrase:** *"The proposal lifecycle now has a single chokepoint. Status
+changes go through `transition()`; what actually happened in the world —
+`offer_sent_at`, `invite_sent_at` — is recorded separately, write-once, and
+enforced by database triggers. 1,507 tests green on today and six simulated
+dates. Anjana's Teams pass is the only remaining gate."*
+
+Laptop at the commits below; **nothing pushed yet** and **nothing deployed to
+the box**. No production API calls and no Composio writes were made this
+session; every test runs hermetically.
+
+---
+
+## 0. THE ONE THING TO KNOW
+
+**The previous handoff diagnosed the problem correctly and this session fixed
+it.** The diagnosis was: every scheduling defect is Lexi's record disagreeing
+with what actually happened, because the proposal state machine had many entry
+points and the guards lived on individual paths rather than at a chokepoint.
+
+There is now one chokepoint, and one more idea that turned out to matter more:
+
+**Workflow position and world facts are different things.** `status` is a
+workflow position and may legitimately move backwards — a thread re-enters
+scheduling, a booked meeting gets rescheduled. An email that reached someone's
+inbox cannot be un-sent. Conflating the two is what let a sent offer look unsent
+and get sent twice.
+
+- `proposals.status` → changed only via `transition()` in
+  `app/scheduling/proposal_state.py`, which checks the move against a declared
+  table, claims it atomically so two approvals cannot both send, writes
+  companion columns in the same statement so a row is never readable as
+  "approved and ready" carrying a stale draft, and records **why** in the audit
+  log.
+- `proposals.offer_sent_at` / `invite_sent_at` → write-once, enforced by a
+  SQLite trigger. Code that must not act twice asks `offer_is_outstanding()`,
+  not the status. That closes the hole for statuses nobody has thought of yet.
+
+Guard triggers are generated from the same declaration, so a maintenance script
+or a hand-run UPDATE cannot corrupt state quietly. If a legitimate path ever
+turns out to be missing from `LEGAL_TRANSITIONS`, the escape hatch needs no code
+deploy:
+
+    .venv/bin/python -m scripts.init_lexi_db --no-transition-guard
+
+---
+
+## 1. WHAT CHANGED, AND WHY EACH ONE MATTERED
+
+**Structural**
+
+1. **One state machine** (`app/scheduling/proposal_state.py`). Twelve statuses,
+   the semantic groups that had drifted apart across modules, and the legal
+   transitions — declared once. Eight files had each redefined
+   `PENDING_APPROVAL = "pending_approval"`. All ~20 raw status writes now route
+   through `transition()`; a guard-rail test fails if a new one appears.
+2. **One resolver for "which proposal does this reply answer"**
+   (`app/scheduling/thread_matching.py`). There were three, and the differences
+   were defects: one ordered by `p.id DESC`, so an acceptance landed on a newer
+   unsent draft and the meeting was never booked. `_is_kory_sender` existed
+   twice with different rules; four subject normalizers became one.
+3. **Re-staging a live offer is now an explicit `reoffer=True`.** Declining an
+   offer and moving a booked meeting both ask for it, and it releases the old
+   round's holds first. Retries, redelivered webhooks and follow-ups get the
+   safe default and are refused.
+4. **Hold placement is idempotent** rather than conditional on a `HOLD_REMINDER`
+   prefix in a note. The pre-send gate now runs on follow-ups too — it discounts
+   our own holds, so re-quoting a time we hold no longer reads as a conflict.
+
+**Defects fixed, each with a test that fails without the fix**
+
+5. **A failed invite booked a meeting that did not exist.** The invite phase
+   marked the proposal `executed` whether or not the calendar write produced an
+   event, and released the holds first. Outlook refusing meant: no meeting, the
+   held time given away, the record saying booked, out of every queue, and no
+   way back (`executed` cannot legally return to `pending_invite`).
+6. **A send that did not happen was recorded as one.** `send_draft`'s return
+   value was discarded, and the Lexi-voice and sandbox paths returned "failed"
+   with nothing to say — so the escalation, which fired off `result.errors`,
+   stayed silent too.
+7. **`approve draft 1` could send the wrong person's offer.** The number was
+   resolved by re-reading the queue at command time, so a draft clearing (or a
+   high-priority one arriving) shifted what it meant. Rendering the list now
+   records its order; a draft that has moved on is refused **by name**.
+8. **Three commands Lexi advertises did not parse** — `approve draft N`,
+   `send invite #N` (the step that books the meeting) and
+   `retry scheduling for #N — <your times>`. They fell through to "Not a Lexi
+   command", which reads as being ignored.
+9. **A cold calendar swallowed an acceptance.** The check for "did they accept a
+   time we already offered" sat below a calendar read it does not need. This was
+   the live E2E failure that was always the first run after a restart.
+10. **City+state signatures now get their own zone quoted first.** Confidence
+    described which function produced a signal rather than how good the signal
+    is. "San Francisco, CA" is a direct statement of location; a bare "London"
+    mention and a phone area code are not, and still fall back to MT.
+11. **A proposal's own holds could block its own send.** `_pre_send_slot_gate`
+    read `proposal["proposal_id"]` from a bundle keyed on `"id"`, so it passed
+    0 and every "exclude this proposal" clause excluded nothing.
+
+**Tests found three fixtures asserting things that cannot happen in
+production** — a `'triaged'` status that has never existed, a jump straight to
+`cancelled`, and holds expiring on a hard-coded `2026-08-01`. All now reach
+their state the way the product does.
+
+---
+
+## 2. VERIFICATION
+
+- **1,507 tests green**, and green on six simulated dates: both DST flip days
+  (2026-03-08, 2026-11-01), two month ends, and the year boundary.
+
+      LEXI_TEST_FAKE_TODAY=2026-11-01 .venv/bin/python -m pytest -q \
+          -m "not live" --ignore=tests/test_api_v1.py
+
+- **Driven through the gateway**, not around it: `tests/teams_parity.py` routes
+  through `mcp._tool_manager.call_tool`, so a test that passes there is what
+  happens when Kory types the same words.
+- **Mutation-checked.** Each of the load-bearing fixes was reverted in place to
+  confirm its test actually fails: the engine's outstanding-offer guard, the
+  write-once world facts, the discarded `send_draft` return, and the
+  unconditional `executed` transition.
+- **No production API calls and no Composio writes.** Nothing was emailed, and
+  Kory's inbox was not touched.
+
+---
+
+## 3. STILL OPEN, HONESTLY
+
+- **Not deployed and not pushed.** The box is still on `c47d496`. Deploying
+  needs `init_lexi_db` to run so the two fact columns, the snapshot table and
+  the guard triggers are created. The migration backfills `offer_sent_at` for
+  existing rows at `offer_sent` and beyond, so live proposals stay correct.
+- **`/api/v1/unanswered-scheduling` may still report 0.** It filters on
+  `awaiting_reply_prompt`, and the previous handoff recorded no rows in that
+  state since Aug 3. I could not verify production data from the laptop, and
+  widening it blind risks making the morning brief *wrong* rather than merely
+  empty — so it is untouched. It is dashboard-side, not scheduling.
+- **The outbound auto-execute path** (`_dispatch_outbound_execution`) sends
+  inside a savepoint, so a rollback after the send would lose the record. It is
+  gated off in production (`LEXI_ALLOW_IMMEDIATE_SEND=false`) and unreachable,
+  which is why it was left alone.
+- **The live E2E and model battery were not run** — both spend on Kory's API key
+  and Composio. The composition change can only ever *reduce* to the
+  slot-derived template, and seven realistic draft shapes are pinned as passing,
+  so it cannot silently turn every email into boilerplate.
+
+---
+
+## 4. WHAT TO DO NEXT
+
+1. **Deploy**, running `init_lexi_db` first (see §3).
+2. **Anjana's Teams pass.** The highest-value things to type, because they are
+   what changed: `pending`, then `approve draft 1`; `show draft 2`;
+   `reject draft 1 — not a fit`; and on a proposal where the counterpart has
+   picked a time, `send invite #N`. Then `pending`, clear one draft another way,
+   and type `approve draft 1` again — it should refuse **by name**.
+3. **Then Kory.**
+
+---
+
+# Previous handoff (2026-08-18, root cause) below
 
 **Resume phrase:** *"Box and laptop at `c47d496`, 1,404 tests green on the box.
 Nine real defects fixed this session, including the root cause behind 'she keeps

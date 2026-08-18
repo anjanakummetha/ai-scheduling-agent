@@ -154,3 +154,71 @@ def test_composition_and_the_send_gate_agree_by_construction():
         draft, _ = _compose(model_output, slots)
         ok, mismatch = draft_matches_slots(draft_body=draft, proposed_slots=slots)
         assert ok, f"composition emitted a draft the send gate refuses: {mismatch}"
+
+
+# ---------------------------------------------------------------------------
+# The other risk: a check that is too strict silently turns every email into
+# the template, which Kory would read as Lexi getting worse at writing.
+# ---------------------------------------------------------------------------
+
+
+def _bullets(slots: list[dict[str, str]]) -> str:
+    return "\n".join(
+        f"• {datetime.fromisoformat(s['start']).strftime('%A, %B %-d at %-I:%M %p')}"
+        for s in slots
+    )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "plain",
+        "with a warm opener",
+        "with a closing question",
+        "with a duration mentioned",
+        "with a relative reference",
+        "with a location",
+        "mentioning the sender's own ask",
+    ],
+)
+def test_a_normal_model_draft_is_not_mistaken_for_a_divergent_one(shape: str):
+    """Realistic prose around the canonical bullets must survive.
+
+    The check parses times out of the draft, so ordinary sentences that mention
+    a duration ("30 minutes"), a relative week ("next week") or a place must not
+    read as an extra offered time.
+    """
+    slots = _weekday_slots()
+    block = _bullets(slots)
+    bodies = {
+        "plain": f"Hi Dana,\n\nA couple of options:\n\n{block}\n\nLet's Win,\nKory",
+        "with a warm opener": (
+            f"Hi Dana,\n\nGreat to hear from you — Kory would enjoy this.\n\n"
+            f"{block}\n\nLet's Win,\nKory"
+        ),
+        "with a closing question": (
+            f"Hi Dana,\n\n{block}\n\nDo either of those work? Happy to look "
+            f"further out if not.\n\nLet's Win,\nKory"
+        ),
+        "with a duration mentioned": (
+            f"Hi Dana,\n\nHappy to find 30 minutes. Here are two options:\n\n"
+            f"{block}\n\nLet's Win,\nKory"
+        ),
+        "with a relative reference": (
+            f"Hi Dana,\n\nNext week is fairly open — these two are best:\n\n"
+            f"{block}\n\nLet's Win,\nKory"
+        ),
+        "with a location": (
+            f"Hi Dana,\n\nEither of these, at the Denver office:\n\n{block}\n\n"
+            f"Let's Win,\nKory"
+        ),
+        "mentioning the sender's own ask": (
+            f"Hi Dana,\n\nYou mentioned the next couple of weeks — these work:\n\n"
+            f"{block}\n\nLet's Win,\nKory"
+        ),
+    }
+    draft, source = _compose(bodies[shape], slots)
+    assert source == "hermes", (
+        f"a perfectly good draft ({shape}) was replaced by the template; the "
+        "check is too strict and every email would read as boilerplate"
+    )
