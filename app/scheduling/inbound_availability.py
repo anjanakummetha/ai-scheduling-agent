@@ -178,7 +178,10 @@ def _writing_zone(default_tz: str | None) -> ZoneInfo:
 # defect 3: those became explicit 5 PM / 10 AM candidates).
 _BARE_HOUR_RE = re.compile(
     r"\b(at|around)\s+(\d{1,2})(:\d{2})?\b"
-    r"(?!\s*(?:am|pm|a\.m|p\.m|[:./\d-]"
+    # A FULL STOP is only disqualifying when a digit follows it ("9.30", a
+    # version, a decimal). "Let's do the 27 at 9." is an ordinary sentence and
+    # was yielding no time at all.
+    r"(?!\s*(?:am|pm|a\.m|p\.m|\.\d|[:/\d-]"
     r"|minutes?\b|mins?\b|hours?\b|hrs?\b|days?\b|weeks?\b|months?\b"
     r"|people\b|folks\b|guests\b|attendees\b|of\b|or\b|percent\b|%"
     r"|miles?\b|blocks?\b|slots?\b|options?\b|times?\b))",
@@ -256,7 +259,11 @@ def extract_inbound_time_candidates(
             rf"(?:{time_re}\s+(?:[a-z.]{{2,9}}\s+)?on\s+)?"
             r"(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday"
             r"|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\s+)?"
-            r"the\s+(\d{1,2})(?:st|nd|rd|th)\b"
+            # Suffix optional: "the 27 at 9" is as common as "the 27th at 9",
+            # and without this the bare-weekday branch below won the match and
+            # resolved "Thursday the 27" to the NEAREST Thursday — a week early
+            # (found by the live full-flow E2E, 2026-08-18).
+            r"the\s+(\d{1,2})(?:st|nd|rd|th)?\b"
             rf"(?![^.\n]{{0,12}}\bof\b)"  # "the 13th of August" → month kind
             # Trailing time must not cross a comma — it swallowed the NEXT
             # clause's time ("...the 13th, or anytime after 10:30am on...").
@@ -267,7 +274,7 @@ def extract_inbound_time_candidates(
         # reading put the Curtis ask a full three weeks early (real thread).
         ("weekday", re.compile(
             r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Mon|Tue|Tues|Wed|Thu|Thurs|Fri)\b"
-            rf"(?!\s*,?\s*(?:\d{{1,2}}/\d{{1,2}}|(?:{month_alt})\.?\s+\d|the\s+\d{{1,2}}(?:st|nd|rd|th)))"
+            rf"(?!\s*,?\s*(?:\d{{1,2}}/\d{{1,2}}|(?:{month_alt})\.?\s+\d|the\s+\d{{1,2}}))"
             rf"(?!\s+or\s+\w+day\b[^.\n]{{0,20}}(?:(?:{month_alt})\.?\s+\d|the\s+\d{{1,2}}(?:st|nd|rd|th)))"
             rf"(?:[^.\n]{{0,40}}?{time_re})?", re.I)),
         # Time first, day second: "3pm on Wednesday" / "2 PM next Tuesday".
