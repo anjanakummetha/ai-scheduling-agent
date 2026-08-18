@@ -249,6 +249,19 @@ def schedule_from_context(
                     meeting_format=meeting_format or "",
                 )
             return inbound
+        if inbound is not None and inbound.status == "weekday_date_contradiction":
+            # Stop here. Dropping the contradictory candidate is not enough: the
+            # engine re-derives the same date from the body text, so the run
+            # ended up ASKING "which did they mean?" while simultaneously
+            # offering the disputed day. Offering it is a coin flip presented as
+            # an answer, which is the one thing Kory said Lexi must never do.
+            inbound.plan = plan
+            inbound.calendar_context = calendar_context
+            inbound.recipient_timezone = tz_result.tz_name()
+            inbound.recipient_timezone_source = tz_result.source
+            inbound.recipient_timezone_confidence = tz_result.confidence
+            inbound.timezone_uncertain = uncertain_tz
+            return inbound
         if inbound and inbound.inbound_notes:
             inbound_notes = list(inbound.inbound_notes)
 

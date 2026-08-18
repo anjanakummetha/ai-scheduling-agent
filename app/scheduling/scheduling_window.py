@@ -261,6 +261,26 @@ def infer_scheduling_window(
             start = today + timedelta(days=1)  # skip today for scheduling
         return SchedulingWindow(start=start, end=end, source="body", label="this week")
 
+    # "the following week" / "the week after" — a one-week PUSH, and the single
+    # most common way a counterpart declines an offer ("none of those work,
+    # anything the following week?"). recipient_times_rejected already matched
+    # that sentence, so Lexi saw the rejection and then re-offered the SAME
+    # week, because no window was inferred and the sender's original phrasing
+    # still owned the plan. Checked before "next week": "the week after next"
+    # contains the words "next week".
+    if re.search(
+        r"\b(?:the\s+)?(?:following\s+week|week\s+after(?:\s+next)?)\b", combined
+    ):
+        this_monday, this_sunday = _week_bounds(today)
+        start = this_monday + timedelta(days=14)
+        end = this_sunday + timedelta(days=14)
+        return SchedulingWindow(
+            start=start,
+            end=end,
+            source="body",
+            label="the following week",
+        )
+
     if re.search(r"\bnext\s+week\b", combined) and not re.search(
         r"\bnext\s+(?:week\s+or\s+(?:two|so)|couple\s+(?:of\s+)?weeks?)\b", combined
     ):

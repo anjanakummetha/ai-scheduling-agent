@@ -264,6 +264,7 @@ def find_valid_slots(
     else:
         time_window = infer_time_of_day_window(subject=subject, body=body)
     allowed_weekdays = infer_allowed_weekdays(subject=subject, body=body)
+    excluded_dates: set = set()
 
     # Kory's per-proposal guidance overrides what the email asked for — he is
     # redirecting the search ("try Thursday instead, make it 45 minutes,
@@ -277,6 +278,10 @@ def find_valid_slots(
         g_days = weekdays_from_guidance(guidance)
         if g_days:
             allowed_weekdays = g_days
+        # Specific calendar dates he ruled out ("not the 15th", "avoid Sep 15").
+        from app.scheduling.scheduling_plan import excluded_dates_from_guidance
+
+        excluded_dates = excluded_dates_from_guidance(guidance)
         if not skip_time_of_day:
             negated = re.search(
                 # "avoid mornings" means the OPPOSITE of a mornings window —
@@ -325,6 +330,9 @@ def find_valid_slots(
             hour=0, minute=0, second=0, microsecond=0
         )
         if window and not (window.start <= day.date() <= window.end):
+            continue
+        # day is a datetime here; the surrounding checks all use day.date().
+        if day.date() in excluded_dates:
             continue
         if allowed_weekdays is not None and day.weekday() not in allowed_weekdays:
             continue
@@ -483,6 +491,7 @@ def find_valid_slots(
                 else None
             ),
             "allowed_weekdays": sorted(allowed_weekdays) if allowed_weekdays else None,
+            "excluded_dates": sorted(d.isoformat() for d in excluded_dates) or None,
         },
     )
 

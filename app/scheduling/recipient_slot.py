@@ -338,6 +338,23 @@ _REJECTION_PATTERNS = (
     r"\banything\s+(?:in\s+)?(?:the\s+)?(?:following|next)\s+week\b",
     r"\bthat (?:whole )?week\b[^.\n]{0,50}\b(?:messy|full|busy|bad|tough|"
     r"doesn'?t work|won'?t work|not (?:great|good|ideal))\b",
+    # Real decline phrasings that were reaching us unrecognised, so the holds
+    # stayed on the calendar and nothing was re-offered.
+    # "I'm double booked for all three."
+    r"\bdouble[- ]?booked\b",
+    # "Could we look at the week after?" — the shift verbs above cover
+    # following/next/another, but not "the week after".
+    r"\bthe week after\b",
+    # "Do you have anything later in the month?" / "anything later that week"
+    r"\banything\s+(?:a bit\s+)?later\b",
+    # "That week is gone." / "shot" / "already full"
+    r"\bthat week is\b[^.\n]{0,20}\b(?:gone|shot|full|booked|packed)\b",
+    # "Those are tough." / "these look tight" — a soft no on the offered set.
+    r"\b(?:those|these)\s+(?:are|look|seem)\s+(?:tough|tight|hard|difficult|rough)\b",
+    # A bare week-shift question standing alone: "Sorry, that week is gone.
+    # Next week?" Anchored to a sentence boundary and required to be a
+    # QUESTION, so "Thursday next week works" is untouched.
+    r"(?:^|[.!?]\s+)(?:next|following)\s+week\s*\?",
 )
 
 

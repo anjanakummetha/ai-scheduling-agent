@@ -63,6 +63,109 @@ class SchedulingPlan:
     kory_guidance: str = ""
 
 
+# Sentence-level negation, shared in spirit with inbound_availability's blackout
+# detection: what matters is whether the DATE'S OWN clause rules it out.
+_GUIDANCE_NEGATION_RE = re.compile(
+    r"\b(?:avoid|not|no longer|can'?t (?:do|make)|cannot (?:do|make)|won'?t work"
+    r"|doesn'?t work|does not work|anything but|other than|except|rather not"
+    r"|instead of|no good|is out|are out|drop)\b",
+    re.IGNORECASE,
+)
+_DATEISH_RE = re.compile(
+    r"(?:\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}"
+    r"|\bthe\s+\d{1,2}(?:st|nd|rd|th)\b|\b\d{1,2}/\d{1,2}\b)",
+    re.IGNORECASE,
+)
+
+
+def _clauses(text: str) -> list[str]:
+    return re.split(r"[.;\n]|—|--", text)
+
+
+def _guidance_excludes_dates(text: str) -> bool:
+    """True when some clause names a date AND rules it out."""
+    return any(
+        _DATEISH_RE.search(c) and _GUIDANCE_NEGATION_RE.search(c) for c in _clauses(text)
+    )
+
+
+def excluded_dates_from_guidance(guidance: str, *, today: date | None = None) -> set[date]:
+    """Calendar dates Kory has ruled OUT in his guidance.
+
+    Stopping a negated date becoming the target window was only half the fix:
+    "avoid September 15" no longer offered ONLY the 15th, but still offered it
+    among the options. A day he has just excluded appearing in the offer is the
+    same failure wearing a smaller hat.
+
+    Parsed here rather than through extract_inbound_time_candidates for two
+    reasons: that function deliberately DROPS dates in a negative context (they
+    are blackouts, not offers), which is exactly the text we care about, and it
+    needs a clock time before it will emit anything at all — "not the 15th" has
+    none.
+    """
+    ref = today or datetime.now(tz=MT).date()
+    out: set[date] = set()
+    for clause in _clauses(guidance or ""):
+        if not (_DATEISH_RE.search(clause) and _GUIDANCE_NEGATION_RE.search(clause)):
+            continue
+        for found in _MONTH_DAY_RE.finditer(clause):
+            month = _MONTH_NUMBERS.get(found.group(1)[:3].lower())
+            day_num = int(found.group(2))
+            if month:
+                out.add(_nearest_future(ref, month, day_num))
+        for found in _NUMERIC_DATE_RE.finditer(clause):
+            out.add(_nearest_future(ref, int(found.group(1)), int(found.group(2))))
+        for found in _BARE_ORDINAL_RE.finditer(clause):
+            day_num = int(found.group(1))
+            if 1 <= day_num <= 31:
+                out.add(_nearest_future(ref, None, day_num))
+    return out
+
+
+_MONTH_NUMBERS = {
+    m: i
+    for i, m in enumerate(
+        ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"],
+        start=1,
+    )
+}
+_MONTH_DAY_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b", re.I
+)
+_NUMERIC_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})\b")
+_BARE_ORDINAL_RE = re.compile(r"\bthe\s+(\d{1,2})(?:st|nd|rd|th)\b", re.I)
+
+
+def _nearest_future(ref: date, month: int | None, day_num: int) -> date:
+    """The next occurrence of that day, so "the 15th" means the coming 15th."""
+    for bump in range(0, 14):
+        year = ref.year + (1 if month and month < ref.month and bump == 0 else 0)
+        m = month or ((ref.month + bump - 1) % 12 + 1)
+        y = year + ((ref.month + bump - 1) // 12 if month is None else 0)
+        try:
+            candidate = date(y, m, day_num)
+        except ValueError:
+            continue
+        if candidate >= ref:
+            return candidate
+        if month:  # a named month already past -> next year
+            return date(y + 1, m, day_num)
+    return ref
+
+
+def _strip_negated_clauses(text: str) -> str:
+    """Drop only the clauses that rule a date out, keeping any positive steer.
+
+    "Not the 15th, try the following week" must still yield the following week.
+    """
+    kept = [
+        c
+        for c in _clauses(text)
+        if not (_DATEISH_RE.search(c) and _GUIDANCE_NEGATION_RE.search(c))
+    ]
+    return " ".join(part.strip() for part in kept if part.strip())
+
+
 def apply_guidance_window(plan: "SchedulingPlan", guidance: str) -> "SchedulingPlan":
     """Kory's guidance window beats the sender's ("offer the week of Aug 24
     instead" vs the email's "next week"). The merged body contains both
@@ -83,6 +186,14 @@ def apply_guidance_window(plan: "SchedulingPlan", guidance: str) -> "SchedulingP
         guidance,
         flags=re.IGNORECASE,
     )
+    # A date Kory is ruling OUT must never become the window he is ruling IN.
+    # "Avoid September 15" / "not the 15th" / "they can't do the 15th anymore"
+    # all inferred a window OF the 15th, so the one day he excluded became the
+    # only day offered. This is the date-shaped twin of the "can't do Friday
+    # restricted TO Friday" defect that was fixed for weekday names only.
+    if _guidance_excludes_dates(window_text):
+        window_text = _strip_negated_clauses(window_text)
+
     window = infer_scheduling_window(subject="", body=window_text)
     if window is not None:
         plan.window = SchedulingWindow(
