@@ -135,3 +135,39 @@ def test_a_time_that_was_never_offered_is_not_silently_accepted(offer_sent):
             "a different day was recorded as acceptance of our slot"
         )
     assert result.get("action") != "recipient_slot_choice" or not pick
+
+
+def test_the_reply_answers_the_offer_that_was_SENT_not_a_newer_draft(offer_sent):
+    """Two proposals on one conversation — the live E2E's real failure.
+
+    A newer proposal still sitting in pending_approval was winning the lookup
+    on `ORDER BY id DESC`, so the counterpart's "that works" was recorded
+    against a draft nobody had sent, while the offer they were actually
+    replying to stayed untouched and the meeting was never booked.
+    """
+    sent_pid, day, slots = offer_sent
+    later = _future(4)
+    with get_lexi_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO proposals (thread_id, status, intent_classification, proposed_slots,"
+            " drafted_reply) VALUES (?,?,?,?,?)",
+            (
+                THREAD,
+                "pending_approval",
+                "referral_or_intro",
+                json.dumps([_slot(later, 11)]),
+                "A newer draft, not sent.",
+            ),
+        )
+        newer_pid = cur.lastrowid
+        conn.commit()
+    assert newer_pid > sent_pid, "precondition: the unsent draft is newer"
+
+    result = _run(f"{day.strftime('%A')} the {day.day} at 9 works for me.")
+    assert result.get("ok"), result
+
+    sent_status, sent_pick = _stored(sent_pid)
+    _newer_status, newer_pick = _stored(newer_pid)
+    assert sent_pick, "the acceptance was not recorded against the offer that was sent"
+    assert json.loads(sent_pick)["start"] == slots[0]["start"]
+    assert not newer_pick, "the acceptance leaked onto an unsent draft"

@@ -577,7 +577,19 @@ def _find_lexi_involved_proposal(
                 INNER JOIN email_threads AS e ON e.thread_id = p.thread_id
                 WHERE p.status IN ({placeholders})
                   AND e.conversation_id = ?
-                ORDER BY p.id DESC
+                -- Newest-first is wrong when two proposals share a
+                -- conversation: a reply answers the offer that was actually
+                -- SENT, not a newer draft still waiting on Kory. Live E2E
+                -- 2026-08-18 wrote the counterpart's acceptance onto a
+                -- pending_approval row and left the real offer untouched, so
+                -- the meeting was never booked. Outstanding offers first.
+                ORDER BY CASE p.status
+                             WHEN 'offer_sent' THEN 0
+                             WHEN 'pending_invite' THEN 1
+                             WHEN 'pending_reoffer' THEN 2
+                             ELSE 3
+                         END,
+                         p.id DESC
                 LIMIT 1
                 """,
                 (*LEXI_INVOLVED_STATUSES, conversation_id),
@@ -602,7 +614,19 @@ def _find_lexi_involved_proposal(
                 INNER JOIN email_threads AS e ON e.thread_id = p.thread_id
                 WHERE p.status IN ({placeholders})
                   AND lower(replace(replace(e.subject, 'Re: ', ''), 'RE: ', '')) LIKE ?
-                ORDER BY p.id DESC
+                -- Newest-first is wrong when two proposals share a
+                -- conversation: a reply answers the offer that was actually
+                -- SENT, not a newer draft still waiting on Kory. Live E2E
+                -- 2026-08-18 wrote the counterpart's acceptance onto a
+                -- pending_approval row and left the real offer untouched, so
+                -- the meeting was never booked. Outstanding offers first.
+                ORDER BY CASE p.status
+                             WHEN 'offer_sent' THEN 0
+                             WHEN 'pending_invite' THEN 1
+                             WHEN 'pending_reoffer' THEN 2
+                             ELSE 3
+                         END,
+                         p.id DESC
                 LIMIT 1
                 """,
                 (*LEXI_INVOLVED_STATUSES, f"%{norm[:60]}%"),
