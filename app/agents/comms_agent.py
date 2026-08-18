@@ -1481,12 +1481,12 @@ def _resolve_selected_slot(proposal: dict[str, Any], selected_slot: str) -> dict
     try:
         parsed = json.loads(selected_slot)
         if isinstance(parsed, dict) and parsed.get("start"):
-            start_norm = _normalize_slot_token(str(parsed["start"]))
+            start_norm = str(parsed["start"])
             for slot in proposal.get("proposed_slots") or []:
-                if _normalize_slot_token(str(slot.get("start", ""))) == start_norm:
+                if _same_time_token(str(slot.get("start", "")), start_norm):
                     return {"start": str(slot["start"]), "end": str(slot["end"])}
             for hold in proposal.get("holds") or []:
-                if _normalize_slot_token(str(hold.get("slot_start", ""))) == start_norm:
+                if _same_time_token(str(hold.get("slot_start", "")), start_norm):
                     return {
                         "start": str(hold["slot_start"]),
                         "end": str(hold["slot_end"]),
@@ -1497,13 +1497,13 @@ def _resolve_selected_slot(proposal: dict[str, Any], selected_slot: str) -> dict
     except json.JSONDecodeError:
         pass
 
-    normalized = _normalize_slot_token(selected_slot)
+    normalized = selected_slot
     for slot in proposal.get("proposed_slots") or []:
-        if _normalize_slot_token(slot.get("start", "")) == normalized:
+        if _same_time_token(str(slot.get("start", "")), normalized):
             return {"start": str(slot["start"]), "end": str(slot["end"])}
 
     for hold in proposal.get("holds") or []:
-        if _normalize_slot_token(str(hold.get("slot_start", ""))) == normalized:
+        if _same_time_token(str(hold.get("slot_start", "")), normalized):
             return {
                 "start": str(hold["slot_start"]),
                 "end": str(hold["slot_end"]),
@@ -1560,6 +1560,31 @@ def _slot_with_derived_end(
 
 def _normalize_slot_token(value: str) -> str:
     return re.sub(r"\s+", "", value.strip().lower())
+
+
+def _same_time_token(left: str, right: str) -> bool:
+    """Do these two tokens name the same moment?
+
+    Compared as INSTANTS when both parse as datetimes, and only as strings when
+    they do not. The same moment is written -06:00 by us, +00:00 by a mail
+    client, and sometimes with a Z or trailing milliseconds; string equality
+    calls those different times.
+
+    The codebase already learned this once, for matching a counterpart's reply
+    to an offered slot. The four places that match a chosen time against a
+    staged slot or a hold were still comparing text. The visible cost was small
+    — a hold that failed to match was not promoted to the meeting, so a fresh
+    event was created and the hold released separately, which lands the calendar
+    in the right state by a longer route — but "these are different times" is
+    the wrong answer to be giving anywhere in this system.
+    """
+    from app.scheduling.busy_intervals import parse_iso_datetime
+
+    left_at = parse_iso_datetime(left)
+    right_at = parse_iso_datetime(right)
+    if left_at and right_at:
+        return left_at == right_at
+    return _normalize_slot_token(left) == _normalize_slot_token(right)
 
 
 def _confirm_time_conflict(
@@ -1995,12 +2020,11 @@ def _match_hold_for_slot(
     holds: list[dict[str, Any]],
     selected_slot: dict[str, str],
 ) -> dict[str, Any] | None:
-    target_start = _normalize_slot_token(selected_slot["start"])
-    target_end = _normalize_slot_token(selected_slot["end"])
+    target_start = str(selected_slot["start"])
+    target_end = str(selected_slot["end"])
     for hold in holds:
-        if (
-            _normalize_slot_token(str(hold.get("slot_start", ""))) == target_start
-            and _normalize_slot_token(str(hold.get("slot_end", ""))) == target_end
+        if _same_time_token(str(hold.get("slot_start", "")), target_start) and _same_time_token(
+            str(hold.get("slot_end", "")), target_end
         ):
             return hold
     return None

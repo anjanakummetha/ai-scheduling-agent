@@ -45,6 +45,16 @@ INTENT_TO_MEETING_TYPE: dict[str, str] = {
     "unknown": "unknown",
 }
 
+# NOT ON THE LIVE PATH. _build_schedule uses schedule_from_context — the
+# deterministic engine — and nothing in production calls _call_llm_scheduler;
+# its only reference is a mock in scripts/test_lexi_pipeline.py, which patches a
+# function that is never invoked, so that script's "scheduler" step exercises
+# the real engine rather than the mock it believes it installed.
+#
+# Left in place rather than deleted because four deploy-verification scripts
+# chain through that one, and cutting it is a change worth making deliberately.
+# Flagged here so nobody reads this prompt as the policy Lexi schedules by: the
+# model does not choose times, and has not for a long time.
 SCHEDULER_SYSTEM_PROMPT = """You are Lexi, Kory's executive scheduling assistant.
 Given an inbound email, triage metadata, and busy calendar blocks, propose meeting options.
 
@@ -237,7 +247,7 @@ def process_proposal_schedule(proposal_id: int, *, reoffer: bool = False) -> boo
                 conn.commit()
                 return False
             conn.commit()
-        return _advance_proposal(conn, proposal)
+        return _advance_proposal(conn, proposal, reoffer=reoffer)
 
 
 def process_pending_schedules() -> list[int]:
@@ -256,7 +266,42 @@ def process_pending_schedules() -> list[int]:
     return processed_ids
 
 
-def _advance_proposal(conn: sqlite3.Connection, proposal: PendingProposal) -> bool:
+def _advance_proposal(
+    conn: sqlite3.Connection,
+    proposal: PendingProposal,
+    *,
+    reoffer: bool = False,
+) -> bool:
+    """Stage slots, a draft and a scheduling note for ONE proposal.
+
+    The guard lives here rather than on the callers, because there are two of
+    them and putting it on one is how this went wrong the first time. The
+    single-proposal entry point was guarded; ``process_pending_schedules`` — the
+    batch sweep the orchestrator runs every cycle — called this directly and
+    happily rewrote a draft whose offer was already in the recipient's inbox.
+
+    Guarding the shared function means a third caller, written by someone who
+    has not read any of this, is safe by default.
+    """
+    if offer_is_outstanding(conn, proposal.proposal_id) and not reoffer:
+        _insert_audit_log(
+            conn,
+            step_name="scheduler_engine",
+            reference_id=str(proposal.proposal_id),
+            log_level="INFO",
+            message=(
+                f"Refused to stage proposal {proposal.proposal_id}: its offer is "
+                "already in the recipient's inbox. A deliberate new round passes "
+                "reoffer=True, which releases the old holds first."
+            ),
+            payload={"proposal_id": proposal.proposal_id},
+        )
+        conn.commit()
+        return False
+    return _stage_proposal(conn, proposal)
+
+
+def _stage_proposal(conn: sqlite3.Connection, proposal: PendingProposal) -> bool:
     from app.rules.validators import filter_slots_by_rules
     from app.scheduling.meeting_type import normalize_scheduling_intent
     from app.scheduling.pre_approval_gate import verify_before_kory_approval
@@ -494,23 +539,6 @@ def _load_calendar_context(
     return load_scheduling_calendar_context(subject=subject, body=body)
 
 
-def _mock_calendar_context(
-    start: datetime,
-    end: datetime,
-    exc: Exception,
-) -> dict[str, Any]:
-    """Structural fallback when Composio/Outlook is unavailable."""
-    return {
-        "status": "unavailable",
-        "source": "mock",
-        "endpoint": "https://connect.composio.dev/mcp",
-        "range_start": start.isoformat(),
-        "range_end": end.isoformat(),
-        "busy_events": [],
-        "error": f"{type(exc).__name__}: {exc}",
-    }
-
-
 def _build_schedule(
     proposal: PendingProposal,
     calendar_context: dict[str, Any],
@@ -649,48 +677,6 @@ def _call_llm_scheduler(
     return _coerce_schedule_result(payload, source="llm")
 
 
-def _fallback_schedule_from_engine(
-    proposal: PendingProposal,
-    calendar_context: dict[str, Any],
-    llm_exc: Exception,
-) -> ScheduleResult:
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo(settings.scheduling_timezone)
-    anchor = datetime.now(tz=tz).replace(hour=10, minute=0, second=0, microsecond=0)
-    duration = timedelta(minutes=30)
-    candidate_hours = (9, 10, 11, 13, 14, 15, 16)
-    slots: list[dict[str, str]] = []
-    for day_offset in range(1, settings.lexi_calendar_search_days):
-        for hour in candidate_hours:
-            start = (anchor + timedelta(days=day_offset)).replace(hour=hour)
-            end = start + duration
-            slots.append({"start": start.isoformat(), "end": end.isoformat()})
-            if len(slots) >= MAX_SLOT_OPTIONS * 8:
-                break
-        if len(slots) >= MAX_SLOT_OPTIONS * 8:
-            break
-
-    slots = _filter_non_conflicting_slots(slots, calendar_context)[:MAX_SLOT_OPTIONS]
-    from app.scheduling.reply_composer import compose_scheduling_reply
-
-    draft, draft_source = compose_scheduling_reply(
-        proposal_sender=proposal.sender,
-        proposal_subject=proposal.subject or "",
-        proposal_body=proposal.raw_body or "",
-        thread_id=proposal.thread_id,
-        slots=slots,
-        voice_mode=proposal.voice_mode,
-        stored_recipient_timezone=proposal.recipient_timezone,
-    )
-    return ScheduleResult(
-        slots=slots,
-        drafted_reply=draft,
-        confidence_score=0.35,
-        source=f"engine_fallback+{draft_source}",
-    )
-
-
 def _coerce_schedule_result(payload: dict[str, Any], *, source: str) -> ScheduleResult:
     raw_slots = payload.get("slots") or []
     if not isinstance(raw_slots, list):
@@ -759,27 +745,6 @@ def _ensure_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-def _slot_conflicts_busy(slot: dict[str, str], busy_events: list[dict[str, Any]]) -> bool:
-    slot_start = _parse_iso_datetime(slot["start"])
-    slot_end = _parse_iso_datetime(slot["end"])
-    if not slot_start or not slot_end:
-        return True
-
-    slot_start = _ensure_aware(slot_start)
-    slot_end = _ensure_aware(slot_end)
-
-    for event in busy_events:
-        event_start = _parse_event_datetime(event.get("start"))
-        event_end = _parse_event_datetime(event.get("end"))
-        if not event_start or not event_end:
-            continue
-        event_start = _ensure_aware(event_start)
-        event_end = _ensure_aware(event_end)
-        if event_start < slot_end and event_end > slot_start:
-            return True
-    return False
 
 
 def _parse_iso_datetime(value: str) -> datetime | None:
@@ -900,42 +865,3 @@ def _general_reply_placeholder(proposal: PendingProposal, plan) -> str:
     return f"Hi {name},\n\nThanks for your note. Kory will follow up shortly.\n\nLet's Win,\nKory"
 
 
-def _template_reply(proposal: PendingProposal, slots: list[dict[str, str]]) -> str:
-    from app.scheduling.email_format import build_scheduling_reply, recipient_display_name, sender_first_name
-    from app.scheduling.lexi_voice import normalize_voice_mode
-    from app.integrations.outlook_email import get_message
-    from app.scheduling.timezone_intel import extract_internet_headers
-
-    headers: list[dict[str, Any]] | None = None
-    try:
-        full_message, _ = get_message(proposal.thread_id)
-        headers = extract_internet_headers(full_message)
-    except Exception:
-        headers = None
-
-    first = recipient_display_name(
-        proposal.sender,
-        proposal.raw_body or "",
-        fallback_first_name=sender_first_name(proposal.sender),
-    )
-    return build_scheduling_reply(
-        recipient_first_name=first,
-        slots=slots[:MAX_SLOT_OPTIONS],
-        sender_email=proposal.sender,
-        recipient_body=proposal.raw_body or "",
-        internet_headers=headers,
-        stored_recipient_timezone=proposal.recipient_timezone,
-        voice_mode=normalize_voice_mode(proposal.voice_mode),
-    )
-
-
-def _format_slot_line(slot: dict[str, str]) -> str:
-    try:
-        start = datetime.fromisoformat(slot["start"].replace("Z", "+00:00"))
-        end = datetime.fromisoformat(slot["end"].replace("Z", "+00:00"))
-        return (
-            f"{start.strftime('%A, %B %-d at %-I:%M %p')} to "
-            f"{end.strftime('%-I:%M %p')} MT"
-        )
-    except ValueError:
-        return f"{slot.get('start')} – {slot.get('end')}"
