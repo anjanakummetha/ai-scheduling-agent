@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import logging
 import re
 from typing import Any
@@ -31,6 +33,49 @@ LEXI_INVOLVED_STATUSES = (
     "executed",
     "awaiting_reply_prompt",
 )
+
+
+
+def _proposal_slots(proposal: dict[str, Any]) -> list[dict[str, Any]]:
+    """The slots this proposal actually offered."""
+    raw = proposal.get("proposed_slots")
+    if isinstance(raw, list):
+        return [s for s in raw if isinstance(s, dict)]
+    try:
+        parsed = json.loads(str(raw or "[]"))
+    except (TypeError, ValueError):
+        return []
+    return [s for s in parsed if isinstance(s, dict)] if isinstance(parsed, list) else []
+
+
+def _instant(value: Any) -> datetime | None:
+    """Compare times as INSTANTS, never as strings: the same moment is written
+    -06:00 by us and +00:00 by their mail client."""
+    from app.scheduling.busy_intervals import parse_iso_datetime
+
+    return parse_iso_datetime(str(value or "")) if value else None
+
+
+def _accepted_offered_slot(
+    proposal: dict[str, Any], candidates: list[dict[str, Any]]
+) -> dict[str, str] | None:
+    """The offered slot they just accepted, if their reply names one.
+
+    Returns the slot AS WE OFFERED IT, not as they wrote it, so the booking uses
+    the times we validated and hold.
+    """
+    for offered in _proposal_slots(proposal):
+        offered_at = _instant(offered.get("start"))
+        if not offered_at:
+            continue
+        for cand in candidates:
+            cand_at = _instant(cand.get("start"))
+            if cand_at and cand_at == offered_at:
+                return {
+                    "start": str(offered.get("start")),
+                    "end": str(offered.get("end") or ""),
+                }
+    return None
 
 
 def try_handle_lexi_thread_followup(raw_email: dict[str, Any]) -> dict[str, Any] | None:
@@ -116,6 +161,35 @@ def _try_inbound_time_suggestion(
 
     if calendar_context.get("status") != "available":
         return None
+
+    # A time WE offered cannot be a conflict when they accept it. We validated
+    # it before offering, and we are holding it for them — so our own HOLD event
+    # sits on the calendar at exactly that time. Re-validating against a calendar
+    # containing our own hold made Lexi refuse the acceptance as "already
+    # booked", leaving the meeting unbooked and the hold in place. Live E2E
+    # 2026-08-18; it was masked earlier by the calendar cache still holding a
+    # pre-hold read, which is why it looked intermittent.
+    slot = _accepted_offered_slot(proposal, candidates)
+    if slot:
+        from app.agents.comms_agent import mark_recipient_slot_choice
+
+        pick = mark_recipient_slot_choice(
+            int(proposal["proposal_id"]), slot, reply_body=body
+        )
+        if pick.get("ok") and settings.lexi_teams_enabled:
+            from app.bot.teams_publisher import schedule_teams_invite_prompt_push
+
+            schedule_teams_invite_prompt_push(int(proposal["proposal_id"]))
+        return {
+            "ok": pick.get("ok", False),
+            "action": "recipient_slot_choice",
+            "proposal_id": proposal.get("proposal_id"),
+            "message": (
+                f"**{subject}** — they accepted a time you offered. "
+                "Invite card is ready."
+            ),
+            "selected_slot": slot,
+        }
 
     intent = str(proposal.get("intent_classification") or "")
     validated, invalid, notes = validate_inbound_candidates(

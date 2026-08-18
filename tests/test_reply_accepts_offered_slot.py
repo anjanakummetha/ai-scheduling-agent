@@ -171,3 +171,58 @@ def test_the_reply_answers_the_offer_that_was_SENT_not_a_newer_draft(offer_sent)
     assert sent_pick, "the acceptance was not recorded against the offer that was sent"
     assert json.loads(sent_pick)["start"] == slots[0]["start"]
     assert not newer_pick, "the acceptance leaked onto an unsent draft"
+
+
+def test_our_own_hold_does_not_block_them_accepting_the_slot_we_offered(offer_sent):
+    """The booking-breaking one, found by the live E2E on 2026-08-18.
+
+    When we offer times we HOLD them, so a HOLD event sits on the calendar at
+    exactly the time we offered. Re-validating the acceptance against a calendar
+    containing our own hold made Lexi refuse it as "already booked" — the
+    meeting never got booked and the hold stayed. It looked intermittent only
+    because the calendar cache sometimes still held a pre-hold read.
+    """
+    pid, day, slots = offer_sent
+    start = datetime.fromisoformat(slots[0]["start"])
+    our_hold = {
+        "subject": f"HOLD: Intro call — {SENDER}",
+        "start": {"dateTime": slots[0]["start"]},
+        "end": {"dateTime": slots[0]["end"]},
+    }
+    from app.agents.lexi_thread_followup import try_handle_lexi_thread_followup
+
+    busy = {"status": "available", "horizon_days": 45, "busy_events": [our_hold]}
+    with patch(
+        "app.scheduling.calendar_context.load_scheduling_calendar_context", return_value=busy
+    ):
+        result = try_handle_lexi_thread_followup(_reply(
+            f"{day.strftime('%A')} the {day.day} at {start.hour} works for me."
+        )) or {}
+    assert result.get("action") != "inbound_time_blocked", (
+        "our own hold blocked them accepting the slot we are holding for them"
+    )
+    _status, pick = _stored(pid)
+    assert pick, f"acceptance not recorded: {result}"
+    assert json.loads(pick)["start"] == slots[0]["start"]
+
+
+def test_a_genuinely_booked_time_they_propose_is_still_refused(offer_sent):
+    """The guard must not become a blanket 'accept anything'."""
+    pid, day, _slots = offer_sent
+    other = day + timedelta(days=1)
+    clash = {
+        "subject": "Board call",
+        "start": {"dateTime": _slot(other, 14)["start"]},
+        "end": {"dateTime": _slot(other, 14)["end"]},
+    }
+    from app.agents.lexi_thread_followup import try_handle_lexi_thread_followup
+
+    busy = {"status": "available", "horizon_days": 45, "busy_events": [clash]}
+    with patch(
+        "app.scheduling.calendar_context.load_scheduling_calendar_context", return_value=busy
+    ):
+        try_handle_lexi_thread_followup(_reply(
+            f"Actually could we do {other.strftime('%A')} the {other.day} at 2 instead?"
+        ))
+    _status, pick = _stored(pid)
+    assert not pick, "a time that clashes with a real meeting was accepted"
