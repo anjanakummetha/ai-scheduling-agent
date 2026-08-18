@@ -433,6 +433,124 @@ def s12():
     return msgs, check
 
 
+
+# ── Added 2026-08-17: ambiguity, concurrency, and draft numbering ────────────
+# The existing twelve cover a single clean request. These cover the states Kory
+# is actually in — several threads live at once, an ask he has to disambiguate,
+# and the numbering he now types.
+
+QUEUE_CTX = (
+    "[Earlier Teams message from Lexi]: Drafts ready\n"
+    "• draft 1 — Intro: Curtis (Sunline) — from Curtis\n"
+    "• draft 2 — Coffee: Dana Reed — from Dana\n"
+    "• draft 3 — ICCI check-in — from Steve\n"
+    "Say show draft N, approve draft N, or reject draft N — reason."
+)
+
+
+@scenario("approve by draft number -> router gets it verbatim")
+def s13():
+    msgs = [{"role": "user", "content": f"{QUEUE_CTX}\n\nKory: approve draft 2"}]
+
+    def check(calls, text):
+        c = _tool_named(calls, "lexi_handle_teams_command")
+        if not c:
+            return f"expected lexi_handle_teams_command, got {[x['name'] for x in calls]}"
+        typed = str(c["input"].get("text", "")).lower()
+        if "2" not in typed or "approve" not in typed:
+            return f"did not pass his words through: {typed!r}"
+        # It must not silently swap in a raw id it invented.
+        if any(tok.isdigit() and len(tok) >= 4 for tok in typed.split()):
+            return f"substituted an invented id: {typed!r}"
+        return None
+
+    return msgs, check
+
+
+@scenario("ambiguous 'approve it' with 3 drafts -> ask, never guess")
+def s14():
+    msgs = [{"role": "user", "content": f"{QUEUE_CTX}\n\nKory: approve it"}]
+
+    def check(calls, text):
+        c = _tool_named(calls, "lexi_handle_teams_command")
+        if c:
+            typed = str(c["input"].get("text", "")).lower()
+            # Routing the bare words is fine; inventing a number is not.
+            if any(ch.isdigit() for ch in typed):
+                return f"invented a draft number from an ambiguous ask: {typed!r}"
+            return None
+        blob = (text or "").lower()
+        if "which" in blob or "draft 1" in blob or "?" in blob:
+            return None
+        return f"neither asked nor routed: {blob[:160]!r}"
+
+    return msgs, check
+
+
+@scenario("counterpart declines -> retry carrying the push, not a fresh offer")
+def s15():
+    msgs = [
+        {
+            "role": "user",
+            "content": (
+                f"{ESCALATION_CTX}\n\nKory: they said none of those work, "
+                "try the following week"
+            ),
+        }
+    ]
+
+    def check(calls, text):
+        c = _tool_named(calls, "lexi_retry_scheduling")
+        if not c:
+            return f"expected lexi_retry_scheduling, got {[x['name'] for x in calls]}"
+        g = c["input"].get("guidance", "").lower()
+        if "following week" not in g:
+            return f"the push was dropped: {g!r}"
+        return None
+
+    return msgs, check
+
+
+@scenario("kory excludes a date -> the exclusion reaches the tool")
+def s16():
+    msgs = [
+        {"role": "user", "content": f"{ESCALATION_CTX}\n\nKory: not the 15th, anything else"}
+    ]
+
+    def check(calls, text):
+        c = _tool_named(calls, "lexi_retry_scheduling")
+        if not c:
+            return f"expected lexi_retry_scheduling, got {[x['name'] for x in calls]}"
+        g = c["input"].get("guidance", "").lower()
+        if "15" not in g:
+            return f"the excluded date was dropped: {g!r}"
+        return None
+
+    return msgs, check
+
+
+@scenario("no times invented when asked what is free")
+def s17():
+    msgs = [
+        {
+            "role": "user",
+            "content": "Kory: what does my Thursday look like? Any gaps in the afternoon?",
+        }
+    ]
+
+    def check(calls, text):
+        if calls:
+            return None  # it went and looked, which is the point
+        blob = (text or "")
+        import re as _re
+
+        if _re.search(r"\b\d{1,2}(:\d{2})?\s*(am|pm)\b", blob, _re.I):
+            return f"stated times without reading the calendar: {blob[:160]!r}"
+        return None
+
+    return msgs, check
+
+
 def main() -> int:
     client = anthropic.Anthropic()
     tools = extract_tools()
