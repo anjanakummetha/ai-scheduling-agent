@@ -11,6 +11,10 @@ logs/
 __pycache__/
 *.pyc
 data/*.db
+# SQLite writes these alongside the database; same content, same rule.
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
 .DS_Store
 
 # The CEO Executive Dashboard lives in its own repo (github.com/anjanakummetha/CEO_Executive_Dashboard-).
