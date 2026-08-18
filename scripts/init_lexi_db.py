@@ -271,6 +271,15 @@ def _migrate_proposal_invite_event(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE proposals ADD COLUMN invite_event_id TEXT")
 
 
+def _migrate_teams_list_snapshots(conn: sqlite3.Connection) -> None:
+    """Remembers the order the pending list was last rendered in, so a draft
+    number means the list Kory was shown rather than whatever the queue says
+    when he types. See app/bot/draft_numbering.py."""
+    from app.bot.draft_numbering import ensure_snapshot_table
+
+    ensure_snapshot_table(conn)
+
+
 def _migrate_proposal_world_facts(conn: sqlite3.Connection) -> None:
     """Monotonic records of irreversible side effects.
 
@@ -344,6 +353,7 @@ def init_lexi_db(db_path: Path = DB_PATH, *, enforce_transitions: bool = True) -
         _migrate_recipient_profiles(conn)
         _migrate_approval_feedback(conn)
         _migrate_proposal_world_facts(conn)
+        _migrate_teams_list_snapshots(conn)
         _install_proposal_guard_triggers(conn, enforce_transitions=enforce_transitions)
         conn.commit()
 

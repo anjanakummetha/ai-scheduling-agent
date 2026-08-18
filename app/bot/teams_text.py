@@ -11,12 +11,26 @@ from app.bot.teams_labels import (
     unresolved_message,
 )
 
+# How Kory refers to a draft. Lexi tells him to type "approve draft 1" — in the
+# help text, in the footer of every `pending` list, in the "more than one draft
+# is waiting" prompt, and in the stuck-proposal nudge — but the pattern only
+# accepted "approve 1". The advertised phrasing fell through to "Not a Lexi
+# command" on the primary approval surface.
+#
+# tests/test_advertised_commands_parse.py now asserts that everything Lexi tells
+# him to type actually parses, so the copy and the parser cannot drift apart
+# again.
+_REF = r"(?:draft\s+|email\s+|number\s+|no\.?\s+)?#?(\d+)"
+
 _APPROVE_RE = re.compile(
-    r"^(?:approve|yes|send)\s+#?(\d+)(?:\s+option\s+(\d+))?$",
+    rf"^(?:approve|yes|send)\s+{_REF}(?:\s+option\s+(\d+))?$",
     re.IGNORECASE,
 )
 _SEND_ONLY_RE = re.compile(r"^send$", re.IGNORECASE)
-_REJECT_RE = re.compile(r"^(?:reject|no|discard)\s+#?(\d+)(?:\s*[—\-:]\s*(.+))?$", re.IGNORECASE)
+_REJECT_RE = re.compile(
+    rf"^(?:reject|no|discard)\s+{_REF}(?:\s*[—\-:]\s*(.+))?$",
+    re.IGNORECASE,
+)
 _CANCEL_MEETING_RE = re.compile(
     r"^cancel(?:\s+(?:the\s+)?(?:meeting|invite|call))?\s+(?:for\s+)?#?(\d+)"
     r"(?:\s*[—\-:]\s*(.+))?$",
@@ -55,7 +69,7 @@ _BARE_ACK_RE = re.compile(
     re.IGNORECASE,
 )
 _SHOW_DRAFT_RE = re.compile(
-    r"^(?:show|view|display)(?:\s+me)?(?:\s+the)?\s+draft(?:\s+(?:for|on))?\s+(?:email\s+)?#?(\d+)$",
+    rf"^(?:show|view|display)(?:\s+me)?(?:\s+the)?\s+(?:draft(?:\s+(?:for|on))?\s+)?{_REF}$",
     re.IGNORECASE,
 )
 
@@ -119,6 +133,12 @@ def format_pending_list(
             )
         lines.append("")
     if items:
+        from app.bot.draft_numbering import record_pending_snapshot
+
+        # Recording happens HERE, where the numbers are produced. At the call
+        # site a new way of rendering the list would silently skip it and the
+        # numbers would go back to meaning whatever the queue says later.
+        record_pending_snapshot([item.proposal_id for item in items[:15]])
         lines.append("**Drafts ready**\n")
         for position, item in enumerate(items[:15], start=1):
             # The number Kory types is the position in this list, not the raw
@@ -320,24 +340,33 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
 
     show_draft = _SHOW_DRAFT_RE.match(normalized)
     if show_draft:
+        reference = resolve_pending_reference(int(show_draft.group(1)))
+        if reference.problem:
+            return {"action": "unresolved", "message": reference.problem}
         return {
             "action": "show_draft",
-            "proposal_id": resolve_pending_ref(int(show_draft.group(1))),
+            "proposal_id": reference.proposal_id,
         }
 
     approve = _APPROVE_RE.match(normalized)
     if approve:
+        reference = resolve_pending_reference(int(approve.group(1)))
+        if reference.problem:
+            return {"action": "unresolved", "message": reference.problem}
         return {
             "action": "approve",
-            "proposal_id": resolve_pending_ref(int(approve.group(1))),
+            "proposal_id": reference.proposal_id,
             "option": int(approve.group(2)) if approve.group(2) else 1,
         }
 
     reject = _REJECT_RE.match(normalized)
     if reject:
+        reference = resolve_pending_reference(int(reject.group(1)))
+        if reference.problem:
+            return {"action": "unresolved", "message": reference.problem}
         return {
             "action": "reject",
-            "proposal_id": resolve_pending_ref(int(reject.group(1))),
+            "proposal_id": reference.proposal_id,
             "reason": (reject.group(2) or "").strip(),
         }
 
@@ -376,25 +405,23 @@ def find_pending_item(proposal_id: int) -> LexiQueueItem | None:
 def resolve_pending_ref(number: int) -> int:
     """Map what Kory typed to a proposal id.
 
-    He types "approve draft 1" — a position in the pending queue, renumbered as
-    items clear. Raw proposal ids still resolve, because a Teams message from
-    last week may quote one and re-typing it must not silently hit the wrong
-    draft.
-
-    The two can never collide: a draft number is bounded by the queue length
-    (single digits in practice) and proposal ids are four digits and up. When
-    the number is inside the queue it is a draft number; otherwise it is an id
-    and is returned untouched for the caller to look up as before.
+    See app/bot/draft_numbering.py for why this resolves against the list he was
+    SHOWN rather than a fresh read of the queue. This wrapper keeps the old
+    signature for callers that only need the id; `resolve_pending_reference`
+    carries the explanation when the number no longer means anything.
     """
-    if number < 1:
-        return number
+    return resolve_pending_reference(number).proposal_id or number
+
+
+def resolve_pending_reference(number: int):
+    """The full answer: the proposal, or why the number no longer names one."""
+    from app.bot.draft_numbering import DraftReference, resolve_draft_number
+
     try:
-        queue = get_lexi_pending_queue()
+        live_ids = [item.proposal_id for item in get_lexi_pending_queue()]
     except Exception:  # a DB hiccup must not swallow the command
-        return number
-    if number <= len(queue):
-        return queue[number - 1].proposal_id
-    return number
+        return DraftReference(proposal_id=number)
+    return resolve_draft_number(number, live_queue_ids=live_ids)
 
 
 def find_pending_item_by_label(*, subject: str, sender: str) -> LexiQueueItem | None:
