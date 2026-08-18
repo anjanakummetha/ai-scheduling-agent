@@ -34,6 +34,15 @@ ADVERTISED = [
     ("reject draft 2", "reject"),
     ("show draft 1", "show_draft"),
     ("show 1", "show_draft"),
+    ("show #4021", "show_draft"),
+    # The step that actually books the meeting. Advertised by the
+    # pending_invite nudge and previously left to the model to interpret.
+    ("send invite #4021", "approve"),
+    ("send the invite for #4021", "approve"),
+    ("retry scheduling #4021", "retry_scheduling"),
+    ("retry scheduling for #4021 — offer Monday 10:30", "retry_scheduling"),
+    ("draft #4021", "draft_yes"),
+    ("draft #4021 no", "draft_no"),
     ("cancel meeting #4021", "cancel_meeting"),
     ("inbound", "inbound"),
     ("inbox review", "inbox_review"),
@@ -79,3 +88,65 @@ def test_the_recovery_advice_in_a_refusal_is_itself_a_working_command():
     """A refusal that suggests a command Lexi cannot parse strands him."""
     for suggestion in ("pending", "approve draft 1", "reject draft 1 — not a fit"):
         assert parse_teams_command(suggestion) is not None, suggestion
+
+
+# ---------------------------------------------------------------------------
+# The durable guard
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_FILLERS = [
+    ("#{proposal_id}", "#4021"),
+    ("#{item.proposal_id}", "#4021"),
+    ("#{pid}", "#4021"),
+    ("{ref}", "1"),
+    ("#N", "#4021"),
+    (" N", " 1"),
+    ("<your times>", "offer Monday 10:30"),
+    ("— reason", "— not a fit"),
+    ("— <your times>", "— offer Monday 10:30"),
+]
+
+# Bold text that is emphasis, not a command Kory is being told to type.
+_NOT_COMMANDS = {
+    "not", "not sent", "nothing was sent", "enabled", "blocked", "approved",
+    "individual", "flat", "association", "domain object", "book consensus",
+    "the company's own website",
+}
+
+
+def _advertised_commands() -> set[str]:
+    """Every **bold** phrase in app/ that reads like a command to type."""
+    import pathlib
+
+    app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
+    found: set[str] = set()
+    for path in app_dir.rglob("*.py"):
+        for raw in re.findall(r"\*\*([a-z][^*\n]{2,60})\*\*", path.read_text()):
+            phrase = raw.strip()
+            if phrase.lower() in _NOT_COMMANDS:
+                continue
+            # Only f-string placeholders we know how to fill; anything else is
+            # prose we cannot evaluate.
+            for template, value in _TEMPLATE_FILLERS:
+                phrase = phrase.replace(template, value)
+            if "{" in phrase or "}" in phrase:
+                continue
+            found.add(phrase)
+    return found
+
+
+def test_every_command_lexi_advertises_anywhere_actually_parses():
+    """Lexi tells Kory what to type in the help text, in the footer of the
+    pending list, in escalation replies and in the stuck-proposal nudge. Every
+    one of those has to reach an action.
+
+    Three did not when this test was written — `approve draft N`,
+    `send invite #N` and `retry scheduling for #N` — and one of them is the step
+    that books the meeting. Typing exactly what Lexi asked for did nothing
+    recognisable.
+    """
+    unparsed = sorted(p for p in _advertised_commands() if parse_teams_command(p) is None)
+    assert not unparsed, (
+        "Lexi tells Kory to type these and does not recognise them:\n  "
+        + "\n  ".join(unparsed)
+    )

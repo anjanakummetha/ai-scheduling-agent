@@ -27,6 +27,19 @@ _APPROVE_RE = re.compile(
     re.IGNORECASE,
 )
 _SEND_ONLY_RE = re.compile(r"^send$", re.IGNORECASE)
+# "send invite #N" — what the stuck-proposal nudge tells Kory to type when the
+# counterpart has picked a time. It is the step that actually books the meeting,
+# and it fell through to the model because only "approve #N" was recognised.
+_SEND_INVITE_RE = re.compile(
+    rf"^(?:send|dispatch)\s+(?:the\s+)?invite\s+(?:for\s+)?{_REF}$",
+    re.IGNORECASE,
+)
+# "retry scheduling for #N — offer Monday 10:30" — what the escalation reply and
+# the pending_reoffer nudge tell him to type.
+_RETRY_SCHEDULING_RE = re.compile(
+    rf"^retry(?:\s+scheduling)?\s+(?:for\s+)?{_REF}(?:\s*[—\-:]\s*(.+))?$",
+    re.IGNORECASE,
+)
 _REJECT_RE = re.compile(
     rf"^(?:reject|no|discard)\s+{_REF}(?:\s*[—\-:]\s*(.+))?$",
     re.IGNORECASE,
@@ -346,6 +359,26 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
         return {
             "action": "show_draft",
             "proposal_id": reference.proposal_id,
+        }
+
+    send_invite = _SEND_INVITE_RE.match(normalized)
+    if send_invite:
+        reference = resolve_pending_reference(int(send_invite.group(1)))
+        if reference.problem:
+            return {"action": "unresolved", "message": reference.problem}
+        # Same action as "approve #N": commands.py routes a proposal that is
+        # waiting on invite dispatch to execute_lexi_invite.
+        return {"action": "approve", "proposal_id": reference.proposal_id, "option": 1}
+
+    retry = _RETRY_SCHEDULING_RE.match(normalized)
+    if retry:
+        reference = resolve_pending_reference(int(retry.group(1)))
+        if reference.problem:
+            return {"action": "unresolved", "message": reference.problem}
+        return {
+            "action": "retry_scheduling",
+            "proposal_id": reference.proposal_id,
+            "guidance": (retry.group(2) or "").strip(),
         }
 
     approve = _APPROVE_RE.match(normalized)

@@ -256,6 +256,34 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
             ),
         }
 
+    if action == "retry_scheduling":
+        # "retry scheduling for #N — offer Monday 10:30". Advertised by the
+        # escalation reply and the pending_reoffer nudge, and previously left to
+        # the model to interpret — on the command that re-runs the search after
+        # Kory has already been told once that Lexi could not find times.
+        from app.agents.inbound_reply import retry_scheduling_with_guidance
+
+        proposal_id = int(command.get("proposal_id") or 0)
+        result = retry_scheduling_with_guidance(
+            proposal_id, str(command.get("guidance") or "")
+        )
+        if result.get("ok"):
+            return {
+                "ok": True,
+                "handled": True,
+                "message": result.get("message")
+                or result.get("kory_message")
+                or f"New times drafted for #{proposal_id} — say **pending** to review.",
+                "proposal_id": proposal_id,
+            }
+        return {
+            "ok": False,
+            "handled": True,
+            "message": result.get("kory_message") or result.get("error")
+            or f"Could not re-run scheduling for #{proposal_id}.",
+            "proposal_id": proposal_id,
+        }
+
     if action == "pending":
         from app.agents.comms_agent import get_lexi_invite_queue
 

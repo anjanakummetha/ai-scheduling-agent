@@ -17,21 +17,24 @@ import logging
 import os
 from typing import Any
 
+from app.scheduling.proposal_state import ALL_STATUSES, TERMINAL, ProposalStatus
 from app.storage.lexi_db import get_lexi_connection
 
 logger = logging.getLogger(__name__)
 
-# Non-terminal states where Kory (or the counterpart) still owes an action and
-# holds/threads can strand. Terminal states (executed, rejected, cancelled,
-# no_reply_needed, offer_sent) are excluded — offer_sent is handled by the
-# hold-reminder / expiry path, not here.
-_STUCK_STATUSES = (
-    "pending_invite",
-    "pending_reoffer",
-    "needs_kory",
-    "needs_scheduling_guidance",
-    "pending_approval",
-    "awaiting_reply_prompt",
+# Everything that is neither finished nor already handled elsewhere. Derived
+# from the state machine so a new status is classified once, in one place,
+# rather than being silently omitted here and stranding forever.
+#
+# offer_sent and pending_triage are excluded deliberately: the first belongs to
+# the hold-reminder and expiry path, the second to the scheduler's own recovery
+# sweep. Neither is stuck when it sits there.
+_STUCK_STATUSES = tuple(
+    sorted(
+        ALL_STATUSES
+        - TERMINAL
+        - {ProposalStatus.EXECUTED, ProposalStatus.OFFER_SENT, ProposalStatus.PENDING_TRIAGE}
+    )
 )
 
 _AGE_THRESHOLD_HOURS = int(os.getenv("LEXI_STUCK_PROPOSAL_HOURS", "48"))
