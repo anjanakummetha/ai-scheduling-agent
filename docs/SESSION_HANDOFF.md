@@ -1,4 +1,188 @@
-# Lexi — Session Handoff (updated 2026-08-16, final scheduling production pass)
+# Lexi — Session Handoff (updated 2026-08-18, scheduling hardening + root cause)
+
+**Resume phrase:** *"Box and laptop at `c47d496`, 1,404 tests green on the box.
+Nine real defects fixed this session, including the root cause behind 'she keeps
+breaking' — a sent offer silently reverting to unsent. The remaining work is
+STRUCTURAL, not another bug hunt: build a single `transition()` chokepoint for
+proposal status. Live E2E is ~5/6 clean; the failure is always the first run
+after a restart and always fails SAFE."*
+
+Services healthy, co-tenants untouched, zero residue (DB, calendar **and
+mailbox** — see the mailbox note below). Spend: $1.36 Claude on Kory's key.
+
+---
+
+## 0. THE ONE THING TO KNOW (replaces the old §0)
+
+**The scheduling engine is not the problem. The state machine around it is.**
+
+Every defect found in two days is the same shape: **Lexi's record of what
+happened disagrees with what actually happened.** A sent offer that says it is
+unsent. A reply recorded against a draft nobody sent. Her own hold blocking the
+slot she is holding for you.
+
+The engine itself is good — 2-3ms, never proposes a weekend, never invents a
+time, refuses when it cannot read the calendar. All of that is now pinned.
+
+**The structural cause: there are many entry points into the proposal state
+machine, and the guards live on individual paths rather than at a chokepoint.**
+The batch path was guarded and the single path was not. The send gate validated
+times and draft composition did not. The parser caught a weekday contradiction
+and the engine re-derived the date anyway. Every fix this session was adding a
+guard to one more door, which is why fixing one revealed the next.
+
+**Two things made this feel random rather than systematic:**
+- **Caching masks it intermittently.** The own-hold bug looked like a coin flip
+  purely because the calendar cache sometimes held a pre-hold read — three
+  identical E2E runs disagreed for that reason alone.
+- **Tests had quietly stopped testing.** Three safety tests were asserting a
+  refusal and getting a pass, because their fixture dates had aged out.
+
+### The recommended next move — do this before more bug hunting
+
+**A single `transition(proposal_id, from_states, to_state)` that is the ONLY way
+a proposal's status changes**, with legal transitions declared once, refusing
+and logging anything illegal.
+
+Every bug fixed tonight would have been impossible or immediately visible: the
+re-stage would have been a rejected `offer_sent → pending_approval`; the
+wrong-proposal write would have shown as a transition on a proposal with no
+outstanding offer. Roughly a day's work, and it converts a whole class of silent
+corruption into loud, testable failures.
+
+**Second recommendation (product, not code): narrow what Kory uses.** Give him
+ONE flow — inbound ask → offer → book. It is the part nothing else does (his own
+Claude covers HubSpot/Asana/email — see `kory-parallel-claude-stack` memory), it
+has the most hardening behind it, and a small surface is one you can certify.
+
+---
+
+## 1. THE NINE DEFECTS FIXED THIS SESSION
+
+All found by testing shapes the old suite never drove: multi-round negotiation,
+several threads at once, ambiguous phrasing, and every tool through Teams' path.
+
+1. **A sent offer silently reverted to unsent** (`c47d496` — the root cause).
+   `process_proposal_schedule`, the SINGLE-proposal entry point that a retry, a
+   redelivered webhook or a follow-up reaches, called `_advance_proposal`
+   unconditionally; that rewrites the draft and sets status back to
+   `pending_approval`. The email was already in the recipient's inbox and the
+   holds were on the calendar, but `pending` showed it as a draft awaiting
+   approval — **approving it sent the same person a second offer and placed a
+   second set of holds.** The batch path was always safe
+   (`WHERE status = pending_triage`); this one had no guard.
+2. **Lexi's own hold blocked the counterpart accepting that slot.** We hold what
+   we offer, so a HOLD event sits at exactly the offered time; re-validating the
+   acceptance against it returned "already booked". Offer three times, hold all
+   three, refuse whichever they pick.
+3. **A reply landed on the wrong proposal.** `ORDER BY p.id DESC LIMIT 1` takes
+   the newest; an unsent draft newer than the `offer_sent` one won.
+4. **"the 27" without its ordinal suffix** resolved to the nearest Thursday — a
+   week early, silently.
+5. **A week push had nowhere to go.** "the following week" / "the week after"
+   were not windows at all, so a decline produced the same week again.
+6. **A ruled-out date became the target.** "Avoid September 15" offered only the
+   15th — the date twin of the "can't do Friday → only Friday" defect that was
+   fixed for weekday names only.
+7. **Weekday/date contradictions** booked silently; after a first pass it ASKED
+   while still offering the disputed day (the engine re-derived it). Now halts.
+8. **A bare month-day rolled a year forward** — 338 days out, `ok=True`.
+9. **Four real decline phrasings unrecognised** ("double booked", "that week is
+   gone", "anything later in the month", bare "Next week?").
+
+Plus: `draft_number` was assigned to a **frozen** dataclass, so `pending` raised
+ToolError in Teams while 1,221 unit tests passed — caught by the parity harness
+on its first run.
+
+---
+
+## 2. WHAT TO USE (these three found everything)
+
+- **`tests/teams_parity.py`** — routes through `mcp._tool_manager.call_tool`,
+  the gateway's own entry point, so registration and FastMCP arg coercion are
+  covered. A test that passes here passes in Teams. **An audit found 27 of 44
+  scheduling/Outlook tools were not named in a single test**; all now run
+  through it with the rule that no tool may RAISE (a raise becomes an
+  unexplainable ToolError; a returned error is something Lexi can explain).
+- **`LEXI_TEST_FAKE_TODAY=2026-11-02 pytest -q --ignore=tests/test_api_v1.py`**
+  — runs the suite as if it were another day. Green on six dates including both
+  DST flips and the year boundary. Started at conftest import (a per-test freeze
+  is too late for module-scope fixtures); api_v1 excluded because freezegun
+  breaks pydantic.v1, which is a tool limitation, not a finding.
+- **`scripts/model_layer_battery.py`** (~$0.05, 17/17) and
+  **`scripts/live_full_flow_e2e.py`** (real send to anjanakummetha@gmail.com
+  only, then swept).
+
+**Latency is solved and it was never the engine.** Measured through the gateway:
+availability 17.5s on the FIRST call then 7ms; today's calendar 1.1s then 774ms.
+Per-process cache, cleared by every restart, so Kory's first message each day
+paid ~20s. `app/worker/runner.py` now warms it on a daemon thread at startup —
+verified in production: "cache warmup complete" 22s after service start.
+`LEXI_CACHE_WARMUP=false` disables it.
+
+---
+
+## 3. KNOWN REMAINING ISSUES (honest list)
+
+- **Live E2E is ~5/6 clean, and the failure is always the first run after a
+  restart.** Not isolated. Every observed failure ends in a REFUSAL (the send
+  gate declining), never a wrong send — it fails safe. Two shapes seen: a draft
+  containing a weekend date that diverges from staged slots (gate refuses,
+  nothing sent), and an acceptance not persisting. Both plausibly disappear with
+  the `transition()` work above; do that before chasing them individually.
+- **Draft composition can produce a weekend date the engine would never stage.**
+  The engine is pinned never to offer a weekend even with two weeks fully
+  booked; the send gate refuses a weekend draft. But composition should not
+  generate one.
+- **Timezone `inferred` vs `known` gate — deliberate, unchanged.** "I'm based in
+  San Francisco, CA." resolves to America/Los_Angeles at confidence `inferred`,
+  and `email_format.py:198` renders MT-only for any external recipient below
+  `known`. Safe direction, but Kory's quote-their-zone-first rule silently does
+  not apply to city+state signatures, which are common. Changing it touches
+  every outbound email and wants its own verification pass. Documented in a test
+  so it stays a decision.
+- **`awaiting_reply_prompt` is dead** — no rows since Aug 3, so
+  `/api/v1/unanswered-scheduling` always returns 0. Anything built on it would
+  render a false "nothing pending". See the memory of the same name.
+
+---
+
+## 4. MAILBOX RESIDUE — A LESSON THAT COST US
+
+I reported "zero test residue" repeatedly while checking the database and the
+calendar. **I never checked the mailbox.** 27 `[TEST]` emails had accumulated in
+Kory's inbox, because Lexi CCs him on every send, so each E2E run to Anjana's
+gmail also copied him. Anjana deleted them by hand.
+
+**Sweep the mailbox too, or better, add it to the E2E driver's cleanup.** The
+sends are the one artifact a human actually sees.
+
+---
+
+## 5. THE BRIEFING (separate repo, separate deploy)
+
+`CEO_Executive_Dashboard--main` at `570670a`, deployed (BUILD_ID
+`_Xj_oMHVXEtjQsoPLfxDy`). It is a different repo and a different deploy path —
+build with node 20 (`~/.nvm/versions/node/v20.20.0/bin`), rsync
+`.next/standalone/` + `.next/static` + `public`, **exclude `node_modules`**
+(sharp/@img are linux-native there and arm64 on the laptop), chown to `ceo`,
+restart `ceo-dashboard`.
+
+Two defects fixed:
+- **It invented causal links between real facts.** "Angelo and Matt's feedback
+  both went stale on the exact same day — suggests a full week where outbound
+  replies stopped." Both were Asana tasks sharing a DUE DATE; `daysOverdue` is a
+  due-date age, not a last-contact date, and the snapshot has **no sent mail at
+  all**, so the claim was unobservable. The prompt now names what the data
+  cannot support and permits zero insights.
+- **It mis-described the calendar.** "(copy)" from the Master-calendar mirror
+  leaked into Kory's email ("Doug (copy)"), and the model inferred overlaps from
+  start times alone, reporting "three overlapping commitments" for back-to-back
+  events. Clashes are now computed in code and handed to the prompt as fact.
+
+---
+
+# Previous handoff (2026-08-16) below
 
 **Resume phrase:** *"Scheduling is PRODUCTION-READY at `75cd2a2` — real-thread
 replays, 12/12 model-layer battery on the production gateway model, full-flow
