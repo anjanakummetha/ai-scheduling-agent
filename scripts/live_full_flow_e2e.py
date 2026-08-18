@@ -190,7 +190,13 @@ def main() -> int:
 
         reply = {
             "message_id": f"{THREAD_ID}-reply1",
-            "thread_id": f"{THREAD_ID}-reply1",
+            # The reply belongs to the SAME thread as the offer. Giving it a
+            # "-reply1" thread_id made the follow-up handler resolve a
+            # different proposal, so the pick was written somewhere the driver
+            # never looked and step 4 reported a failure that production does
+            # not have (tests/test_reply_accepts_offered_slot.py drives this
+            # path hermetically and passes on every phrasing).
+            "thread_id": THREAD_ID,
             "conversation_id": THREAD_ID,
             "subject": f"Re: {SUBJECT}",
             "sender": RECIPIENT,
