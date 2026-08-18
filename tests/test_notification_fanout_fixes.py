@@ -4,6 +4,7 @@ word-boundary previews, org names never rendered as people."""
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import app.agents.lexi_thread_followup as ltf
@@ -55,10 +56,21 @@ def test_release_closes_stale_pending_hold_reminder():
         INSERT INTO email_threads VALUES ('t1', 'Check in', 'heidi.heckler@iconicfounders.com');
         INSERT INTO proposals VALUES
             (9187, 't1', 'pending_approval', 'internal_sync', 'HOLD_REMINDER: staged', '');
-        INSERT INTO holds VALUES
-            (1, 9187, 'evt-a', '2026-08-24T10:00:00-06:00', '2026-08-01T00:00:00+00:00'),
-            (2, 9187, 'evt-b', '2026-08-26T11:00:00-06:00', '2026-08-01T00:00:00+00:00');
         """
+    )
+    # Expiry is relative, not a hard-coded 2026-08-01. The suite is run against
+    # simulated dates (LEXI_TEST_FAKE_TODAY) to catch fixtures that drift in and
+    # out of meaning, and an absolute expiry makes this test assert "holds
+    # expired" only when the calendar happens to agree.
+    expired_at = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    held_from = (datetime.now(timezone.utc) + timedelta(days=6)).isoformat()
+    held_later = (datetime.now(timezone.utc) + timedelta(days=8)).isoformat()
+    conn.executemany(
+        "INSERT INTO holds VALUES (?,?,?,?,?)",
+        [
+            (1, 9187, 'evt-a', held_from, expired_at),
+            (2, 9187, 'evt-b', held_later, expired_at),
+        ],
     )
     conn.commit()
     with (
