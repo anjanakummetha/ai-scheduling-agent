@@ -467,6 +467,19 @@ def _try_inbound_slots(
             kept.append(cand)
     candidates = kept
 
+    # Stated days are parsed from the WHOLE thread, and the plan window from
+    # its NEWEST message. After a decline ("anything the following week?") the
+    # window moves past the days stated in the earlier ask — those candidates
+    # are stale, and honoring them re-offers the very dates that were just
+    # declined (live 10563: Tuesday Aug 25 offered twice, with a draft
+    # apologizing for the first time it happened). A candidate outside the
+    # plan's window is dropped; if none survive, returning None hands the
+    # search to the engine, which schedules inside the pushed window.
+    if candidates and plan is not None and getattr(plan, "window", None):
+        from app.scheduling.scheduling_window import slot_date_in_window
+
+        candidates = [c for c in candidates if slot_date_in_window(c, plan.window)]
+
     if guidance.strip():
         seen = {c["start"] for c in candidates}
         guidance_cands = extract_inbound_time_candidates(

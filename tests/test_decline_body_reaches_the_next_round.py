@@ -120,3 +120,61 @@ def test_the_merged_body_shifts_the_scheduling_window(sent_offer):
     assert after.window.start - before.window.start >= timedelta(days=5), (
         f"push was less than a week: {before.window.start} -> {after.window.start}"
     )
+
+
+def test_the_retry_never_reoffers_the_declined_week(sent_offer):
+    """End-to-end through the real retry: the staged slots must leave the week
+    the counterpart declined. Stated days ('Tuesday or Thursday') are parsed
+    from the whole thread; without the window filter they re-anchor to the
+    nearest Tuesday — inside the declined week — and get honored by the
+    on-date path (live 10563: Aug 25 offered twice)."""
+    from unittest.mock import patch
+
+    from app.agents.inbound_reply import retry_scheduling_with_guidance
+
+    mark_recipient_reoffer_request(sent_offer, reply_body=DECLINE)
+
+    # The declined week's Tuesday is busy until late afternoon — the live
+    # calendar shape. Stale Aug-25-style candidates then fail validation and
+    # fall to the on-date path, whose gate call carries no plan and so never
+    # window-checks; without the candidate filter, the declined Tuesday's
+    # open afternoon is offered right back (live 10563's exact output).
+    today = date.today()
+    next_monday = today + timedelta(days=(7 - today.weekday()))
+    declined_tue = next_monday + timedelta(days=1)
+    busy = [
+        {
+            "subject": f"block {h}",
+            "start": {"dateTime": datetime(declined_tue.year, declined_tue.month,
+                                           declined_tue.day, h, 0, tzinfo=MT).isoformat()},
+            "end": {"dateTime": datetime(declined_tue.year, declined_tue.month,
+                                         declined_tue.day, h + 2, 0, tzinfo=MT).isoformat()},
+        }
+        for h in (8, 10, 12, 14)
+    ]
+    ctx = {"status": "available", "horizon_days": 45, "busy_events": busy}
+    with patch(
+        "app.scheduling.calendar_context.load_scheduling_calendar_context",
+        return_value=ctx,
+    ), patch("app.bot.teams_publisher.schedule_teams_approval_push"):
+        result = retry_scheduling_with_guidance(
+            sent_offer, "mornings if possible, otherwise whatever works that week"
+        )
+
+    assert result.get("ok") is True, result
+    with get_lexi_connection() as conn:
+        raw = conn.execute(
+            "SELECT proposed_slots FROM proposals WHERE id = ?", (sent_offer,)
+        ).fetchone()["proposed_slots"]
+    slots = json.loads(raw)
+    assert slots, "no slots staged"
+
+    today = date.today()
+    next_monday = today + timedelta(days=(7 - today.weekday()))
+    declined_week_end = next_monday + timedelta(days=6)  # the asked "next week"
+    for slot in slots:
+        slot_day = datetime.fromisoformat(slot["start"]).date()
+        assert slot_day > declined_week_end, (
+            f"slot {slot['start']} sits in the declined week "
+            f"(week of {next_monday}) — the live 10563 re-offer bug"
+        )
