@@ -12,7 +12,12 @@ from app.agents.scheduler_agent import PENDING_TRIAGE, process_proposal_schedule
 from app.agents.triage_agent import NON_SCHEDULING_INTENTS, VALID_INTENTS
 from app.config import settings
 from app.llm.hermes_client import get_hermes_client
-from app.scheduling.proposal_state import CHAT_DRAFTABLE, ProposalStatus, transition
+from app.scheduling.proposal_state import (
+    CHAT_DRAFTABLE,
+    ProposalStatus,
+    offer_already_sent,
+    transition,
+)
 from app.storage.lexi_db import get_lexi_connection
 from app.storage.lexi_store import update_drafted_reply
 
@@ -228,7 +233,17 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
         _audit(conn, proposal_id, "scheduling_guidance_applied", guidance)
         conn.commit()
 
-    scheduled = process_proposal_schedule(proposal_id)
+    # A retry on a thread whose offer email is already in the recipient's
+    # inbox is by definition a NEW ROUND — the decline path parks it in
+    # pending_reoffer precisely so Kory's guidance lands here. Without
+    # reoffer=True the world-fact guard refuses the engine pass, no search
+    # runs, and the escalation below then tells Kory "I couldn't find times"
+    # about a search that never happened (live 10563: "your mornings that
+    # week are mostly booked" — fabricated, and false on the real calendar).
+    with get_lexi_connection() as conn:
+        reopen = offer_already_sent(conn, proposal_id)
+
+    scheduled = process_proposal_schedule(proposal_id, reoffer=reopen)
     if scheduled:
         from app.bot.teams_publisher import schedule_teams_approval_push
 
@@ -250,6 +265,25 @@ def retry_scheduling_with_guidance(proposal_id: int, guidance: str) -> dict[str,
     from app.scheduling.kory_escalation import escalate_to_kory
 
     failure = _latest_scheduler_failure(proposal_id)
+    if not failure:
+        # The engine recorded no search failure — it never searched (a guard
+        # refusal, a lost race). Escalating would put that non-search through
+        # the guidance composer, which narrates every escalation as a failed
+        # search — live 10563 turned exactly this into "your mornings that
+        # week are mostly booked", fabricated and false. This is an
+        # interactive command, so the honest answer belongs in the command's
+        # own reply, not in a proactive push.
+        honest = (
+            "I hit an internal snag and have NOT actually searched for times "
+            f"yet — nothing was checked against the calendar. Say 'retry "
+            f"scheduling for #{proposal_id}' again and I'll run the search."
+        )
+        return {
+            "ok": False,
+            "proposal_id": proposal_id,
+            "error": honest,
+            "kory_message": honest,
+        }
     summary = humanize_scheduler_failure(failure, intent=str(bundle.get("intent_classification") or ""))
     return escalate_to_kory(proposal_id, reason=summary, failure_error=summary)
 
