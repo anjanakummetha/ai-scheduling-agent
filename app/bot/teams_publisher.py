@@ -715,10 +715,17 @@ async def push_reoffer_prompt_for_proposal_id(proposal_id: int, *, reply_body: s
         {"subject": row["subject"], "sender": row["sender"]},
         reply_preview=reply_body,
     )
+    # Name the exact reply. Proactive pushes never enter the gateway model's
+    # session, so a bare "yes" to this question reaches the model with no
+    # context at all — it answered "Got it — let me know what you need!" and
+    # did nothing (live 10563). Every prompt must carry its own command.
     text = (
         f"**Lexi — send more times?**\n"
         f"**{row['subject'] or '(no subject)'}** from {row['sender'] or 'unknown'}\n"
-        f"They said the offered times don't work."
+        f"They said the offered times don't work.\n"
+        f"Say **retry scheduling for #{proposal_id}** to offer new times "
+        f"(add — and your guidance to steer them), or **reject "
+        f"#{proposal_id} — <reason>** to drop it."
     )
     await push_approval_text_to_teams(text, proposal_id=proposal_id)
     if not settings.lexi_teams_text_only:
