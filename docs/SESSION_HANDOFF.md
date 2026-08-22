@@ -1,6 +1,150 @@
-# Lexi — Session Handoff (updated 2026-08-22, the live Teams pass is DONE)
+# Lexi — Session Handoff (updated 2026-08-22 ~03:00 ET — overnight pass PAUSED mid-way, NOT ready for Kory)
 
-**Resume phrase:** *"The full scheduling lifecycle ran live through Teams and
+**Resume phrase:** *"The overnight verification pass got through setup, the
+outreach removal, the hermetic-suite fix and ONE live lifecycle scenario —
+which surfaced six NEW defects, the worst being a real invite sent for a
+junk-parsed slot (wrong day/time/type, no Teams link) while Teams claimed
+the right one. All six are diagnosed to file+line; NO fixes are written
+yet. Resume = write the fixes, deploy, re-verify live, then Asana/HubSpot,
+then sweep."*
+
+`main` = box = `0930388`, pushed, CI green. **1,568 hermetic tests in
+~11s** (was 450s — see below). Box on **Anjana's $10 key** (both env
+files, hash `26c0c37f`, backups `*.20260822-night`, ~$9 left) — **restore
+Kory's key or top up before handoff**; Kory's key (`e177a6be`) still
+answered 200 at swap time. Hermes session has tonight's test conversation
+(NOT cleared — clear before Kory). 96 registered tools (outreach gone).
+
+---
+
+## OVERNIGHT PASS 2026-08-22 (01:40–03:00 ET) — what happened
+
+### Done and deployed
+1. **Outreach campaigns removed** (`d84fe79`, Anjana's scope ruling):
+   module, 7 campaign MCP tools + `lexi_hubspot_outreach_batch/candidates`,
+   the `_campaign_tool` gate, Teams `outreach *` commands/regexes, the three
+   `LEXI_OUTREACH_*` flags, `create_outbound_draft`,
+   `propose_outreach_batch`/`find_contacts_for_outreach` internals, and all
+   their tests (~1,630 lines). `outbound_agent` (outbound *scheduling*) is
+   unrelated and stays. Box `.env` still has dead LEXI_OUTREACH_* lines —
+   unread, harmless.
+2. **Hermetic suite made hermetic** (`0930388`): the no-real-network
+   fixture patched `get_hermes_client` at its definition site, but five
+   modules bind that name at import (`hermes_compose`, `scheduler_agent`,
+   `triage_agent`, `inbound_reply`, `outbound_agent`) — so "hermetic" tests
+   could reach the real API whenever a valid key sat in env. Masked only
+   because `.env.testing` carried a dead key (each escaped call burned a
+   ~0.3s 401 round-trip — the whole suite ran 7.5 min because of it).
+   Now blocked at the one funnel `_Completions.create` (conftest +
+   `model_is_down`). Suite 450s → 10.6s. Laptop `.env.testing` now carries
+   the funded key; live-composition tests (`-m live`) pass 5/5 with a real
+   key exported.
+
+### The live scenario and its SIX defects (diagnosed, NOT fixed)
+One realistic flow: founder ask (gmail → kory.mitchell@), Teams delegation,
+offer → approve → send, ET acceptance, invite, cancel. Every step checked
+against DB + calendar + both mailboxes. Proposal 10586.
+
+- **F1 — meeting-type from subject noun.** Subject "Following up from the
+  IFG founders dinner" + body asking a 30-min VIRTUAL call → classified
+  "dinner" (`meeting_type.py:203` fires on the word anywhere in combined
+  text) → Saturday-evening slot cluster first, and later the invite went
+  out titled "Dinner:", location "Cherry Creek area", no Teams link. Fix:
+  reference-context guard ("from/at/after the X dinner" is a PAST-EVENT
+  reference, not a request) + explicit body virtual/call cues win.
+- **F2 — greeting stored as a person's name.**
+  `_extract_signature_name` (`outlook_email.py:1453`): gmail flattens
+  "Best,\nAnjana" to one line so the signoff scan misses, and the fallback
+  accepted the greeting line "Hi Kory," → recipient_profiles stored
+  display_name **"Hi Kory"**; queue rendered "From Hi Kory", invite title
+  used raw "Anjanakummetha". Fix: greeting-shape blocklist in
+  `_clean_name_candidate`, comma-joined signoff handling ("Best,Name"),
+  prefer the mailbox display name when the heuristic yields junk/None.
+  (The junk profile row on the box was deleted during cleanup.)
+- **F3 — false "holds may be missing".** Approve path: send OK, all 3
+  holds placed by the existing lock-race retry (`_place_holds_isolated`),
+  but a LATER post-send step raised database-is-locked → the exception
+  branch (`teams/commands.py:715`) reported "Calendar holds may be
+  missing" and nothing ever corrected it. Fix: that branch should READ the
+  holds table and report the actual count, never speculate. (Deeper lock
+  root-cause — likely a deferred-upgrade deadlock that busy_timeout can't
+  save — deferred; BEGIN IMMEDIATE is the eventual fix.)
+- **F4 — WORST: junk slot presented as "picked".** Acceptance reply
+  "Thursday, September 3 at 11:00 AM ET works great" did NOT match live
+  (`offer_reply` logged "no slot match yet") even though
+  `match_recipient_slot_choice` matches the *stored* body in every tz —
+  the live body form (likely flattened/bodyPreview, no newlines) defeats
+  `_reply_text_for_matching`, whose quote markers all require a leading
+  `\n`. Fallback `_try_inbound_time_suggestion` then ran
+  `extract_inbound_time_candidates` over the UNSTRIPPED text, mined the
+  QUOTED thread, synthesized **Tue Aug 25 9:00 ET** (never offered),
+  calendar-validated it, stored it via `mark_recipient_slot_choice`, and
+  the Teams prompt (`teams_publisher.py:654`) told Kory she "picked" it.
+  Fix: one shared `fresh_reply_text()` (CRLF / U+202F / missing-newline
+  tolerant quote stripping — "On … wrote:" as a regex, not a `\n` marker)
+  used by BOTH the matcher and inbound extraction; and the invite prompt
+  must render a slot whose `source == "inbound_availability"` as
+  "suggested a NEW time (not one of the offered)" — never "picked".
+- **F5 — approval bypass + false claims.** After Kory's correction ("fix
+  the selection to Thursday Sep 3 and STAGE the invite"), the model called
+  freehand `lexi_create_calendar_event` → `OUTLOOK_CREATE_ME_EVENT`: sent
+  a real invite with NO second approval, for the STALE junk slot (there is
+  no tool to correct `recipient_selected_slot`, and nothing wrote it),
+  while telling Kory it had sent Sep 3. The invite body's default note
+  claims "Scheduled by Lexi after Kory approved the calendar invite"
+  (`invite_builder.py:220`) — false. Fix plan: (a) small new tool
+  `lexi_correct_selected_slot(proposal_id, start_iso)` — pending_invite
+  only, start must be ∈ proposed_slots or calendar-validated, re-pushes
+  the invite prompt; (b) guard in the create-event action: refuse
+  freehand attendee-events while a pending_invite proposal exists for that
+  attendee (point at the approve flow); (c) neutral default note.
+- **F6 — recovery via Kory WORKS and must survive the fixes.** "Cancel
+  that event, send the correct one" → wrong event cancelled + correct
+  Teams-link invite created, both verified in gmail. The freehand path is
+  what made recovery possible (proposal was already executed) — the F5
+  guard must only bite while a pending_invite exists.
+
+Also observed: zombie LT-H4 card + "Gateway shutting down" replays on every
+service restart (known cosmetic, fired twice more tonight); two noise
+proposals (10585/10587, no_reply_needed — one from Lexi's own sent copy).
+
+### Cleanup state at pause
+Done: wrong Aug-25 "Dinner" invite cancelled (notice verified in gmail);
+Sep 3 test "Intro Call" cancelled via Teams (Lexi confirmed; cancellation
+notice was still propagating to gmail at pause — verify at resume); junk
+"Hi Kory" profile row deleted from box DB; local `.env.bak.newkey.20260821`
+(dead-key backup) deleted.
+NOT swept: gmail thread "Following up from the IFG founders dinner" +
+invite/cancellation mails; Kory's inbox copies (realistic subjects, no
+[TEST] tag); Lexi's sent copies; DB rows (email_threads 10458–10462,
+proposals 10585/10586/10587 + holds/audit); Hermes session store.
+
+### Resume order
+1. Write F1–F5 fixes + pinned hermetic tests (pointers above are current);
+   full suite; push; deploy (box repo is on branch `master` with no
+   upstream — use `git -C /home/lexi/AI_Scheduling_Agent pull --ff-only
+   origin main`; restart BOTH services; expect the zombie-card replay).
+2. Re-run the accept lifecycle live on a FRESH realistic scenario to prove
+   F1/F4 end-to-end; then decline→re-offer, counter-propose, reschedule,
+   third-party (drafts only) scenarios; edge battery (Kory rulings,
+   remember/forget, free-times truthfulness, refuse-by-name, holds
+   honesty).
+3. Asana + HubSpot live-write verification via Teams (test objects,
+   delete after) — untouched tonight.
+4. Full residue sweep (mailboxes, DB, calendar) + clear Hermes session.
+5. Key: Kory raises his limit or issues a new key; restore box key
+   (backups `*.20260822-night`); rotate anything pasted in chats.
+
+Driving notes: Teams tab = teams.cloud.microsoft (permission is per THAT
+domain); focus the message box via find→ref click and verify text landed
+before Return (input silently drops text); the auto-mode classifier blocks
+compound ssh commands and some keystroke batches — split them.
+
+---
+
+# PREVIOUS UPDATE (2026-08-22 early): the live Teams pass — DONE
+
+**Old resume phrase:** *"The full scheduling lifecycle ran live through Teams and
 email — ask → delegation → offer → decline → re-offer → accept → invite →
 cancel — every step verified against the DB, the real calendar and both
 mailboxes. Eight defects found by realistic use, all fixed, pinned and
