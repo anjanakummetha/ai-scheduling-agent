@@ -412,6 +412,33 @@ def mark_recipient_reoffer_request(
         if not declined.claimed:
             conn.commit()
             return {"ok": False, "error": declined.refusal}
+        # Fold the decline into the thread body the engine schedules from.
+        # scheduling_body() reads email_threads.raw_body, and the followup
+        # path that lands here never upserts the thread row — so without this,
+        # "anything the following week?" existed only in an audit payload and
+        # Kory's retry re-offered the EXACT times the counterpart had just
+        # declined (live 10563: Tuesday Aug 25 offered twice). Newest message
+        # on top, same shape ingestion writes, so the pinned week-shift
+        # parsers see the push.
+        cleaned_reply = (reply_body or "").strip()
+        if cleaned_reply:
+            thread_row = conn.execute(
+                "SELECT e.raw_body FROM email_threads e"
+                " INNER JOIN proposals p ON p.thread_id = e.thread_id"
+                " WHERE p.id = ?",
+                (proposal_id,),
+            ).fetchone()
+            prior = str(thread_row["raw_body"] or "") if thread_row else ""
+            if cleaned_reply[:120] not in prior:
+                merged = (
+                    f"{cleaned_reply}\n\n"
+                    f"[Prior messages in this email chain]\n{prior}"
+                ).strip()
+                conn.execute(
+                    "UPDATE email_threads SET raw_body = ? WHERE thread_id ="
+                    " (SELECT thread_id FROM proposals WHERE id = ?)",
+                    (merged, proposal_id),
+                )
         _insert_audit_log(
             conn,
             step_name="recipient_reoffer_request",
