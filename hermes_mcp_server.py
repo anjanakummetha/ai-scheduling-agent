@@ -1147,6 +1147,23 @@ def lexi_handle_teams_command(text: str, authorized_by: str = "kory") -> str:
     NEVER claim an email or invite was sent, or that something is 'already
     done', unless a tool result IN THIS TURN says so — prior chat context is
     not evidence; the database is the only authority.
+
+    A proposal has TWO approvals: the offer, then — after the counterpart
+    picks a time — the calendar invite. An 'approve #N' (or 'send invite #N')
+    on a proposal whose offer email already went out is how the INVITE gets
+    sent; route it. Do not refuse it because an email 'was already sent' —
+    the double-send guards live server-side and will refuse anything unsafe
+    with an explanation you can relay. Refusing to route is never safety; it
+    only strands the booking. (Live failure: the invite step was refused
+    twice in chat because an earlier warning said 'do not approve again'.)
+
+    EVERY retry of a command must call this tool again, even seconds after a
+    refusal. Calendars change, locks clear, fixes deploy — a previous tool
+    result is never evidence about the CURRENT state, and re-running is
+    always safe for the same reason: the guards are server-side. Answering a
+    retried command from the previous result is the exact failure this
+    paragraph exists to prevent (live: 'the slot is still blocked' relayed
+    from memory while the tool, when finally called, sent the invite).
     """
     from app.teams.commands import handle_teams_command
 

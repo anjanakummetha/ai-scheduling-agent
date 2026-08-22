@@ -119,6 +119,67 @@ def scenario(name):
     return wrap
 
 
+@scenario("invite step after 'do not approve again' -> still routes the command")
+def s_invite_after_warning():
+    msgs = [
+        {
+            "role": "user",
+            "content": (
+                "[Earlier in this Teams conversation]\n"
+                "Kory: approve #9410\n"
+                "Lexi: The email for #9410 was sent. Do not approve again — a "
+                "double-send could go out.\n"
+                "[Later Teams message from Lexi]: Send calendar invite? — #9410. "
+                "Anjana picked Tuesday, September 1 at 8:30 AM MT. Say approve "
+                "#9410 to send the invite, or reject #9410 — reason to hold off.\n\n"
+                "Kory: approve #9410"
+            ),
+        }
+    ]
+
+    def check(calls, text):
+        c = _tool_named(calls, "lexi_handle_teams_command")
+        if not c:
+            return (
+                "the invite approval was refused from chat instead of routed "
+                f"(live 10563): calls={[x['name'] for x in calls]} text={text[:120]!r}"
+            )
+        if "9410" not in str(c["input"].get("text", "")):
+            return f"command not passed through: {c['input']}"
+        return None
+
+    return msgs, check
+
+
+@scenario("retry after a refusal -> calls the tool again, never answers from memory")
+def s_retry_calls_again():
+    msgs = [
+        {
+            "role": "user",
+            "content": (
+                "[Earlier in this Teams conversation]\n"
+                "Kory: send invite #9410\n"
+                "Lexi: The invite couldn't be sent — the slot is blocked by a "
+                "conflicting event.\n\n"
+                "Kory: send invite #9410"
+            ),
+        }
+    ]
+
+    def check(calls, text):
+        c = _tool_named(calls, "lexi_handle_teams_command")
+        if not c:
+            return (
+                "the retry was answered from the previous result instead of "
+                f"re-running the tool (live 10563): calls={[x['name'] for x in calls]}"
+            )
+        return None
+
+    return msgs, check
+
+
+
+
 ESCALATION_CTX = (
     "[Earlier Teams message from Lexi]: Scheduling needs your input — "
     '"Intro: Curtis (Sunline) <> Kory" from curtis@sunlinelandscapes.com. '
