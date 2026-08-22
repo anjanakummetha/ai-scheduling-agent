@@ -185,12 +185,13 @@ def _friday_cleanup_next_week_holds() -> int:
         return 0
 
     week_start, week_end = _next_week_window_mt(now_mt)
+    friday_start_mt = now_mt.replace(hour=0, minute=0, second=0, microsecond=0)
     count = 0
 
     with get_lexi_connection() as conn:
         rows = conn.execute(
             """
-            SELECT h.id, h.proposal_id, h.event_id, h.slot_start
+            SELECT h.id, h.proposal_id, h.event_id, h.slot_start, h.created_at
             FROM holds AS h
             INNER JOIN proposals AS p ON p.id = h.proposal_id
             WHERE p.status IN ({placeholders})
@@ -204,6 +205,14 @@ def _friday_cleanup_next_week_holds() -> int:
         for row in rows:
             slot_start = _parse_iso(row["slot_start"])
             if not slot_start or not (week_start <= slot_start < week_end):
+                continue
+            # The rule is "they had the business week to answer" — a hold whose
+            # offer went out ON Friday has had no window at all. Without this,
+            # an offer Kory approves Friday evening loses its calendar
+            # protection one second after Teams says the holds were placed
+            # (live proposal 10563, released at 1s old).
+            placed_mt = _hold_created_at_mt(row["created_at"], now_mt.tzinfo)
+            if placed_mt is None or placed_mt >= friday_start_mt:
                 continue
             event_id = str(row["event_id"] or "")
             try:
@@ -225,6 +234,21 @@ def _friday_cleanup_next_week_holds() -> int:
         if count:
             conn.commit()
     return count
+
+
+def _hold_created_at_mt(raw: Any, mt: Any) -> datetime | None:
+    """holds.created_at is SQLite ``datetime('now')`` — naive UTC — as Mountain Time.
+
+    Returns None when unparseable; callers treat that as "age unknown, do not
+    release" so a malformed timestamp can never delete calendar protection.
+    """
+    try:
+        parsed = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(mt)
 
 
 def _format_released_slot(raw: str) -> str:
