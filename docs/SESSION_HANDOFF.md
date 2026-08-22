@@ -1,4 +1,138 @@
-# Lexi — Session Handoff (updated 2026-08-21, structural pass + a billing stop)
+# Lexi — Session Handoff (updated 2026-08-22, the live Teams pass is DONE)
+
+**Resume phrase:** *"The full scheduling lifecycle ran live through Teams and
+email — ask → delegation → offer → decline → re-offer → accept → invite →
+cancel — every step verified against the DB, the real calendar and both
+mailboxes. Eight defects found by realistic use, all fixed, pinned and
+deployed; box at `c227752` on a fresh Hermes session; residue swept to zero.
+Lexi is ready for Kory EXCEPT one thing: his Anthropic org hit its usage
+spend limit at 04:47Z and the production key can die at any billing sync."*
+
+`main` = box = `c227752`, pushed, CI green on all 8 commits. 1,586 hermetic
+tests. Model battery **19/19** on the gateway model. Hermes session store
+CLEARED (tool docstring changed + drops the test conversation) — Kory's
+first message starts clean against 97 registered tools.
+
+---
+
+## 0. THE ONE ACTION BEFORE KORY
+
+**Kory's Anthropic org — the account behind the production key
+(`sk-ant-api03-gpK…1tOwAA`, sha256 `e177a6be…`; its billing notices land in
+HIS inbox, which settles the long-open ownership question) — hit its usage
+spend limit at 2026-08-22 04:47Z.** The key still answered at 04:5x, but at
+any billing sync it starts returning 400 and Lexi degrades SILENTLY
+(rule-triage, template drafts — pinned behaviour, nothing in Teams says so).
+
+Fix properly: Kory raises the limit / adds credits. Bridge available: swap
+both env files to Anjana's funded test key (~$9.6 left) —
+
+    ssh -i ~/.ssh/lexi_vps_ed25519 root@srv1686061.hstgr.cloud \
+      "sed -i 's|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=<the-final-key>|' \
+       /home/lexi/AI_Scheduling_Agent/.env /home/lexi/.hermes/.env"
+    ssh ... "systemctl restart lexi-hermes.service lexi-api.service"
+
+(The auto-mode classifier hard-blocks Claude from writing box credentials —
+a human runs this.) Afterwards: deactivate the dead laptop key
+(`e7951b95…`) and rotate anything pasted into chat transcripts. Key map:
+laptop `.env` = Anjana's $10 key (`26c0c37f…`, console name `final_test`);
+laptop `~/.hermes/.env` + both box files = Kory's org key (`e177a6be…`);
+`e7951b95…` = the dead key Kory originally handed over (laptop-only since
+the box switched to `e177a6be` at the 07-23 redeploy).
+
+---
+
+## 1. WHAT THE LIVE PASS PROVED (2026-08-22, Anjana + Claude driving
+Teams/gmail via browser)
+
+Delegation ("Looping in Lexi") → in-person coffee offer: Cherry Creek
+venues, sender's ET quoted first, Kory's 60-min coffee rule (overrides an
+explicit "30 minutes" — deliberate), afternoon slots verified correct
+against a genuinely full morning. Decline → re-offer landed in the PUSHED
+week at coffee's preferred 08:30 on the counterpart's preferred weekdays.
+"Tuesday at 10:30 ET works great" → correct MT slot → `pending_invite` →
+invite sent → REAL event verified on the calendar → cancel → event gone and
+the Outlook cancellation verified received by the counterpart. Also:
+`pending` / `show draft 2` / refuse-by-name double-approve; remember →
+"no meetings on Fridays" bites the search → forget → Fridays return;
+free-times answers cross-checked true against the calendar; the locked-DB
+hold failure reported honestly then self-healed (holds verified ON the
+calendar 12s later); E2E driver 10/10 (the race fix REFUSED a stale write
+live: "Another path moved this proposal first"); IFG logo renders in Gmail.
+
+## 2. EIGHT DEFECTS — each found live, fixed, mutation-checked, deployed
+
+1. `d929223` — sweep's engine pass finished after a send and re-staged a
+   sent offer (TOCTOU past the entry guard). Completion now claims
+   `expect=pending_triage`; lost race = quiet INFO discard.
+2. `f5120e0` — Friday-evening cleanup released holds ONE SECOND old (no
+   min age). Sweep now spares holds placed that same Friday (MT).
+3. `7658662` — re-offer prompt asked "send more times?" naming no command;
+   proactive pushes never enter the model session, so "yes" did nothing.
+   Every prompt now carries its own commands.
+4. `a1d4eab` — retry-after-decline called the engine without reoffer=True →
+   guard refused → NO SEARCH RAN → escalation FABRICATED "your mornings
+   that week are mostly booked" (false on the real calendar). Retry now
+   opens a new round; a non-search can never be narrated as a search.
+5. `b697111` + `234bb9e` — the decline's words lived only in an audit
+   payload; engine re-offered the DECLINED week twice (second time while
+   apologizing for the first). Decline now folds into the thread body,
+   and stated-day candidates outside the plan window are dropped (the
+   on-date path's gate carries no plan — regression test needs the
+   busy-Tuesday calendar shape or it can't see the bug).
+6. `858b346` — own-hold exclusion is by event id; the hold's Master-mirror
+   "(copy)" has a different id and blocked the invite for the very slot it
+   protected. HOLD-titled events at exactly the chosen window are now
+   excluded (instant-compared, not string-compared).
+7. `36f11fa` — invite builders re-derived format from the raw triage label:
+   a coffee went out as a Teams-dial-in "Intro:". Builders now resolve the
+   type from subject+body exactly as the offer did.
+8. `c227752` — model refused the invite-step approve ("do not approve
+   again" poisoning) and answered a retried command from stale memory
+   without calling the tool. Router docstring now teaches the TWO-approval
+   lifecycle, that all double-send guards are server-side, and that every
+   retry must re-call. Two battery scenarios added as regression nets
+   (honest caveat: they pass against the old text too — a short synthetic
+   context cannot reproduce long-session poisoning).
+
+## 3. RESIDUE — swept to zero, verified
+
+Kory's inbox: 5 [TEST] mails → Deleted Items. Anjana's gmail: 5 test
+threads trashed (invite left her calendar via the cancellation). Calendar:
+no holds, no test events (checked Sep 1/3 + next 3 weeks). DB: proposal
+10563 + thread + holds + the test-polluted recipient profile
+(anjanakummetha = "The Turn Podcast") removed; ZERO proposals in any active
+state. Box /tmp diagnostic scripts deleted. Teams chat history keeps the
+test messages (bot messages are undeletable) but the cleared session means
+the model never sees them.
+
+## 4. KNOWN COSMETICS / LIMITATIONS (documented, deliberately not chased)
+
+- **Zombie LT-H4 card**: an Aug-5 rendered "Send calendar invite?" card
+  (cancelled proposal 6861, "UAT safety" era) re-renders at the bottom of
+  the Teams chat on EVERY gateway reconnect — the co-tenant Hermes gateway
+  refreshes old card activities. Harmless ("Not yet" button only). Rare in
+  steady state.
+- "Gateway shutting down" notices appear in the chat at each restart.
+- Escalations can arrive twice (proactive push + model relay of the same
+  kory_message).
+- The locked-DB "holds may be missing" warning is not retracted after the
+  self-heal places them.
+- Composition bridge-sentence nits ("the following week is fuller than
+  expected" while offering times IN that week).
+- 97 historical [TEST] email_threads DB rows (inert, pre-date tonight);
+  26 stale awaiting_reply_prompt proposals (bulk-close needs Kory,
+  standing ruling).
+
+## 5. SPEND
+
+~$0.35 of the $10 test key (3 battery runs, live composition check,
+probes); pennies on Kory's key for gateway traffic. Composio well under
+budget.
+
+---
+
+# Previous handoff (2026-08-21, structural pass + billing stop) below
 
 **Resume phrase:** *"The proposal lifecycle has a single chokepoint and 1,567
 tests are green on `main` with CI passing — but NOTHING IS DEPLOYED, and the
