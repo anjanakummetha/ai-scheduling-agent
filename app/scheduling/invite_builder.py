@@ -138,6 +138,17 @@ def build_hold_action(
     sender: str | None = None,
     body: str = "",
 ) -> dict[str, Any]:
+    # The meeting TYPE was decided at offer time from the ask's own words —
+    # "grab coffee" with intent=referral_or_intro is a COFFEE (in-person,
+    # Cherry Creek), and the offer email said so. Re-deriving from the raw
+    # intent alone here sent a Teams-link invite titled "Intro:" for a coffee
+    # the email promised in person (live 10563). Resolve the same way the
+    # offer did, subject and body included.
+    from app.scheduling.meeting_type import normalize_scheduling_intent
+
+    intent = normalize_scheduling_intent(
+        intent, subject=meeting_subject or "", body=body or ""
+    )
     location = default_location_for_intent(intent, slot.get("start"))
     guest = parse_guest_profile(sender=sender, subject=meeting_subject or "", body=body)
     title = build_hold_calendar_title(
@@ -173,6 +184,17 @@ def build_invite_action(
     extra_attendees: list[str] | None = None,
     recipient_timezone: ZoneInfo | None = None,
 ) -> dict[str, Any]:
+    # The meeting TYPE was decided at offer time from the ask's own words —
+    # "grab coffee" with intent=referral_or_intro is a COFFEE (in-person,
+    # Cherry Creek), and the offer email said so. Re-deriving from the raw
+    # intent alone here sent a Teams-link invite titled "Intro:" for a coffee
+    # the email promised in person (live 10563). Resolve the same way the
+    # offer did, subject and body included.
+    from app.scheduling.meeting_type import normalize_scheduling_intent
+
+    intent = normalize_scheduling_intent(
+        intent, subject=meeting_subject or "", body=body or ""
+    )
     location = default_location_for_intent(intent, slot.get("start"))
     online = is_online_meeting(intent, location)
     combined_text = f"{meeting_subject or ''}\n{body or ''}\n{body_note or ''}"
