@@ -17,6 +17,7 @@ from app.llm.hermes_client import get_hermes_client
 from app.scheduling.proposal_state import (
     SCHEDULABLE,
     ProposalStatus,
+    TransitionResult,
     offer_is_outstanding,
     transition,
 )
@@ -383,13 +384,39 @@ def _stage_proposal(conn: sqlite3.Connection, proposal: PendingProposal) -> bool
             raise ValueError(f"Pre-approval gate failed: {gate.summary()}")
 
         resolved_tz = _resolve_recipient_timezone(proposal)
-        _update_proposal_for_approval(
+        staged = _update_proposal_for_approval(
             conn,
             proposal.proposal_id,
             schedule,
             voice_mode=proposal.voice_mode,
             recipient_timezone=resolved_tz,
         )
+        if not staged.claimed:
+            # The proposal moved while the engine was working — most
+            # dangerously to offer_sent via a concurrent approval. Losing this
+            # race is normal operation, not a failure: discard everything the
+            # pass produced and leave the row exactly as the winner wrote it.
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            _insert_audit_log(
+                conn,
+                step_name="scheduler_engine",
+                reference_id=str(proposal.proposal_id),
+                log_level="INFO",
+                message=(
+                    f"Staging discarded: proposal {proposal.proposal_id} moved to "
+                    f"{staged.from_status!r} while the engine was working. "
+                    "Nothing was overwritten."
+                ),
+                payload={
+                    "proposal_id": proposal.proposal_id,
+                    "thread_id": proposal.thread_id,
+                    "found_status": staged.from_status,
+                    "refusal": staged.refusal,
+                },
+            )
+            conn.commit()
+            return False
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         _insert_audit_log(
             conn,
@@ -770,7 +797,7 @@ def _update_proposal_for_approval(
     *,
     voice_mode: str = "kory",
     recipient_timezone: str | None = None,
-) -> None:
+) -> "TransitionResult":
     from app.agents.inbound_reply import _finalize_draft
 
     drafted = _finalize_draft(schedule.drafted_reply, voice_mode=voice_mode)
@@ -782,10 +809,19 @@ def _update_proposal_for_approval(
     # Slots, draft and status move in ONE statement. Written separately, the row
     # is briefly observable as "approved and ready" carrying the PREVIOUS draft,
     # and the Teams push runs off exactly that read.
-    outcome = transition(
+    return transition(
         conn,
         proposal_id,
         to=PENDING_APPROVAL,
+        # Every path into the engine parks the proposal in pending_triage before
+        # staging (process_proposal_schedule normalizes, the sweep selects on
+        # it). An engine pass takes seconds — calendar reads, drafting, the
+        # gate — and the entry guard in _advance_proposal cannot see a send
+        # that commits mid-pass. Claiming pending_triage here makes the finish
+        # atomic: if an approval moved this row to offer_sent while we worked,
+        # this write loses instead of re-staging a draft whose offer is
+        # already in someone's inbox (live proposal 10562).
+        expect=PENDING_TRIAGE,
         reason=(
             f"Engine staged {len(schedule.slots)} slot(s) via {schedule.source}; "
             "awaiting Kory's approval."
@@ -801,10 +837,6 @@ def _update_proposal_for_approval(
         # stored one when this pass could not determine it.
         coalesce_fields={"recipient_timezone": recipient_timezone},
     )
-    if not outcome.claimed:
-        raise RuntimeError(
-            f"Could not stage proposal {proposal_id} for approval: {outcome.refusal}"
-        )
 
 
 def _insert_audit_log(
