@@ -2335,77 +2335,6 @@ def stage_meeting_note(
     }
 
 
-def find_contacts_for_outreach(
-    *,
-    goal: str = "",
-    lifecycle: str = "",
-    query: str = "",
-    limit: int = 15,
-    owner_id: str | None = None,
-    include_all_owners: bool = False,
-) -> dict[str, Any]:
-    """Outreach candidates (read-only).
-
-    Two rules are absolute here: contacts marked Do Not Contact are never
-    returned, and an empty result stays empty. The previous version fell back to
-    ``contacts[:limit]`` when its filter matched nothing — which, with every
-    status field reading blank, meant it always returned arbitrary contacts and
-    silently included opt-outs.
-    """
-    scope_owner = None if include_all_owners else (owner_id or kory_owner_id())
-    raw = search_contacts(limit=max(limit * 4, 60), query=query, owner_id=scope_owner)
-    contacts = raw.get("contacts") or []
-
-    lifecycle_l = lifecycle.strip().lower()
-    filtered: list[dict[str, Any]] = []
-    excluded_dnc = 0
-    for contact in contacts:
-        if is_do_not_contact(contact):
-            excluded_dnc += 1
-            continue
-        if not (contact.get("email") or "").strip():
-            continue
-        if lifecycle_l:
-            stage = lifecycle_label(contact).lower()
-            status = str(contact.get("hs_lead_status") or "").lower()
-            if lifecycle_l not in stage and lifecycle_l not in status:
-                continue
-        filtered.append(contact)
-        if len(filtered) >= limit:
-            break
-
-    scope = "Kory's contacts" if scope_owner else "all IFG contacts"
-    if not filtered:
-        note = f"_No outreach candidates matched in {scope}._"
-        if lifecycle_l:
-            note += f" (filter: `{lifecycle}`)"
-        if excluded_dnc:
-            note += f"\n\n{excluded_dnc} contact(s) were skipped — marked **Do Not Contact**."
-        return {
-            "ok": True,
-            "contacts": [],
-            "count": 0,
-            "excluded_do_not_contact": excluded_dnc,
-            "kory_message": f"**Outreach candidates** (0)\n\n{note}",
-        }
-
-    lines = [f"**Outreach candidates** ({len(filtered)} from {scope})\n"]
-    for contact in filtered[:12]:
-        status = contact.get("hs_lead_status") or "no status"
-        lines.append(
-            f"• {contact.get('name') or contact.get('email')} — {lifecycle_label(contact)} · {status}"
-        )
-    if excluded_dnc:
-        lines.append(f"\n_{excluded_dnc} contact(s) excluded — marked **Do Not Contact**._")
-    return {
-        "ok": True,
-        "contacts": filtered,
-        "count": len(filtered),
-        "excluded_do_not_contact": excluded_dnc,
-        "kory_message": "\n".join(lines),
-    }
-
-
 def all_deals(*, limit: int = 200) -> list[dict[str, Any]]:
     """Every deal with pipeline/stage labels resolved."""
     deals: list[dict[str, Any]] = []
@@ -2485,80 +2414,6 @@ def deals_snapshot_for_brief(*, limit: int = 8) -> dict[str, Any]:
         "deals": open_deals[:limit],
         "overdue": [d for _, d in overdue],
         "kory_message": "\n".join(lines).rstrip(),
-    }
-
-
-def propose_outreach_batch(
-    *,
-    goal: str = "",
-    contact_ids: list[str] | None = None,
-    limit: int = 10,
-    lifecycle: str = "",
-) -> dict[str, Any]:
-    """Draft outreach emails for approval — no send."""
-    excluded_dnc = 0
-    if contact_ids:
-        # Resolve ids to real records: the caller may hand us ids directly, and
-        # a bare {"id": ...} dict would carry no opt-out status to check.
-        contacts = contacts_by_ids(contact_ids[:limit])
-        kept: list[dict[str, Any]] = []
-        for contact in contacts:
-            if is_do_not_contact(contact):
-                excluded_dnc += 1
-                continue
-            kept.append(contact)
-        contacts = kept
-    else:
-        found = find_contacts_for_outreach(goal=goal, lifecycle=lifecycle, limit=limit)
-        contacts = found.get("contacts") or []
-        excluded_dnc = found.get("excluded_do_not_contact") or 0
-
-    if not contacts:
-        note = "_No contacts to draft for._"
-        if excluded_dnc:
-            note = f"_All {excluded_dnc} contact(s) are marked **Do Not Contact** — nothing drafted._"
-        return {
-            "ok": True,
-            "batch_id": None,
-            "draft_count": 0,
-            "drafts": [],
-            "excluded_do_not_contact": excluded_dnc,
-            "writes_blocked": hubspot_writes_blocked(),
-            "kory_message": f"**HubSpot outreach drafts** (0)\n\n{note}",
-        }
-
-    drafts: list[dict[str, Any]] = []
-    for contact in contacts[:limit]:
-        name = contact.get("name") or (contact.get("email") or "there").split("@")[0]
-        draft = _draft_outreach_email(name=name, goal=goal)
-        drafts.append(
-            {
-                "contact_id": contact.get("id"),
-                "email": contact.get("email"),
-                "name": name,
-                "subject": draft["subject"],
-                "body": draft["body"],
-            }
-        )
-
-    batch_id = _stage_hubspot_batch(
-        batch_type="outreach",
-        payload={"goal": goal, "drafts": drafts},
-    )
-    lines = [f"**HubSpot outreach drafts** ({len(drafts)})\n"]
-    for d in drafts[:5]:
-        lines.append(f"• **{d['subject']}** → {d['email']}")
-    if excluded_dnc:
-        lines.append(f"\n_{excluded_dnc} contact(s) excluded — marked **Do Not Contact**._")
-    lines.append("\n_Approve in Teams before any email sends. HubSpot writes stay blocked for now._")
-    return {
-        "ok": True,
-        "batch_id": batch_id,
-        "draft_count": len(drafts),
-        "drafts": drafts,
-        "excluded_do_not_contact": excluded_dnc,
-        "writes_blocked": hubspot_writes_blocked(),
-        "kory_message": "\n".join(lines),
     }
 
 
@@ -3144,20 +2999,6 @@ def _apply_field_fill(
                 source=source,
             )
     return "applied"
-
-
-def _draft_outreach_email(*, name: str, goal: str) -> dict[str, str]:
-    goal_line = goal.strip() or "catch up and explore whether there is a fit"
-    first = name.split()[0] if name else "there"
-    subject = f"Quick note — {first}"
-    body = (
-        f"Hi {first},\n\n"
-        f"I wanted to reach out — {goal_line}.\n\n"
-        "Would a brief call next week work?\n\n"
-        "Best,\nKory"
-    )
-    return {"subject": subject, "body": body}
-
 
 
 def _days_since(raw: str) -> int | None:

@@ -9,7 +9,6 @@ from app.integrations.hubspot_manager import (
     deals_snapshot_for_brief,
     enrich_prebrief_from_hubspot,
     execute_hubspot_batch,
-    find_contacts_for_outreach,
     propose_duplicate_merges,
     propose_field_enrichment,
     propose_inactive_cleanup,
@@ -283,18 +282,6 @@ def test_unassigned_contact_needs_no_owner_confirmation(mock_search, tmp_path, m
     }
     out = stage_meeting_note(email="d@x.com", note="Call notes", approved=True)
     assert out.get("error_code") != "owner_confirmation_required"
-
-
-@patch("app.integrations.hubspot_manager.search_contacts")
-def test_outreach_candidates(mock_search):
-    mock_search.return_value = {
-        "contacts": [
-            {"id": "1", "email": "e@x.com", "name": "Eve", "lifecyclestage": "lead"},
-            {"id": "2", "email": "f@x.com", "name": "Frank", "lifecyclestage": "customer"},
-        ]
-    }
-    out = find_contacts_for_outreach(lifecycle="lead", limit=10)
-    assert out["count"] >= 1
 
 
 @patch(

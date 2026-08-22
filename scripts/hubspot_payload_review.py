@@ -217,16 +217,6 @@ with patch.object(hs, "execute_hubspot_tool", side_effect=fake_execute), patch.o
 print("  RESULT:", json.dumps({k: v for k, v in out.items() if k != 'kory_message'}, default=str))
 dump_calls("G3b")
 
-show("G4. GUARDRAIL — DNC contact excluded from outreach")
-with patch.object(
-    hs, "search_contacts", return_value={"contacts": [DNC_CONTACT], "count": 1, "total": 1}
-):
-    out = hs.find_contacts_for_outreach(limit=5)
-print("  outreach count:", out["count"], "| excluded DNC:", out.get("excluded_do_not_contact"))
-with patch.object(hs, "contacts_by_ids", return_value=[DNC_CONTACT]):
-    batch = hs.propose_outreach_batch(contact_ids=["C-DNC"], goal="test")
-print("  outreach batch drafts:", batch["draft_count"], "| excluded DNC:", batch.get("excluded_do_not_contact"))
-
 show("G4b. DNC contact — does the meeting-note path check DNC at all?")
 with patch.object(hs, "execute_hubspot_tool", side_effect=fake_execute), patch.object(
     hs, "search_contacts", return_value={"contacts": [DNC_CONTACT]}

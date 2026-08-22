@@ -1370,12 +1370,6 @@ def hubspot_cleanup_proposals_action(*, inactive_days: int = 180) -> dict[str, A
     return propose_inactive_cleanup(inactive_days=inactive_days)
 
 
-def hubspot_outreach_batch_action(*, goal: str = "", limit: int = 10) -> dict[str, Any]:
-    from app.integrations.hubspot_manager import propose_outreach_batch
-
-    return propose_outreach_batch(goal=goal, limit=limit)
-
-
 def hubspot_duplicate_merges_action(*, limit: int = 0) -> dict[str, Any]:
     from app.integrations.hubspot_manager import (
         DUPLICATE_SCAN_LIMIT,
@@ -1500,108 +1494,10 @@ def hubspot_meeting_note_action(
     )
 
 
-def hubspot_outreach_candidates_action(
-    *,
-    goal: str = "",
-    lifecycle: str = "",
-    limit: int = 15,
-) -> dict[str, Any]:
-    from app.integrations.hubspot_manager import find_contacts_for_outreach
-
-    return find_contacts_for_outreach(goal=goal, lifecycle=lifecycle, limit=limit)
-
-
 def hubspot_deals_snapshot_action(*, limit: int = 8) -> dict[str, Any]:
     from app.integrations.hubspot_manager import deals_snapshot_for_brief
 
     return deals_snapshot_for_brief(limit=limit)
-
-
-# ── Outreach campaigns (draft locally; no send / no Teams cards) ─────────────
-
-
-def create_outreach_campaign_action(
-    *,
-    name: str,
-    goal: str = "",
-    template_key: str = "generic",
-    pasted_list: str = "",
-    hubspot_limit: int = 0,
-    hubspot_lifecycle: str = "",
-    include_research: bool = False,
-    custom_opener: str = "",
-    custom_subject: str = "",
-) -> dict[str, Any]:
-    from app.scheduling.outreach_campaign import create_outreach_campaign
-
-    return create_outreach_campaign(
-        name=name,
-        goal=goal,
-        template_key=template_key,
-        pasted_list=pasted_list,
-        hubspot_limit=hubspot_limit,
-        hubspot_lifecycle=hubspot_lifecycle,
-        include_research=include_research,
-        custom_opener=custom_opener,
-        custom_subject=custom_subject,
-    )
-
-
-def list_outreach_campaigns_action(*, limit: int = 20) -> dict[str, Any]:
-    from app.scheduling.outreach_campaign import list_campaigns
-
-    return list_campaigns(limit=limit)
-
-
-def get_outreach_campaign_action(*, campaign_id: str) -> dict[str, Any]:
-    from app.scheduling.outreach_campaign import get_campaign
-
-    detail = get_campaign(campaign_id)
-    if not detail:
-        return {"ok": False, "error": f"Unknown campaign {campaign_id}"}
-    camp = detail["campaign"]
-    drafts = detail["drafts"]
-    lines = [
-        f"**Campaign** `{camp.get('campaign_id')}` — {camp.get('name')}",
-        f"Status: {camp.get('status')} · Template: {camp.get('template_key')}",
-        f"Drafts: {len(drafts)} · Sends blocked: {detail.get('sends_blocked')}",
-        "",
-    ]
-    for d in drafts[:15]:
-        lines.append(
-            f"• {d.get('recipient_name')} <{d.get('recipient_email')}> — {d.get('subject')} "
-            f"[{d.get('status')}]"
-        )
-    if len(drafts) > 15:
-        lines.append(f"…and {len(drafts) - 15} more")
-    return {
-        "ok": True,
-        **detail,
-        "kory_message": "\n".join(lines),
-    }
-
-
-def approve_outreach_campaign_action(*, campaign_id: str, confirm: bool = False) -> dict[str, Any]:
-    from app.scheduling.outreach_campaign import approve_outreach_campaign
-
-    if not confirm:
-        return {
-            "ok": False,
-            "error": "Set confirm=true to mark the campaign approved (still will not send).",
-        }
-    return approve_outreach_campaign(campaign_id=campaign_id, approved_by="kory")
-
-
-def send_outreach_campaign_action(*, campaign_id: str, confirm: bool = False) -> dict[str, Any]:
-    from app.scheduling.outreach_campaign import send_outreach_campaign
-
-    return send_outreach_campaign(campaign_id=campaign_id, approved=confirm)
-
-
-def remove_outreach_recipient_action(*, campaign_id: str, email: str) -> dict[str, Any]:
-    from app.scheduling.outreach_campaign import remove_outreach_recipient
-
-    return remove_outreach_recipient(campaign_id=campaign_id, email=email)
 
 
 # ── Composio Search (web, travel, maps — read-only) ──────────────────────────

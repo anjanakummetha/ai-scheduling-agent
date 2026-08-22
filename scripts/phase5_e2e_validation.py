@@ -141,13 +141,12 @@ def _hubspot():
         "cleanup": h.propose_inactive_cleanup(limit=5),
         "dedupe": h.propose_duplicate_merges(limit=5),
         "lead_source": h.propose_lead_source_fills(limit=5),
-        "outreach_candidates": h.find_contacts_for_outreach(goal="general", limit=5),
         "deals": h.deals_snapshot_for_brief(limit=3),
         "prebrief": h.enrich_prebrief_from_hubspot(email="test@example.com"),
     }
     note = h.stage_meeting_note(email="test@example.com", note="e2e note", approved=True)
     assert note.get("dry_run") or note.get("writes_blocked"), note
-    return "9 ops ok; note staged (writes blocked)"
+    return "core ops ok; note staged (writes blocked)"
 
 
 # ── Email-to-Lexi channel ─────────────────────────────────────────────────────
@@ -196,34 +195,6 @@ def _prebrief():
 
     r = build_prebriefs_for_today(include_research=False)
     return f"prebrief ok ({type(r).__name__})"
-
-
-# ── Outreach (feature parked) ─────────────────────────────────────────────────
-@check("outreach.campaigns_paused")
-def _outreach():
-    """Campaigns are parked, so the thing to validate is that they stay parked.
-
-    When the feature is picked back up, restore the stage-and-send-blocked check
-    from git history — it lived here through Phase 5.
-    """
-    from app.scheduling.outreach_campaign import (
-        campaigns_paused,
-        create_outreach_campaign,
-        send_outreach_campaign,
-    )
-
-    if not campaigns_paused():
-        return "campaigns ENABLED — re-enable the stage/send checks in this script"
-
-    camp = create_outreach_campaign(
-        name="E2E test campaign",
-        goal="general",
-        pasted_list="Pat Prospect, pat@example.com\nDana Doe, dana@example.com",  # one per line
-    )
-    assert camp.get("paused") and not camp.get("campaign_id"), f"paused create leaked: {camp}"
-    sent = send_outreach_campaign(campaign_id="camp-none", approved=True)
-    assert sent.get("paused") and sent.get("sent", 0) == 0, f"paused send leaked: {sent}"
-    return "campaigns paused — nothing staged, nothing sent"
 
 
 # ── Reminders ─────────────────────────────────────────────────────────────────

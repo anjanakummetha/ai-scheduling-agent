@@ -247,13 +247,6 @@ class Settings:
     hubspot_live_writes_enabled: bool = os.getenv(
         "LEXI_HUBSPOT_LIVE_WRITES_ENABLED", "false"
     ).lower() in {"1", "true", "yes"}
-    # Outreach campaigns: stage locally by default; never send until enabled.
-    outreach_live_sends_enabled: bool = os.getenv(
-        "LEXI_OUTREACH_LIVE_SENDS_ENABLED", "false"
-    ).lower() in {"1", "true", "yes"}
-    outreach_outlook_drafts_enabled: bool = os.getenv(
-        "LEXI_OUTREACH_OUTLOOK_DRAFTS_ENABLED", "false"
-    ).lower() in {"1", "true", "yes"}
     asana_enabled: bool = os.getenv("ASANA_ENABLED", "false").lower() in {"1", "true", "yes"}
     lexi_teams_enabled: bool = os.getenv("LEXI_TEAMS_ENABLED", "false").lower() in {
         "1",
@@ -338,9 +331,6 @@ def safety_posture_summary() -> dict[str, object]:
         "LEXI_ALLOW_IMMEDIATE_SEND": _bool_env("LEXI_ALLOW_IMMEDIATE_SEND", False),
         "LEXI_ASANA_LIVE_WRITES_ENABLED": settings.asana_live_writes_enabled,
         "LEXI_HUBSPOT_LIVE_WRITES_ENABLED": settings.hubspot_live_writes_enabled,
-        "LEXI_OUTREACH_LIVE_SENDS_ENABLED": settings.outreach_live_sends_enabled,
-        # Outer switch on the whole campaign feature — parked, not deleted.
-        "LEXI_OUTREACH_CAMPAIGNS_ENABLED": _bool_env("LEXI_OUTREACH_CAMPAIGNS_ENABLED", False),
     }
 
 

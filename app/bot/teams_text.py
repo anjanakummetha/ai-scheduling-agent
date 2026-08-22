@@ -69,10 +69,6 @@ _PREBRIEF_PERSON_RE = re.compile(
     re.IGNORECASE,
 )
 _BRIEFING_RE = re.compile(r"^(?:brief|briefing|ceo\s+brief|morning\s+brief)$", re.IGNORECASE)
-_OUTREACH_LIST_RE = re.compile(r"^outreach(?:\s+list)?$", re.IGNORECASE)
-_OUTREACH_GET_RE = re.compile(r"^outreach\s+(camp-[a-z0-9]+)$", re.IGNORECASE)
-_APPROVE_OUTREACH_RE = re.compile(r"^approve\s+outreach\s+(camp-[a-z0-9]+)$", re.IGNORECASE)
-_SEND_OUTREACH_RE = re.compile(r"^send\s+outreach\s+(camp-[a-z0-9]+)$", re.IGNORECASE)
 _HELP_RE = re.compile(r"^(?:help|\?)$", re.IGNORECASE)
 # A bare confirmation with no proposal number ("YES", "ok close it") — arrives
 # with no context because escalations are proactive pushes (live D6). Routed to
@@ -288,27 +284,6 @@ def parse_teams_command(text: str) -> dict[str, Any] | None:
 
     if _BRIEFING_RE.match(normalized):
         return {"action": "daily_briefing"}
-
-    if _OUTREACH_LIST_RE.match(normalized):
-        return {"action": "outreach_list"}
-
-    get_outreach = _OUTREACH_GET_RE.match(normalized)
-    if get_outreach:
-        return {"action": "outreach_get", "campaign_id": get_outreach.group(1)}
-
-    approve_outreach = _APPROVE_OUTREACH_RE.match(normalized)
-    if approve_outreach:
-        return {
-            "action": "outreach_approve",
-            "campaign_id": approve_outreach.group(1),
-        }
-
-    send_outreach = _SEND_OUTREACH_RE.match(normalized)
-    if send_outreach:
-        return {
-            "action": "outreach_send",
-            "campaign_id": send_outreach.group(1),
-        }
 
     if _SEND_ONLY_RE.match(normalized):
         from app.agents.comms_agent import get_lexi_invite_queue

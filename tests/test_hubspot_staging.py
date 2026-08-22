@@ -7,7 +7,6 @@ from unittest.mock import patch
 from app.integrations.hubspot_manager import (
     hubspot_status_brief,
     propose_inactive_cleanup,
-    propose_outreach_batch,
 )
 
 
@@ -33,13 +32,3 @@ def test_cleanup_reports_without_staging_any_mutation(mock_search, _count, _cfg)
     assert result["ok"] is True
     assert result.get("batch_id") is None
     assert result["total"] == 7
-
-
-@patch("app.integrations.hubspot_manager.search_contacts")
-def test_outreach_batch_drafts(mock_search):
-    mock_search.return_value = {
-        "contacts": [{"id": "1", "email": "founder@co.com", "name": "Founder"}]
-    }
-    result = propose_outreach_batch(goal="reconnect", limit=1)
-    assert result["draft_count"] == 1
-    assert "approve" in result["kory_message"].lower()

@@ -880,67 +880,6 @@ def infer_outbound_send_channel(body: str, *, explicit: str = "") -> str:
     return default if default in {"kory", "lexi"} else "lexi"
 
 
-def create_outbound_draft(
-    *,
-    to_email: str,
-    subject: str,
-    body: str,
-    approved: bool = False,
-    send_channel: SendChannel = "kory",
-    cc_emails: list[str] | None = None,
-) -> tuple[str | None, str | None]:
-    """Create an Outlook draft (does not send). Blocked in dry-run / UAT unless enabled."""
-    import os
-    import uuid
-
-    channel = (send_channel or "kory").strip().lower()
-    if channel not in {"kory", "lexi"}:
-        channel = "kory"
-
-    drafts_enabled = os.getenv("LEXI_OUTREACH_OUTLOOK_DRAFTS_ENABLED", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if settings.lexi_dry_run or not drafts_enabled or not approved:
-        preview_id = f"dry-run-outreach-draft-{uuid.uuid4().hex[:10]}"
-        logger.info(
-            "[DRY RUN] Would create Outlook draft to=%s subject=%s id=%s",
-            to_email,
-            subject,
-            preview_id,
-        )
-        print(
-            f"\n[Lexi DRY RUN] Outlook draft NOT created.\n"
-            f"  To: {to_email}\n"
-            f"  Subject: {subject}\n"
-            f"  Preview id: {preview_id}\n",
-            flush=True,
-        )
-        return preview_id, "dry-run-no-log"
-
-    recipient = (to_email or "").strip()
-    if not recipient or "@" not in recipient:
-        raise ValueError("to_email is required for outbound draft.")
-
-    write_role: ConnectionRole = "lexi" if channel == "lexi" else "write"
-    result = execute_tool(
-        "OUTLOOK_CREATE_DRAFT",
-        _build_outlook_draft_arguments(
-            recipient=recipient,
-            subject=subject,
-            body=body.replace("\n", "\r\n"),
-            is_html=False,
-            cc_emails=cc_emails,
-        ),
-        role=write_role,
-    )
-    message_id = _extract_draft_message_id(result.get("data")) or _extract_id(
-        _coerce_data(result.get("data"))
-    )
-    return message_id, result.get("log_id")
-
-
 def kory_review_drafts_enabled() -> bool:
     import os
 
@@ -1032,11 +971,9 @@ def create_kory_review_draft(
     Nothing leaves the mailbox: this only creates the draft. That is the whole
     point — the draft *is* the review step, so it carries no send approval.
 
-    Deliberately not `create_outbound_draft`, which is the parked outreach-campaign
-    path: it is gated on that feature's flag, sends plain text with no signature,
-    and routes through _build_outlook_draft_arguments, which merges Kory's own CC
-    in — correct for Lexi's outbound mail, wrong for a draft sitting in his own
-    mailbox, where it would CC him on his own message.
+    Deliberately not routed through _build_outlook_draft_arguments, which merges
+    Kory's own CC in — correct for Lexi's outbound mail, wrong for a draft
+    sitting in his own mailbox, where it would CC him on his own message.
 
     Returns the observed draft, read back from the mailbox. A draft nobody can
     find is not a saved draft.

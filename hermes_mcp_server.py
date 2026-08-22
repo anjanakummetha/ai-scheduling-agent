@@ -152,19 +152,6 @@ def _tool(fn):
     return mcp.tool()(_run)
 
 
-def _campaign_tool(fn):
-    """Register an outreach-campaign tool only while the feature is switched on.
-
-    Campaigns are parked. Leaving the tools unregistered — rather than registered
-    and returning "paused" — means Hermes never sees them in its tool list, so it
-    cannot offer to run a campaign or narrate one it never staged. The functions
-    stay in the tree; LEXI_OUTREACH_CAMPAIGNS_ENABLED=true brings them back.
-    """
-    from app.scheduling.outreach_campaign import campaigns_paused
-
-    return fn if campaigns_paused() else _tool(fn)
-
-
 # ── Conversational assistant (Hermes drives dialogue; tools execute) ─────────
 
 
@@ -721,16 +708,6 @@ def lexi_hubspot_recent_changes(days: str = "7") -> str:
     return _wrap("lexi_hubspot_recent_changes", lexi.hubspot_recent_changes_action, days=n)
 
 
-@_campaign_tool
-def lexi_hubspot_outreach_batch(goal: str = "", limit: str = "10") -> str:
-    """Draft outreach emails for a HubSpot batch — approval required before send."""
-    try:
-        n = max(1, min(25, int(limit.strip() or "10")))
-    except ValueError:
-        n = 10
-    return _wrap("lexi_hubspot_outreach_batch", lexi.hubspot_outreach_batch_action, goal=goal, limit=n)
-
-
 @_tool
 def lexi_hubspot_duplicate_merges(limit: str = "0") -> str:
     """Propose duplicate contact merges across Kory's whole contact book. Leave limit empty to scan everything — a partial scan only finds a duplicate when both records land in the same sample, so it reports "none" almost regardless of the truth. The result carries a coverage object; report scanned vs portal_total and never call the book clean unless complete is true. Proposals are staged; applying a staged batch performs a REAL merge in the shared IFG portal, which cannot be undone — say so before applying."""
@@ -969,26 +946,6 @@ def lexi_hubspot_meeting_note(
 
 
 @_tool
-def lexi_hubspot_outreach_candidates(
-    goal: str = "",
-    lifecycle: str = "",
-    limit: str = "15",
-) -> str:
-    """Find HubSpot contacts for outreach (read-only filter)."""
-    try:
-        n = max(1, min(40, int(limit.strip() or "15")))
-    except ValueError:
-        n = 15
-    return _wrap(
-        "lexi_hubspot_outreach_candidates",
-        lexi.hubspot_outreach_candidates_action,
-        goal=goal,
-        lifecycle=lifecycle,
-        limit=n,
-    )
-
-
-@_tool
 def lexi_hubspot_deals_snapshot(limit: str = "8") -> str:
     """Open HubSpot deals for CEO briefing (read-only)."""
     try:
@@ -996,98 +953,6 @@ def lexi_hubspot_deals_snapshot(limit: str = "8") -> str:
     except ValueError:
         n = 8
     return _wrap("lexi_hubspot_deals_snapshot", lexi.hubspot_deals_snapshot_action, limit=n)
-
-
-@_campaign_tool
-def lexi_create_outreach_campaign(
-    name: str,
-    goal: str = "",
-    template_key: str = "generic",
-    pasted_list: str = "",
-    hubspot_limit: str = "0",
-    hubspot_lifecycle: str = "",
-    include_research: str = "false",
-    custom_opener: str = "",
-    custom_subject: str = "",
-) -> str:
-    """Start a mass outreach campaign: personalize drafts and stage them (no send, no Teams cards).
-
-    Templates: ypo_the_turn | generic. Paste Name,email,company lines and/or set hubspot_limit.
-    Drafts stay local until LEXI_OUTREACH_OUTLOOK_DRAFTS_ENABLED; sends stay blocked.
-    """
-    try:
-        hs_limit = max(0, min(100, int((hubspot_limit or "0").strip() or "0")))
-    except ValueError:
-        hs_limit = 0
-    research = (include_research or "").strip().lower() in {"1", "true", "yes"}
-    return _wrap(
-        "lexi_create_outreach_campaign",
-        lexi.create_outreach_campaign_action,
-        name=name,
-        goal=goal,
-        template_key=template_key,
-        pasted_list=pasted_list,
-        hubspot_limit=hs_limit,
-        hubspot_lifecycle=hubspot_lifecycle,
-        include_research=research,
-        custom_opener=custom_opener,
-        custom_subject=custom_subject,
-    )
-
-
-@_campaign_tool
-def lexi_list_outreach_campaigns(limit: str = "20") -> str:
-    """List staged/approved outreach campaigns."""
-    try:
-        n = max(1, min(50, int((limit or "20").strip() or "20")))
-    except ValueError:
-        n = 20
-    return _wrap("lexi_list_outreach_campaigns", lexi.list_outreach_campaigns_action, limit=n)
-
-
-@_campaign_tool
-def lexi_get_outreach_campaign(campaign_id: str) -> str:
-    """Show one outreach campaign and its staged drafts (text only)."""
-    return _wrap(
-        "lexi_get_outreach_campaign",
-        lexi.get_outreach_campaign_action,
-        campaign_id=campaign_id,
-    )
-
-
-@_campaign_tool
-def lexi_approve_outreach_campaign(campaign_id: str, confirm: str = "false") -> str:
-    """Mark campaign approved. Does not send while LEXI_OUTREACH_LIVE_SENDS_ENABLED is false."""
-    ok = (confirm or "").strip().lower() in {"1", "true", "yes"}
-    return _wrap(
-        "lexi_approve_outreach_campaign",
-        lexi.approve_outreach_campaign_action,
-        campaign_id=campaign_id,
-        confirm=ok,
-    )
-
-
-@_campaign_tool
-def lexi_send_outreach_campaign(campaign_id: str, confirm: str = "false") -> str:
-    """Send approved outreach drafts — hard-blocked for UAT (returns dry-run message)."""
-    ok = (confirm or "").strip().lower() in {"1", "true", "yes"}
-    return _wrap(
-        "lexi_send_outreach_campaign",
-        lexi.send_outreach_campaign_action,
-        campaign_id=campaign_id,
-        confirm=ok,
-    )
-
-
-@_campaign_tool
-def lexi_remove_outreach_recipient(campaign_id: str, email: str) -> str:
-    """Remove one recipient from a staged outreach campaign."""
-    return _wrap(
-        "lexi_remove_outreach_recipient",
-        lexi.remove_outreach_recipient_action,
-        campaign_id=campaign_id,
-        email=email,
-    )
 
 
 @_tool

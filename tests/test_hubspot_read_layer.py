@@ -77,57 +77,6 @@ def test_search_reports_true_scope_not_just_what_it_read():
     assert out["truncated"] is True
 
 
-# --- opt-out safety --------------------------------------------------------
-
-
-def test_do_not_contact_is_never_an_outreach_candidate():
-    rows = [
-        _contact(email="ok@example.com", hs_lead_status="In Conversation"),
-        _contact(email="optout@example.com", hs_lead_status="Do Not Contact"),
-    ]
-    with patch.object(hm, "hubspot_configured", return_value=True):
-        with patch.object(hm, "execute_hubspot_tool") as ex:
-            ex.return_value = {"data": {"results": rows}}
-            out = hm.find_contacts_for_outreach(limit=10)
-    emails = [c["email"] for c in out["contacts"]]
-    assert "optout@example.com" not in emails
-    assert out["excluded_do_not_contact"] == 1
-
-
-def test_empty_outreach_filter_returns_nothing_not_arbitrary_contacts():
-    """The dangerous fallback: no match used to mean `contacts[:limit]`."""
-    rows = [_contact(email=f"p{i}@example.com") for i in range(5)]
-    with patch.object(hm, "hubspot_configured", return_value=True):
-        with patch.object(hm, "execute_hubspot_tool") as ex:
-            ex.return_value = {"data": {"results": rows}}
-            out = hm.find_contacts_for_outreach(limit=10, lifecycle="nonexistent-stage")
-    assert out["count"] == 0
-    assert out["contacts"] == []
-
-
-def test_outreach_drafts_reject_opted_out_ids_passed_directly():
-    rows = [_contact(email="optout@example.com", hs_lead_status="Do Not Contact")]
-    with patch.object(hm, "hubspot_configured", return_value=True):
-        with patch.object(hm, "execute_hubspot_tool") as ex:
-            ex.return_value = {"data": {"results": rows}}
-            out = hm.propose_outreach_batch(contact_ids=["1"], goal="test")
-    assert out["draft_count"] == 0
-    assert out["excluded_do_not_contact"] == 1
-
-
-def test_outreach_defaults_to_korys_own_contacts():
-    with patch.object(hm, "hubspot_configured", return_value=True):
-        with patch.object(hm, "execute_hubspot_tool") as ex:
-            ex.return_value = {"data": {"results": []}}
-            hm.find_contacts_for_outreach(limit=5)
-    groups = ex.call_args.args[1].get("filterGroups") or []
-    filters = groups[0]["filters"] if groups else []
-    assert any(
-        f.get("propertyName") == "hubspot_owner_id" and f.get("value") == hm.kory_owner_id()
-        for f in filters
-    ), "outreach must be scoped to Kory's contacts by default"
-
-
 # --- pipeline awareness ----------------------------------------------------
 
 

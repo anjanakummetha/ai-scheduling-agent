@@ -374,52 +374,6 @@ def handle_teams_command(text: str, *, authorized_by: str = "kory") -> dict[str,
             ),
         }
 
-    if action == "outreach_list":
-        from app.assistant.actions import list_outreach_campaigns_action
-
-        result = list_outreach_campaigns_action()
-        return {
-            "ok": True,
-            "handled": True,
-            "message": result.get("kory_message", "No campaigns."),
-        }
-
-    if action == "outreach_get":
-        from app.assistant.actions import get_outreach_campaign_action
-
-        result = get_outreach_campaign_action(campaign_id=str(command.get("campaign_id") or ""))
-        return {
-            "ok": bool(result.get("ok")),
-            "handled": True,
-            "message": result.get("kory_message") or result.get("error") or "Not found.",
-        }
-
-    if action == "outreach_approve":
-        from app.assistant.actions import approve_outreach_campaign_action
-
-        result = approve_outreach_campaign_action(
-            campaign_id=str(command.get("campaign_id") or ""),
-            confirm=True,
-        )
-        return {
-            "ok": bool(result.get("ok")),
-            "handled": True,
-            "message": result.get("kory_message") or result.get("error") or "Done.",
-        }
-
-    if action == "outreach_send":
-        from app.assistant.actions import send_outreach_campaign_action
-
-        result = send_outreach_campaign_action(
-            campaign_id=str(command.get("campaign_id") or ""),
-            confirm=True,
-        )
-        return {
-            "ok": bool(result.get("ok")),
-            "handled": True,
-            "message": result.get("kory_message") or result.get("error") or "Send blocked.",
-        }
-
     if action == "draft_no":
         proposal_id = int(command["proposal_id"])
         bundle = _fetch_bundle(proposal_id)
