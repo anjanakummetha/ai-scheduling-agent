@@ -1614,6 +1614,24 @@ def _same_time_token(left: str, right: str) -> bool:
     return _normalize_slot_token(left) == _normalize_slot_token(right)
 
 
+def _same_instant(a: Any, b: Any) -> bool:
+    """Instant equality across offset spellings (-06:00 vs Z vs +00:00).
+
+    String comparison read those as different times — the defect class fixed
+    for hold matching — so mirror detection must compare parsed datetimes.
+    """
+    from datetime import datetime
+
+    try:
+        da = datetime.fromisoformat(str(a).replace("Z", "+00:00"))
+        db = datetime.fromisoformat(str(b).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if da.tzinfo is None or db.tzinfo is None:
+        return da.replace(tzinfo=None) == db.replace(tzinfo=None)
+    return da == db
+
+
 def _confirm_time_conflict(
     proposal: dict[str, Any], selected_slot: dict[str, str]
 ) -> dict[str, Any] | None:
@@ -1661,6 +1679,26 @@ def _confirm_time_conflict(
             ),
             "conflicting_events": [],
         }
+
+    if conflict and events:
+        # The id exclusion above cannot catch Lexi's own holds seen through a
+        # calendar MIRROR: the Master-calendar copy of a hold carries a
+        # different event id and a "(copy)" suffix, and the fail-closed named-
+        # calendar read surfaces exactly those (live 10563: the invite for the
+        # chosen slot was refused because of "HOLD: Intro call w/ … (copy)" —
+        # the hold protecting that very slot). A HOLD-titled event occupying
+        # exactly the chosen window is protection, not a commitment; booking
+        # over it is the intended outcome, and it is released right after the
+        # invite goes out.
+        events = [
+            e for e in events
+            if not (
+                str(e.get("subject") or "").strip().upper().startswith("HOLD:")
+                and _same_instant((e.get("start") or {}).get("dateTime"), start)
+                and _same_instant((e.get("end") or {}).get("dateTime"), end)
+            )
+        ]
+        conflict = bool(events)
 
     if not conflict:
         return None
