@@ -41,7 +41,9 @@ def model_is_down():
     def _raise(*_a, **_k):
         raise _NoCredit("Your credit balance is too low to access the Anthropic API.")
 
-    with patch("app.llm.hermes_client.get_hermes_client", side_effect=_raise):
+    # Patch the call funnel, not get_hermes_client: five modules bind that name
+    # at import time, so a definition-site patch never reaches them.
+    with patch("app.llm.hermes_client._Completions.create", side_effect=_raise):
         yield
 
 

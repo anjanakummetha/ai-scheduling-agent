@@ -150,6 +150,14 @@ def _no_real_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(
         "app.llm.hermes_client.get_hermes_client", _blocked_llm, raising=False
     )
+    # get_hermes_client is bound at import time in several modules
+    # (`from app.llm.hermes_client import get_hermes_client`), so patching the
+    # definition site alone does not reach them. _Completions.create is the one
+    # funnel every model call goes through — block it too, or a valid key in
+    # .env.testing lets "hermetic" tests silently make real paid API calls.
+    monkeypatch.setattr(
+        "app.llm.hermes_client._Completions.create", _blocked_llm, raising=False
+    )
     yield
 
 
